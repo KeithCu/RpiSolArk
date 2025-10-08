@@ -47,6 +47,24 @@
 
 <div align="center">
 
+### 🖥️ Live Simulator Output
+
+```
++-----------------+
+|Time: 19:07:06  |
+|Freq: 60.00 Hz  |
++-----------------+
+
+----------------------
+System Status:
+  Mode: SIMULATOR
+  LCD: SIMULATED
+======================
+Press Ctrl+C to stop
+```
+
+*Real-time console output showing frequency monitoring in simulator mode*
+
 ### 🖥️ LCD Display Interface
 
 #### 🔌 Utility Grid Mode
