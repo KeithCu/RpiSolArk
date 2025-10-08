@@ -1,0 +1,114 @@
+# Raspberry Pi Frequency Monitor Configuration
+
+# Hardware Configuration
+hardware:
+  gpio_pin: 17          # Optocoupler input (H11AA1)
+  led_green: 18         # Green LED for Utility
+  led_red: 27           # Red LED for Generator
+  lcd_address: 0x27     # I2C address for LCD
+  lcd_port: 1           # I2C port
+  lcd_cols: 16          # LCD columns
+  lcd_rows: 2           # LCD rows
+
+# Sampling Configuration
+sampling:
+  sample_rate: 2.0      # Hz (samples per second)
+  buffer_duration: 300  # seconds (5 minutes)
+  min_freq: 40.0        # Minimum valid frequency (Hz)
+  max_freq: 80.0        # Maximum valid frequency (Hz)
+
+# Analysis Configuration
+analysis:
+  allan_variance_tau: 10.0  # seconds for Allan variance calculation
+  generator_thresholds:
+    allan_variance: 1e-9    # Allan variance threshold for generator detection
+    std_dev: 0.05           # Standard deviation threshold (Hz)
+    kurtosis: 0.5           # Kurtosis threshold
+
+# Logging Configuration
+logging:
+  hourly_log_file: "hourly_status.csv"
+  memory_log_file: "memory_usage.csv"
+  log_level: "INFO"         # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_file: "monitor.log"
+  max_log_size: 10485760    # 10MB
+  backup_count: 5
+
+# Health Monitoring
+health:
+  watchdog_timeout: 30.0    # seconds - restart if no activity
+  memory_warning_threshold: 0.8  # fraction of available memory
+  cpu_warning_threshold: 0.8     # fraction of CPU usage
+
+# Memory Monitoring
+memory:
+  process_warning_mb: 500        # Process memory warning threshold (MB)
+  process_critical_mb: 1000      # Process memory critical threshold (MB)
+  system_warning_percent: 80     # System memory warning threshold (%)
+  system_critical_percent: 90    # System memory critical threshold (%)
+  cleanup_interval: 3600         # Memory cleanup interval (seconds)
+
+# Application Settings
+app:
+  simulator_mode: false     # Use real hardware in production
+  display_update_interval: 1.0  # seconds between display updates
+  cleanup_on_exit: true
+  simulate_display: false   # Use real LCD in production
+
+# Production Settings
+production:
+  max_restarts: 10          # Maximum restarts per hour
+  restart_cooldown: 10      # Seconds between restart attempts
+  health_check_interval: 300 # Health check every 5 minutes
+  log_rotation_size: 10485760 # 10MB log rotation
+  backup_logs: 10           # Keep 10 backup logs
+
+# Alerting Configuration
+alerts:
+  email:
+    enabled: false          # Set to true to enable email alerts
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    username: "your-email@gmail.com"
+    password: "your-app-password"
+    from: "your-email@gmail.com"
+    to: "admin@yourdomain.com"
+  cooldown_period: 3600     # 1 hour between duplicate alerts
+
+# Reboot Configuration
+reboot:
+  interval_days: 30         # Reboot every 30 days
+  hour: 3                   # Reboot at 3 AM
+  minute: 0                 # Reboot at 3:00 AM
+  enabled: true             # Enable scheduled reboots
+  grace_period: 30          # Graceful shutdown timeout (seconds)
+
+# System Health Configuration
+health:
+  memory_critical: 95       # Reboot if memory usage > 95%
+  disk_critical: 5          # Reboot if disk space < 5%
+  temp_critical: 85         # Reboot if CPU temp > 85°C
+  max_uptime_days: 45       # Reboot if uptime > 45 days
+  auto_reboot: true         # Enable automatic health reboots
+  cleanup_before_reboot: true # Clean system before reboot
+
+# Sol-Ark Cloud Configuration
+solark_cloud:
+  enabled: true             # Enable Sol-Ark cloud integration
+  base_url: "https://www.solarkcloud.com"
+  username: ""              # Your Sol-Ark cloud username
+  password: ""              # Your Sol-Ark cloud password
+  plant_id: ""              # Your plant ID (will be auto-detected if empty)
+  timeout: 30               # Request timeout in seconds
+  retry_attempts: 3         # Number of retry attempts for failed requests
+  cache_pages: true         # Cache downloaded pages to disk
+  cache_dir: "solark_cache" # Directory to store cached pages
+  headless: false           # Run browser in headless mode
+  sync_interval: 300        # Sync interval in seconds (5 minutes)
+  session_persistence: true # Save login session to avoid repeated logins
+  session_file: "solark_session.json" # File to store session data
+  session_timeout: 3600     # Session timeout in seconds (1 hour)
+  parameter_changes:
+    enabled: true           # Enable automatic parameter changes
+    dry_run: false          # Set to true to log changes without applying
+    backup_before_change: true # Backup current settings before changes
