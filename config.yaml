@@ -12,18 +12,19 @@ hardware:
 
 # Sampling Configuration
 sampling:
-  sample_rate: 2.0      # Hz (samples per second)
-  buffer_duration: 300  # seconds (5 minutes)
-  min_freq: 40.0        # Minimum valid frequency (Hz)
-  max_freq: 80.0        # Maximum valid frequency (Hz)
+  sample_rate: 2.0      # Hz (samples per second) - Optimal for generator detection
+  buffer_duration: 300  # seconds (5 minutes) - Captures generator hunting cycles
+  min_freq: 45.0        # Minimum valid frequency (Hz) - Accounts for generator drops
+  max_freq: 65.0        # Maximum valid frequency (Hz) - Accounts for generator overspeed
 
 # Analysis Configuration
 analysis:
-  allan_variance_tau: 10.0  # seconds for Allan variance calculation
+  allan_variance_tau: 10.0  # seconds for Allan variance calculation - Matches generator cycles
   generator_thresholds:
-    allan_variance: 1e-9    # Allan variance threshold for generator detection
-    std_dev: 0.05           # Standard deviation threshold (Hz)
-    kurtosis: 0.5           # Kurtosis threshold
+    # Based on real-world generator data analysis
+    allan_variance: 5e-10   # More sensitive - catches subtle generator hunting
+    std_dev: 0.08           # Standard deviation threshold (Hz) - Accounts for generator variation
+    kurtosis: 0.4           # Kurtosis threshold - Detects frequency hunting patterns
 
 # Logging Configuration
 logging:
@@ -54,6 +55,23 @@ app:
   display_update_interval: 1.0  # seconds between display updates
   cleanup_on_exit: true
   simulate_display: false   # Use real LCD in production
+
+# Data Collection & Tuning Mode
+tuning:
+  enabled: false            # Enable enhanced data collection for tuning
+  detailed_logging: false   # Log every frequency reading and analysis
+  sample_interval: 0.1      # seconds between detailed samples (10 Hz)
+  analysis_interval: 1.0    # seconds between analysis calculations
+  data_file: "tuning_data.csv"  # File for detailed frequency data
+  analysis_file: "tuning_analysis.csv"  # File for analysis results
+  collection_duration: 3600 # seconds to collect data (1 hour default)
+  auto_stop: true           # Automatically stop collection after duration
+  include_raw_data: true    # Include raw frequency readings
+  include_analysis: true    # Include Allan variance, std dev, kurtosis
+  include_classification: true  # Include power source classification
+  include_timestamps: true  # Include detailed timestamps
+  buffer_analysis: true     # Analyze full buffer on each sample
+  export_format: "csv"      # Export format: csv, json, both
 
 # Production Settings
 production:

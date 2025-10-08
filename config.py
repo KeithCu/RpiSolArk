@@ -37,11 +37,11 @@ class Config:
                 'lcd_address': 0x27, 'lcd_port': 1, 'lcd_cols': 16, 'lcd_rows': 2
             },
             'sampling': {
-                'sample_rate': 2.0, 'buffer_duration': 300, 'min_freq': 40.0, 'max_freq': 80.0
+                'sample_rate': 2.0, 'buffer_duration': 300, 'min_freq': 45.0, 'max_freq': 65.0
             },
             'analysis': {
                 'allan_variance_tau': 10.0,
-                'generator_thresholds': {'allan_variance': 1e-9, 'std_dev': 0.05, 'kurtosis': 0.5}
+                'generator_thresholds': {'allan_variance': 5e-10, 'std_dev': 0.08, 'kurtosis': 0.4}
             },
             'logging': {
                 'hourly_log_file': 'hourly_status.csv', 'log_level': 'INFO',
@@ -52,6 +52,14 @@ class Config:
             },
             'app': {
                 'simulator_mode': True, 'display_update_interval': 1.0, 'cleanup_on_exit': True
+            },
+            'tuning': {
+                'enabled': False, 'detailed_logging': False, 'sample_interval': 0.1,
+                'analysis_interval': 1.0, 'data_file': 'tuning_data.csv',
+                'analysis_file': 'tuning_analysis.csv', 'collection_duration': 3600,
+                'auto_stop': True, 'include_raw_data': True, 'include_analysis': True,
+                'include_classification': True, 'include_timestamps': True,
+                'buffer_analysis': True, 'export_format': 'csv'
             }
         }
     

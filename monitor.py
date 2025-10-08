@@ -24,6 +24,7 @@ from config import Config, Logger
 from hardware import HardwareManager
 from health import HealthMonitor, MemoryMonitor
 from data_logger import DataLogger
+from tuning_collector import TuningDataCollector
 
 
 class FrequencyAnalyzer:
@@ -175,6 +176,7 @@ class FrequencyMonitor:
         self.health_monitor = HealthMonitor(self.config, self.logger)
         self.memory_monitor = MemoryMonitor(self.config, self.logger)
         self.data_logger = DataLogger(self.config, self.logger)
+        self.tuning_collector = TuningDataCollector(self.config, self.logger)
         
         # Connect analyzer to hardware
         self.analyzer.hardware_manager = self.hardware
@@ -199,6 +201,10 @@ class FrequencyMonitor:
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         self.logger.info("Frequency monitor initialized")
+        
+        # Start tuning data collection if enabled
+        if self.tuning_collector.enabled:
+            self.tuning_collector.start_collection()
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -248,6 +254,16 @@ class FrequencyMonitor:
                 frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
                 avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
                 source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
+                
+                # Collect tuning data if enabled
+                if self.tuning_collector.enabled:
+                    analysis_results = {
+                        'allan_variance': avar_10s,
+                        'std_deviation': std_freq,
+                        'kurtosis': kurtosis
+                    }
+                    self.tuning_collector.collect_frequency_sample(freq, analysis_results, source)
+                    self.tuning_collector.collect_analysis_results(analysis_results, source, len(self.freq_buffer))
                 
                 # Update display and LEDs once per second
                 display_interval = self.config.get_float('app.display_update_interval', 1.0)
@@ -308,6 +324,10 @@ class FrequencyMonitor:
         self.logger.info("Cleaning up resources...")
         self.health_monitor.stop()
         
+        # Stop tuning data collection
+        if self.tuning_collector.enabled:
+            self.tuning_collector.stop_collection()
+        
         if self.config.get('app.cleanup_on_exit', True):
             self.hardware.cleanup()
         
@@ -325,6 +345,10 @@ def main():
                        help='Enable verbose logging')
     parser.add_argument('--no-display-sim', action='store_true',
                        help='Disable LCD display simulation')
+    parser.add_argument('--tuning', '-t', action='store_true',
+                       help='Enable tuning data collection mode')
+    parser.add_argument('--tuning-duration', type=int, default=3600,
+                       help='Tuning data collection duration in seconds (default: 3600)')
     
     args = parser.parse_args()
     
@@ -343,6 +367,13 @@ def main():
         # Override display simulation setting
         if args.no_display_sim:
             monitor.config.config['app']['simulate_display'] = False
+        
+        # Override tuning settings
+        if args.tuning:
+            monitor.config.config['tuning']['enabled'] = True
+            monitor.config.config['tuning']['detailed_logging'] = True
+            monitor.config.config['tuning']['collection_duration'] = args.tuning_duration
+            monitor.logger.info(f"Tuning mode enabled for {args.tuning_duration} seconds")
         
         monitor.run(simulator_mode=simulator_mode)
         
