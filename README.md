@@ -15,6 +15,142 @@
 
 ---
 
+## 🔬 How It Works: Frequency Analysis & Power Source Detection
+
+### 🎯 **The Core Problem**
+
+The system solves a critical challenge: **How do you automatically detect whether your home is powered by the utility grid or a backup generator?** This is essential for:
+- Automatic inverter parameter switching
+- Load management decisions
+- Safety systems
+- Energy management optimization
+
+### ⚡ **The Solution: Frequency Analysis**
+
+Unlike voltage (which can be similar for both sources), **frequency behavior is dramatically different** between utility grid and generators:
+
+<div align="center">
+
+| Power Source | Frequency Characteristics | Why This Happens |
+|:---:|:---:|:---:|
+| **🏢 Utility Grid** | Rock-solid 60.00 ± 0.01 Hz | Massive interconnected system with thousands of generators |
+| **🔧 Generac Generator** | 59-64 Hz with hunting patterns | Single engine with mechanical governor trying to maintain speed |
+
+</div>
+
+### 🔍 **What is Frequency Hunting?**
+
+**Frequency hunting** is a characteristic instability pattern where a generator's frequency oscillates around the target frequency (60 Hz) in a cyclical pattern. This is the "smoking gun" that distinguishes generators from utility power.
+
+#### 🎯 **Why Generators Hunt:**
+
+1. **Mechanical Governor Response**: The governor tries to maintain 3600 RPM (60 Hz), but:
+   - Load changes cause speed variations
+   - Governor overcorrects, causing overshoot
+   - System oscillates around target speed
+   - Creates characteristic hunting pattern
+
+2. **Engine Characteristics**:
+   - Single-cylinder engines have more hunting than multi-cylinder
+   - Air-cooled engines hunt more than liquid-cooled
+   - Older generators hunt more than newer ones
+   - Load-dependent hunting (more load = more hunting)
+
+3. **Governor Design**:
+   - Mechanical governors are inherently less stable
+   - Electronic governors are better but still hunt
+   - Hunting frequency typically 0.1-2 Hz (every 0.5-10 seconds)
+
+#### 📊 **Real-World Generator Hunting Examples:**
+
+**Generac Guardian 20kW:**
+```
+Pattern: 61-62 Hz → 59-60 Hz → 61-62 Hz (every 3-5 seconds)
+Cause: Governor hunting under load changes
+Detection: High Allan variance + cycling pattern
+```
+
+**Generac V-Twin 16kW:**
+```
+Pattern: 59-60 Hz baseline, drops to 57-58 Hz under load
+Cause: Load-dependent frequency regulation
+Detection: Standard deviation + load correlation
+```
+
+**Portable Generators (XG7000E):**
+```
+Pattern: 59-60 Hz ±1 Hz hunting (no load), 49-62 Hz (loaded)
+Cause: Extreme governor instability
+Detection: Very high kurtosis + wide frequency range
+```
+
+#### 📈 **Visual Example of Frequency Hunting:**
+
+```
+Utility Grid (Stable):
+Frequency: 60.00 Hz ± 0.01 Hz
+    60.01 ┤
+    60.00 ┼────────────────────────────────
+    59.99 ┤
+    Time: 0    5    10   15   20   25 seconds
+
+Generator (Hunting):
+Frequency: 59-64 Hz with hunting pattern
+    64.0 ┤     ╭─╮
+    62.0 ┤   ╭─╯   ╰─╮
+    60.0 ┼───╯         ╰───╮
+    58.0 ┤                 ╰─╮
+    56.0 ┤                   ╰─
+    Time: 0    5    10   15   20   25 seconds
+```
+
+*The generator shows characteristic hunting oscillations while utility power remains rock-solid.*
+
+### 🧮 **Detection Algorithm**
+
+The system uses **three complementary analysis methods**:
+
+<div align="center">
+
+| Analysis Method | What It Detects | Why It Works |
+|:---:|:---:|:---:|
+| **📊 Allan Variance** | Short-term frequency instability | Captures hunting oscillations |
+| **📈 Standard Deviation** | Overall frequency spread | Detects wide frequency ranges |
+| **📉 Kurtosis** | Distribution shape analysis | Identifies hunting patterns vs random noise |
+
+</div>
+
+#### 🔬 **The Math Behind Detection:**
+
+```python
+# Convert frequency to fractional frequency for analysis
+frac_freq = (frequency - 60.0) / 60.0
+
+# Allan Variance: Detects hunting patterns
+allan_variance = calculate_allan_variance(frac_freq, tau=10.0)
+
+# Standard Deviation: Overall instability
+std_deviation = np.std(frac_freq * 60.0)
+
+# Kurtosis: Pattern detection (hunting vs noise)
+kurtosis = scipy.stats.kurtosis(frac_freq)
+
+# Classification logic
+if (allan_variance > threshold OR 
+    std_deviation > threshold OR 
+    kurtosis > threshold):
+    return "Generac Generator"
+else:
+    return "Utility Grid"
+```
+
+### 🎯 **Why This Works So Well**
+
+1. **Utility Grid**: Massive interconnected system with thousands of generators provides rock-solid frequency stability
+2. **Generators**: Single engine with mechanical governor creates characteristic hunting patterns
+3. **Pattern Recognition**: The combination of three metrics catches different types of instability
+4. **Real-World Tested**: Algorithm trained on actual generator data from various models
+
 ## 📊 Features
 
 <div align="center">
@@ -912,23 +1048,11 @@ display:
 | **300 seconds** | Balanced (default) | Good stability, reasonable response time |
 | **600 seconds** | Very stable | Slow to change, very stable indication |
 
-## 🔬 Frequency Analysis Engine
+## 🔬 Advanced Frequency Analysis Engine
 
-The heart of the system is the sophisticated frequency analysis engine that distinguishes between utility grid power and generator power by analyzing frequency stability patterns. This section explains how the analyzer works and what it's looking for.
+*For detailed information about how frequency analysis works, see the [How It Works](#-how-it-works-frequency-analysis--power-source-detection) section above.*
 
-### 🎯 How It Works
-
-The frequency analyzer uses multiple statistical techniques to detect the characteristic instability patterns of generators:
-
-<div align="center">
-
-| Analysis Method | Purpose | What It Detects |
-|:---:|:---:|:---:|
-| 📊 **Allan Variance** | Frequency stability over time | Short-term frequency fluctuations |
-| 📈 **Standard Deviation** | Overall frequency spread | General frequency instability |
-| 📉 **Kurtosis** | Distribution shape analysis | Frequency "hunting" patterns |
-
-</div>
+The frequency analysis engine is the heart of the system, using sophisticated statistical techniques to detect the characteristic instability patterns of generators. Here's how the analyzer works in detail:
 
 ### 🔍 What the Analyzer Looks For
 
