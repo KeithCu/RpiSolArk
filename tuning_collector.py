@@ -271,9 +271,12 @@ class TuningDataCollector:
         kurtosis = analysis_results.get('kurtosis', 0)
         
         # Calculate how far each metric is from threshold
-        avar_ratio = avar / avar_thresh if avar_thresh > 0 else 0
-        std_ratio = std_dev / std_thresh if std_thresh > 0 else 0
-        kurt_ratio = kurtosis / kurt_thresh if kurt_thresh > 0 else 0
+        try:
+            avar_ratio = avar / float(avar_thresh) if float(avar_thresh) > 0 else 0
+            std_ratio = std_dev / float(std_thresh) if float(std_thresh) > 0 else 0
+            kurt_ratio = kurtosis / float(kurt_thresh) if float(kurt_thresh) > 0 else 0
+        except (ValueError, TypeError, ZeroDivisionError):
+            return 0.0
         
         # Confidence is based on how clearly the values exceed thresholds
         max_ratio = max(avar_ratio, std_ratio, kurt_ratio)
@@ -284,7 +287,13 @@ class TuningDataCollector:
     def _get_current_thresholds(self) -> str:
         """Get current threshold values as string."""
         thresholds = self.config.get('analysis.generator_thresholds', {})
-        return f"avar={thresholds.get('allan_variance', 0):.2e},std={thresholds.get('std_dev', 0):.3f},kurt={thresholds.get('kurtosis', 0):.2f}"
+        try:
+            avar = float(thresholds.get('allan_variance', 0))
+            std = float(thresholds.get('std_dev', 0))
+            kurt = float(thresholds.get('kurtosis', 0))
+            return f"avar={avar:.2e},std={std:.3f},kurt={kurt:.2f}"
+        except (ValueError, TypeError):
+            return "avar=0.00e+00,std=0.000,kurt=0.00"
     
     def stop_collection(self):
         """Stop data collection and generate summary."""
