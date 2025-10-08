@@ -194,6 +194,8 @@ python monitor.py --verbose
 | `python monitor.py` | Default simulator mode | Testing without hardware |
 | `python monitor.py --real` | Real hardware mode | Production deployment |
 | `python monitor.py --verbose` | Verbose logging | Debugging issues |
+| `python monitor.py --detailed-logging` | Detailed frequency logging | Data collection for analysis |
+| `python monitor.py --analyze-offline` | Offline data analysis | Process logged data |
 | `python test_solark_cloud.py` | Test cloud integration | Verify Sol-Ark connection |
 
 </div>
@@ -208,8 +210,172 @@ Options:
   --simulator, -s    Force simulator mode (no hardware required)
   --real, -r         Force real hardware mode
   --verbose, -v      Enable verbose logging
-  --help, -h         Show help message
+  --detailed-logging, -d    Enable detailed frequency logging mode
+  --log-interval FLOAT      Detailed logging interval in seconds (default: 1.0)
+  --log-file FILE           Detailed log file name (default: detailed_frequency_data.csv)
+  --analyze-offline         Analyze offline data from detailed log file
+  --input-file FILE         Input file for offline analysis (default: detailed_frequency_data.csv)
+  --output-file FILE        Output file for offline analysis results (default: offline_analysis_results.csv)
+  --tuning, -t              Enable tuning data collection mode
+  --tuning-duration INT     Tuning data collection duration in seconds (default: 3600)
+  --help, -h                Show help message
 ```
+
+### 📊 Detailed Logging Mode
+
+The system includes a comprehensive detailed logging mode for debugging and analysis. This mode captures every frequency reading with full analysis data, allowing you to analyze why your utility/generator classification might not be working correctly.
+
+#### 🔍 **Enable Detailed Logging**
+
+```bash
+# Basic detailed logging (1 second intervals)
+python monitor.py --detailed-logging
+
+# Custom logging interval (0.5 seconds)
+python monitor.py --detailed-logging --log-interval 0.5
+
+# Custom log file name
+python monitor.py --detailed-logging --log-file my_analysis_data.csv
+
+# Combine with simulator mode for testing
+python monitor.py --detailed-logging --simulator
+
+# Combine with real hardware
+python monitor.py --detailed-logging --real
+```
+
+#### 📋 **Detailed Log Output Format**
+
+The detailed log file contains comprehensive data for each reading:
+
+```csv
+timestamp,datetime,unix_timestamp,elapsed_seconds,frequency_hz,allan_variance,std_deviation,kurtosis,power_source,confidence,sample_count,buffer_size
+2024-01-08 14:32:15,2024-01-08 14:32:15.123,1704720000.123,0.1,60.023456,2.3e-10,0.012345,0.15,Utility Grid,0.85,1,600
+2024-01-08 14:32:16,2024-01-08 14:32:16.123,1704720001.123,1.1,59.987654,2.3e-10,0.012345,0.15,Utility Grid,0.85,2,600
+```
+
+**Column Descriptions:**
+- `timestamp`: Human-readable timestamp
+- `datetime`: High-precision timestamp with milliseconds
+- `unix_timestamp`: Unix timestamp for precise timing
+- `elapsed_seconds`: Time since monitoring started
+- `frequency_hz`: Raw frequency reading (6 decimal places)
+- `allan_variance`: Allan variance analysis result
+- `std_deviation`: Standard deviation of frequency
+- `kurtosis`: Kurtosis analysis for hunting detection
+- `power_source`: Classification result (Utility Grid/Generac Generator/Unknown)
+- `confidence`: Classification confidence score (0.0-1.0)
+- `sample_count`: Total samples processed
+- `buffer_size`: Current analysis buffer size
+
+#### 🔬 **Offline Analysis**
+
+Process your detailed log data offline to understand classification behavior:
+
+```bash
+# Analyze detailed log file
+python monitor.py --analyze-offline --input-file detailed_frequency_data.csv
+
+# Custom input and output files
+python monitor.py --analyze-offline --input-file my_data.csv --output-file analysis_results.csv
+```
+
+#### 📈 **Analysis Output**
+
+The offline analysis provides comprehensive insights:
+
+```
+============================================================
+OFFLINE ANALYSIS SUMMARY
+============================================================
+
+Frequency Statistics:
+  Mean: 60.001 Hz
+  Std Dev: 0.015 Hz
+  Range: 59.95 - 60.05 Hz
+  Total samples: 3600
+
+Time Analysis:
+  Duration: 1800.0 seconds (30.0 minutes)
+  Sample rate: 2.00 Hz
+
+Classification Statistics:
+  Utility Grid: 3200 (88.9%)
+  Generator: 400 (11.1%)
+  Unknown: 0 (0.0%)
+
+Confidence Statistics:
+  Mean confidence: 0.847
+  Confidence range: 0.123 - 0.998
+
+Analysis Metrics:
+  Mean Allan variance: 2.3e-10
+  Mean std deviation: 0.012345 Hz
+  Mean kurtosis: 0.15
+
+Current Threshold Analysis:
+  Allan variance threshold: 1.00e-04
+  Std deviation threshold: 0.080 Hz
+  Kurtosis threshold: 0.400
+
+Recommended Thresholds (95th percentile):
+  Allan variance: 3.2e-10
+  Std deviation: 0.045000 Hz
+  Kurtosis: 0.280000
+============================================================
+```
+
+#### 🎯 **Use Cases for Detailed Logging**
+
+<div align="center">
+
+| Use Case | Command | Purpose |
+|:---:|:---:|:---:|
+| **Debug Classification Issues** | `--detailed-logging --real` | Capture real data to see why classification fails |
+| **Tune Thresholds** | `--detailed-logging --analyze-offline` | Get recommended threshold values |
+| **Validate Generator Detection** | `--detailed-logging` during generator run | Verify generator is properly detected |
+| **Analyze Utility Stability** | `--detailed-logging` during utility | Check utility frequency characteristics |
+| **Performance Analysis** | `--detailed-logging --log-interval 0.1` | High-resolution analysis |
+
+</div>
+
+#### ⚙️ **Configuration for Detailed Logging**
+
+```yaml
+# config.yaml - Detailed logging settings
+logging:
+  detailed_logging_enabled: false    # Enable in config file
+  detailed_log_interval: 1.0         # seconds between log entries
+  detailed_log_file: "detailed_frequency_data.csv"
+```
+
+#### 🔧 **Troubleshooting with Detailed Logs**
+
+1. **Classification Not Working?**
+   ```bash
+   # Collect data during both utility and generator operation
+   python monitor.py --detailed-logging --real
+   
+   # Analyze the data
+   python monitor.py --analyze-offline
+   
+   # Check the recommended thresholds
+   # Update config.yaml with recommended values
+   ```
+
+2. **False Positives?**
+   ```bash
+   # Look at confidence scores in the log
+   # High confidence with wrong classification = threshold issue
+   # Low confidence = noisy data or borderline conditions
+   ```
+
+3. **Missing Generator Detection?**
+   ```bash
+   # Check if Allan variance, std dev, or kurtosis values
+   # are below current thresholds during generator operation
+   # Lower thresholds if needed
+   ```
 
 ### 🧪 Testing & Validation
 
