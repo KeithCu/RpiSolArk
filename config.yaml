@@ -22,7 +22,7 @@ analysis:
   allan_variance_tau: 10.0  # seconds for Allan variance calculation - Matches generator cycles
   generator_thresholds:
     # Based on real-world generator data analysis
-    allan_variance: 5e-10   # More sensitive - catches subtle generator hunting
+    allan_variance: 1e-4    # Adjusted for realistic utility vs generator detection
     std_dev: 0.08           # Standard deviation threshold (Hz) - Accounts for generator variation
     kurtosis: 0.4           # Kurtosis threshold - Detects frequency hunting patterns
 

@@ -33,8 +33,9 @@
 - ⚡ **Real-time frequency monitoring** using optocoupler input
 - 🔍 **Power source classification** (Utility Grid vs Generac Generator)
 - 📈 **Allan variance analysis** for frequency stability assessment
-- 📺 **LCD display** with real-time status updates
+- 📺 **LCD display** with real-time status updates and U/G indicator
 - 💡 **LED indicators** for instant power source identification
+- 🎯 **U/G indicator** showing majority classification over recent data window
 - 🏥 **Health monitoring** with system resource tracking
 - 🛡️ **Graceful degradation** when hardware is unavailable
 - 📝 **Comprehensive logging** with hourly status reports
@@ -68,12 +69,12 @@ Press Ctrl+C to stop
 ### 🖥️ LCD Display Interface
 
 #### 🔌 Utility Grid Mode
-![LCD Display - Utility](https://via.placeholder.com/400x200/2c3e50/ffffff?text=2025-01-08+14:32:15%0A%0AFreq:+60.02+Hz%0AStatus:+UTILITY+GRID%0AStability:+EXCELLENT)
+![LCD Display - Utility](https://via.placeholder.com/400x200/2c3e50/ffffff?text=Time:+14:32:15+[U]%0A%0AFreq:+60.02+Hz%0A%0AStatus:+UTILITY+GRID%0AStability:+EXCELLENT)
 
 #### ⚡ Generator Mode  
-![LCD Display - Generator](https://via.placeholder.com/400x200/2c3e50/ffffff?text=2025-01-08+14:32:15%0A%0AFreq:+59.87+Hz%0AStatus:+GENERATOR%0AStability:+POOR)
+![LCD Display - Generator](https://via.placeholder.com/400x200/2c3e50/ffffff?text=Time:+14:32:15+[G]%0A%0AFreq:+59.87+Hz%0A%0AStatus:+GENERATOR%0AStability:+POOR)
 
-*Real-time frequency monitoring showing timestamp, frequency reading, power source classification, and stability assessment*
+*Real-time frequency monitoring showing timestamp with U/G indicator, frequency reading, power source classification, and stability assessment. The [U] or [G] indicator shows the majority classification over the last 5 minutes of data.*
 
 ### 📊 Web Dashboard
 ![Web Dashboard](https://via.placeholder.com/600x300/34495e/ffffff?text=Web+Dashboard+with+Frequency+Charts+and+System+Health)
@@ -262,9 +263,12 @@ sampling:
 analysis:
   allan_variance_tau: 10.0  # seconds - Matches generator hunting cycles
   generator_thresholds:
-    allan_variance: 5e-10   # More sensitive - catches subtle hunting
+    allan_variance: 1e-4    # Adjusted for realistic utility vs generator detection
     std_dev: 0.08           # Hz - Accounts for generator variation
     kurtosis: 0.4           # Detects frequency hunting patterns
+
+display:
+  classification_window: 300  # seconds - Window for U/G indicator (default: 5 minutes)
 
 solark_cloud:
   enabled: true
@@ -283,7 +287,7 @@ The system uses optimized default values based on real-world generator data anal
 
 | Parameter | Default | Purpose | Tuning Guide |
 |:---:|:---:|:---:|:---:|
-| **`allan_variance`** | `5e-10` | Detects frequency hunting | Decrease for more sensitivity |
+| **`allan_variance`** | `1e-4` | Detects frequency hunting | Decrease for more sensitivity |
 | **`std_dev`** | `0.08` | Overall frequency spread | Increase if false positives |
 | **`kurtosis`** | `0.4` | Hunting pattern detection | Lower for subtle hunting |
 | **`sample_rate`** | `2.0` | Data collection rate | Higher = more CPU usage |
@@ -297,7 +301,7 @@ The system uses optimized default values based on real-world generator data anal
 ```yaml
 analysis:
   generator_thresholds:
-    allan_variance: 5e-10   # Default - good for most generators
+    allan_variance: 1e-4    # Default - good for most generators
     std_dev: 0.08           # Default - accounts for typical variation
     kurtosis: 0.4           # Default - detects common hunting
 ```
@@ -337,7 +341,7 @@ analysis:
 # Load-dependent frequency issues
 analysis:
   generator_thresholds:
-    allan_variance: 5e-10   # Standard sensitivity
+    allan_variance: 1e-4    # Standard sensitivity
     std_dev: 0.08           # Standard tolerance
     kurtosis: 0.4           # Standard hunting detection
 ```
@@ -380,8 +384,8 @@ python monitor.py --simulator --verbose
 
 | Issue | Symptoms | Solution |
 |:---:|:---:|:---:|
-| **False Generator Detection** | Utility classified as generator | Increase `allan_variance` to `1e-9` |
-| **Missed Generator Detection** | Generator classified as utility | Decrease `allan_variance` to `2e-10` |
+| **False Generator Detection** | Utility classified as generator | Increase `allan_variance` to `1e-3` |
+| **Missed Generator Detection** | Generator classified as utility | Decrease `allan_variance` to `5e-5` |
 | **Inconsistent Classification** | Switching between classifications | Check for electrical noise, increase `std_dev` |
 | **Too Sensitive** | Frequent false alarms | Increase all thresholds by 50% |
 | **Not Sensitive Enough** | Missing generator issues | Decrease all thresholds by 50% |
@@ -709,6 +713,39 @@ graph TB
 4. **Integration**: Sol-Ark cloud parameter updates
 5. **Monitoring**: System health and performance tracking
 
+## 🎯 U/G Indicator Feature
+
+The system includes a smart U/G indicator that shows the majority power source classification over a configurable time window. This provides a more stable and reliable indication of the current power source compared to instantaneous readings.
+
+### 🔍 How the U/G Indicator Works
+
+The U/G indicator analyzes the last 5 minutes (configurable) of power source classifications and displays:
+- **U** - Utility Grid (majority of recent classifications)
+- **G** - Generator (majority of recent classifications)  
+- **?** - Unknown/Equal (insufficient data or tied classifications)
+
+### ⚙️ Configuration
+
+```yaml
+display:
+  classification_window: 300  # seconds - Window for U/G indicator (default: 5 minutes)
+```
+
+### 📊 Benefits
+
+- **Stability**: Reduces flickering between U/G during transient conditions
+- **Reliability**: Based on majority vote over time window
+- **Configurable**: Adjustable window size for different use cases
+- **Debugging**: Logs classification counts for troubleshooting
+
+### 🎛️ Tuning the Classification Window
+
+| Window Duration | Use Case | Behavior |
+|:---:|:---:|:---:|
+| **60 seconds** | Fast response | Quick to show changes, may flicker |
+| **300 seconds** | Balanced (default) | Good stability, reasonable response time |
+| **600 seconds** | Very stable | Slow to change, very stable indication |
+
 ## 🔬 Frequency Analysis Engine
 
 The heart of the system is the sophisticated frequency analysis engine that distinguishes between utility grid power and generator power by analyzing frequency stability patterns. This section explains how the analyzer works and what it's looking for.
@@ -846,7 +883,7 @@ def classify_power_source(avar_10s, std_freq, kurtosis):
 ```yaml
 analysis:
   generator_thresholds:
-    allan_variance: 5e-10   # More sensitive
+    allan_variance: 1e-4    # More sensitive
     std_dev: 0.03          # Tighter tolerance
     kurtosis: 0.3          # Lower hunting threshold
 ```

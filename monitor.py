@@ -189,6 +189,11 @@ class FrequencyMonitor:
         self.freq_buffer = deque(maxlen=buffer_size)
         self.time_buffer = deque(maxlen=buffer_size)
         
+        # Initialize power source classification buffer for U/G indicator
+        classification_window = self.config.get_float('display.classification_window', 300)  # 5 minutes default
+        classification_buffer_size = int(classification_window * sample_rate)
+        self.classification_buffer = deque(maxlen=classification_buffer_size)
+        
         # State variables
         self.running = True
         self.last_log_time = 0
@@ -305,11 +310,41 @@ class FrequencyMonitor:
         finally:
             self.cleanup()
     
+    def _get_current_power_source_indicator(self) -> str:
+        """Get U/G indicator based on recent power source classifications."""
+        if not self.classification_buffer:
+            return "?"
+        
+        # Count recent classifications
+        utility_count = sum(1 for source in self.classification_buffer if source == "Utility Grid")
+        generator_count = sum(1 for source in self.classification_buffer if source == "Generac Generator")
+        total_count = len(self.classification_buffer)
+        
+        # Determine majority classification
+        if utility_count > generator_count:
+            indicator = "U"  # Utility
+        elif generator_count > utility_count:
+            indicator = "G"  # Generator
+        else:
+            indicator = "?"  # Unknown/Equal
+        
+        # Log classification details for debugging (only occasionally to avoid spam)
+        if total_count % 10 == 0:  # Log every 10th update
+            self.logger.debug(f"U/G Indicator: {indicator} (U:{utility_count}, G:{generator_count}, Total:{total_count})")
+        
+        return indicator
+    
     def _update_display_and_leds(self, freq: float, source: str, std_freq: Optional[float]):
         """Update LCD display and LED indicators."""
-        # Show time and frequency, updated once per second
+        # Add current classification to buffer
+        self.classification_buffer.append(source)
+        
+        # Get U/G indicator based on recent data
+        ug_indicator = self._get_current_power_source_indicator()
+        
+        # Show time and frequency with U/G indicator, updated once per second
         current_time = time.strftime("%H:%M:%S")
-        line1 = f"Time: {current_time}"
+        line1 = f"Time: {current_time} [{ug_indicator}]"
         line2 = f"Freq: {freq:.2f} Hz"
         
         self.hardware.update_display(line1, line2)
