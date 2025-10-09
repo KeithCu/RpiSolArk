@@ -132,19 +132,19 @@ class PowerStateMachine:
     # Template action functions - to be implemented with real work
     def _on_enter_off_grid(self):
         """Called when entering OFF_GRID state."""
-        self.logger.info("🔌 POWER OUTAGE: System is now OFF-GRID")
+        self.logger.info("POWER OUTAGE: System is now OFF-GRID")
         # TODO: Implement power outage response actions
         pass
 
     def _on_enter_grid(self):
         """Called when entering GRID state."""
-        self.logger.info("⚡ GRID POWER: Stable utility power detected")
+        self.logger.info("GRID POWER: Stable utility power detected")
         # TODO: Implement grid power restoration actions
         pass
 
     def _on_enter_generator(self):
         """Called when entering GENERATOR state."""
-        self.logger.info("🔧 GENERATOR: Backup generator power detected")
+        self.logger.info("GENERATOR: Backup generator power detected")
         # TODO: Implement generator power response actions
         pass
 
