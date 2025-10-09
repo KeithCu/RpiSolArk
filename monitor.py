@@ -15,6 +15,7 @@ import sys
 import time
 from collections import deque
 from typing import Optional, Tuple, List, Dict, Any
+from enum import Enum
 
 # Third-party imports
 import numpy as np
@@ -27,6 +28,191 @@ from hardware import HardwareManager
 from health import HealthMonitor, MemoryMonitor
 from data_logger import DataLogger
 from tuning_collector import TuningDataCollector
+
+
+class PowerState(Enum):
+    """Power system states."""
+    OFF_GRID = "off_grid"
+    GRID = "grid"
+    GENERATOR = "generator"
+    TRANSITIONING = "transitioning"
+
+
+class PowerStateMachine:
+    """State machine for power system management."""
+
+    def __init__(self, config, logger: logging.Logger):
+        self.config = config
+        self.logger = logger
+        self.current_state = PowerState.OFF_GRID
+        self.previous_state = PowerState.OFF_GRID
+        self.state_entry_time = time.time()
+        self.transition_timeout = config.get('state_machine.transition_timeout', 30)  # seconds
+        self.zero_voltage_threshold = config.get('state_machine.zero_voltage_threshold', 5)  # seconds of no cycles
+        self.unsteady_voltage_threshold = config.get('state_machine.unsteady_voltage_threshold', 0.1)  # Hz variation
+
+        # State change callbacks
+        self.on_state_change_callbacks = {
+            PowerState.OFF_GRID: self._on_enter_off_grid,
+            PowerState.GRID: self._on_enter_grid,
+            PowerState.GENERATOR: self._on_enter_generator,
+            PowerState.TRANSITIONING: self._on_enter_transitioning
+        }
+
+        self.logger.info(f"Power state machine initialized in {self.current_state.value} state")
+
+    def update_state(self, frequency: Optional[float], std_dev: Optional[float],
+                    zero_voltage_duration: float) -> PowerState:
+        """
+        Update state based on current conditions.
+
+        Args:
+            frequency: Current frequency reading (None if no signal)
+            std_dev: Standard deviation of recent frequency readings
+            zero_voltage_duration: How long voltage has been zero (seconds)
+        """
+        new_state = self._determine_state(frequency, std_dev, zero_voltage_duration)
+
+        # Check if state changed
+        if new_state != self.current_state:
+            self._transition_to_state(new_state)
+
+        # Check for transition timeout
+        elif self.current_state == PowerState.TRANSITIONING:
+            if time.time() - self.state_entry_time > self.transition_timeout:
+                self.logger.warning(f"Transition timeout exceeded, forcing to OFF_GRID")
+                self._transition_to_state(PowerState.OFF_GRID)
+
+        return self.current_state
+
+    def _determine_state(self, frequency: Optional[float], std_dev: Optional[float],
+                        zero_voltage_duration: float) -> PowerState:
+        """Determine the appropriate state based on current conditions."""
+
+        # No voltage detected for extended period
+        if zero_voltage_duration >= self.zero_voltage_threshold:
+            return PowerState.OFF_GRID
+
+        # No frequency reading available
+        if frequency is None:
+            return PowerState.TRANSITIONING
+
+        # Check for unsteady voltage (high variation indicates grid issues or generator)
+        if std_dev is not None and std_dev > self.unsteady_voltage_threshold:
+            # Could be generator or unstable grid - let frequency analysis decide
+            if std_dev > 0.5:  # Very high variation = likely generator
+                return PowerState.GENERATOR
+            else:  # Moderate variation = unstable grid
+                return PowerState.TRANSITIONING
+
+        # Stable frequency in normal range = grid power
+        if 59.5 <= frequency <= 60.5 and (std_dev is None or std_dev <= self.unsteady_voltage_threshold):
+            return PowerState.GRID
+
+        # Default to transitioning if unclear
+        return PowerState.TRANSITIONING
+
+    def _transition_to_state(self, new_state: PowerState):
+        """Handle state transition."""
+        old_state = self.current_state
+        self.previous_state = old_state
+        self.current_state = new_state
+        self.state_entry_time = time.time()
+
+        self.logger.info(f"Power state transition: {old_state.value} -> {new_state.value}")
+
+        # Execute state change callback
+        if new_state in self.on_state_change_callbacks:
+            try:
+                self.on_state_change_callbacks[new_state]()
+            except Exception as e:
+                self.logger.error(f"Error in state change callback for {new_state.value}: {e}")
+
+    def get_state_info(self) -> Dict[str, Any]:
+        """Get current state information."""
+        return {
+            'current_state': self.current_state.value,
+            'previous_state': self.previous_state.value,
+            'state_duration': time.time() - self.state_entry_time,
+            'transition_timeout': self.transition_timeout
+        }
+
+    # Template action functions - to be implemented with real work
+    def _on_enter_off_grid(self):
+        """Called when entering OFF_GRID state."""
+        self.logger.info("🔌 POWER OUTAGE: System is now OFF-GRID")
+        # TODO: Implement real actions
+        self._action_power_outage_detected()
+        self._action_notify_systems_off_grid()
+        self._action_start_backup_power_if_available()
+
+    def _on_enter_grid(self):
+        """Called when entering GRID state."""
+        self.logger.info("⚡ GRID POWER: Stable utility power detected")
+        # TODO: Implement real actions
+        self._action_grid_power_restored()
+        self._action_switch_to_grid_configuration()
+        self._action_notify_systems_grid_power()
+
+    def _on_enter_generator(self):
+        """Called when entering GENERATOR state."""
+        self.logger.info("🔧 GENERATOR: Backup generator power detected")
+        # TODO: Implement real actions
+        self._action_generator_power_detected()
+        self._action_switch_to_generator_configuration()
+        self._action_monitor_generator_health()
+
+    def _on_enter_transitioning(self):
+        """Called when entering TRANSITIONING state."""
+        self.logger.info("🔄 TRANSITIONING: Power source is unstable or changing")
+        # TODO: Implement real actions
+        self._action_power_transition_detected()
+        self._action_enter_safe_mode()
+
+    # Template action functions - one-liners to be expanded later
+    def _action_power_outage_detected(self):
+        """Template: Handle power outage detection."""
+        pass  # TODO: Send alerts, switch to battery backup, etc.
+
+    def _action_notify_systems_off_grid(self):
+        """Template: Notify other systems about off-grid status."""
+        pass  # TODO: Update inverters, notify monitoring systems, etc.
+
+    def _action_start_backup_power_if_available(self):
+        """Template: Start backup power systems."""
+        pass  # TODO: Start generator, switch to battery, etc.
+
+    def _action_grid_power_restored(self):
+        """Template: Handle grid power restoration."""
+        pass  # TODO: Stop generator, switch back to grid config, etc.
+
+    def _action_switch_to_grid_configuration(self):
+        """Template: Switch system to grid power configuration."""
+        pass  # TODO: Update Sol-Ark settings, notify appliances, etc.
+
+    def _action_notify_systems_grid_power(self):
+        """Template: Notify systems about grid power availability."""
+        pass  # TODO: Send notifications, update status displays, etc.
+
+    def _action_generator_power_detected(self):
+        """Template: Handle generator power detection."""
+        pass  # TODO: Monitor generator parameters, adjust settings, etc.
+
+    def _action_switch_to_generator_configuration(self):
+        """Template: Switch system to generator power configuration."""
+        pass  # TODO: Update Sol-Ark settings, limit power usage, etc.
+
+    def _action_monitor_generator_health(self):
+        """Template: Monitor generator health and performance."""
+        pass  # TODO: Check frequency stability, fuel levels, etc.
+
+    def _action_power_transition_detected(self):
+        """Template: Handle power source transitions."""
+        pass  # TODO: Enter safe mode, pause operations, etc.
+
+    def _action_enter_safe_mode(self):
+        """Template: Enter safe mode during transitions."""
+        pass  # TODO: Reduce power consumption, pause non-essential systems, etc.
 
 
 class FrequencyAnalyzer:
@@ -175,6 +361,7 @@ class FrequencyMonitor:
         
         self.hardware = HardwareManager(self.config, self.logger)
         self.analyzer = FrequencyAnalyzer(self.config, self.logger)
+        self.state_machine = PowerStateMachine(self.config, self.logger)
         self.health_monitor = HealthMonitor(self.config, self.logger)
         self.memory_monitor = MemoryMonitor(self.config, self.logger)
         self.data_logger = DataLogger(self.config, self.logger)
@@ -202,6 +389,8 @@ class FrequencyMonitor:
         self.last_display_time = 0
         self.sample_count = 0
         self.start_time = time.time()
+        self.zero_voltage_start_time = None  # Track when voltage went to zero
+        self.zero_voltage_duration = 0.0    # How long voltage has been zero
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -237,17 +426,26 @@ class FrequencyMonitor:
                     freq = self.analyzer._simulate_frequency()
                 else:
                     freq = self.analyzer.count_zero_crossings(duration=1.0/self.config.get('sampling.sample_rate', 2.0))
-                
+
+                # Track zero voltage duration
+                if freq is None or freq == 0:
+                    # No frequency detected - voltage is zero
+                    if self.zero_voltage_start_time is None:
+                        self.zero_voltage_start_time = current_time
+                    self.zero_voltage_duration = current_time - self.zero_voltage_start_time
+                else:
+                    # Frequency detected - reset zero voltage tracking
+                    self.zero_voltage_start_time = None
+                    self.zero_voltage_duration = 0.0
+
                 # Validate frequency reading
                 if freq is None:
-                    self.logger.warning("Skipping invalid frequency reading")
-                    continue
-                
-                if not isinstance(freq, (int, float)):
+                    self.logger.warning(f"No frequency reading (zero voltage duration: {self.zero_voltage_duration:.1f}s)")
+                    # Continue processing even with no frequency for state machine updates
+                elif not isinstance(freq, (int, float)):
                     self.logger.error(f"Invalid frequency data type: {type(freq)}. Expected number, got {freq}")
                     continue
-                
-                if np.isnan(freq) or np.isinf(freq):
+                elif np.isnan(freq) or np.isinf(freq):
                     self.logger.error(f"Invalid frequency value: {freq}")
                     continue
                 
@@ -261,6 +459,10 @@ class FrequencyMonitor:
                 frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
                 avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
                 source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
+
+                # Update state machine with current conditions
+                current_std_dev = std_freq if len(self.freq_buffer) > 10 else None
+                current_state = self.state_machine.update_state(freq, current_std_dev, self.zero_voltage_duration)
                 
                 # Collect tuning data if enabled
                 if self.tuning_collector.enabled:
@@ -300,7 +502,9 @@ class FrequencyMonitor:
                 # Log hourly status
                 if current_time - self.last_log_time >= 3600:  # 1 hour
                     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                    self.data_logger.log_hourly_status(timestamp, freq, source, std_freq, kurtosis, self.sample_count)
+                    state_info = self.state_machine.get_state_info()
+                    self.data_logger.log_hourly_status(timestamp, freq, source, std_freq, kurtosis, self.sample_count,
+                                                     state_info=state_info)
                     
                     # Log memory information to CSV
                     memory_csv_file = self.config.get('logging.memory_log_file', 'memory_usage.csv')
@@ -351,22 +555,58 @@ class FrequencyMonitor:
         """Update LCD display and LED indicators."""
         # Add current classification to buffer
         self.classification_buffer.append(source)
-        
+
+        # Get state machine status
+        state_info = self.state_machine.get_state_info()
+        current_state = state_info['current_state']
+
         # Get U/G indicator based on recent data
         ug_indicator = self._get_current_power_source_indicator()
-        
-        # Show time and frequency with U/G indicator, updated once per second
+
+        # Show time and frequency with state indicator, updated once per second
         current_time = time.strftime("%H:%M:%S")
-        line1 = f"Time: {current_time} [{ug_indicator}]"
-        line2 = f"Freq: {freq:.2f} Hz"
-        
+        state_display = self._get_state_display_code(current_state)
+        line1 = f"Time: {current_time} [{state_display}]"
+
+        if freq is not None:
+            line2 = f"Freq: {freq:.2f} Hz"
+        else:
+            line2 = f"No Signal ({self.zero_voltage_duration:.0f}s)"
+
         self.hardware.update_display(line1, line2)
-        
-        # Update LEDs
-        is_utility = source == "Utility Grid"
-        self.hardware.set_led('green', is_utility)
-        self.hardware.set_led('red', not is_utility)
-    
+
+        # Update LEDs based on state machine state
+        self._update_leds_for_state(current_state)
+
+    def _get_state_display_code(self, state: str) -> str:
+        """Get display code for power state."""
+        state_codes = {
+            'off_grid': 'OFF',
+            'grid': 'GRID',
+            'generator': 'GEN',
+            'transitioning': 'TRANS'
+        }
+        return state_codes.get(state, 'UNK')
+
+    def _update_leds_for_state(self, state: str):
+        """Update LED indicators based on power state."""
+        # Turn off all LEDs first
+        self.hardware.set_led('green', False)
+        self.hardware.set_led('red', False)
+
+        # Set LEDs based on state
+        if state == 'grid':
+            self.hardware.set_led('green', True)  # Green for grid power
+        elif state == 'generator':
+            self.hardware.set_led('red', True)    # Red for generator power
+        elif state == 'off_grid':
+            # Both LEDs off for off-grid (power outage)
+            pass
+        elif state == 'transitioning':
+            # Both LEDs on for transitioning (flashing/unclear state)
+            self.hardware.set_led('green', True)
+            self.hardware.set_led('red', True)
+
     def cleanup(self):
         """Cleanup resources."""
         self.logger.info("Cleaning up resources...")

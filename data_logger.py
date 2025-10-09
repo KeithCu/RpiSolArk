@@ -42,23 +42,31 @@ class DataLogger:
         except Exception as e:
             self.logger.error(f"Failed to initialize detailed log file: {e}")
     
-    def log_hourly_status(self, timestamp: str, freq: float, source: str, 
-                         std_freq: Optional[float], kurtosis: Optional[float], 
-                         sample_count: int):
+    def log_hourly_status(self, timestamp: str, freq: float, source: str,
+                         std_freq: Optional[float], kurtosis: Optional[float],
+                         sample_count: int, state_info: Optional[Dict[str, Any]] = None):
         """Log hourly status to CSV."""
         try:
             with open(self.hourly_log_file, 'a', newline='') as f:
                 writer = csv.writer(f)
                 if f.tell() == 0:
-                    writer.writerow(['timestamp', 'frequency_hz', 'source', 
-                                   'std_dev_hz', 'kurtosis', 'samples_processed'])
+                    # Add state machine columns to header
+                    header = ['timestamp', 'frequency_hz', 'source',
+                             'std_dev_hz', 'kurtosis', 'samples_processed',
+                             'power_state', 'state_duration_seconds']
+                    writer.writerow(header)
+
+                # Extract state info
+                power_state = state_info.get('current_state', 'unknown') if state_info else 'unknown'
+                state_duration = state_info.get('state_duration', 0) if state_info else 0
+
                 writer.writerow([
                     timestamp, f"{freq:.2f}", source,
                     f"{std_freq:.4f}" if std_freq else "N/A",
                     f"{kurtosis:.2f}" if kurtosis else "N/A",
-                    sample_count
+                    sample_count, power_state, f"{state_duration:.1f}"
                 ])
-            self.logger.info(f"Hourly status logged: {source} at {freq:.2f} Hz")
+            self.logger.info(f"Hourly status logged: {source} at {freq:.2f} Hz, state: {power_state}")
         except Exception as e:
             self.logger.error(f"Failed to log hourly status: {e}")
     

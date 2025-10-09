@@ -26,6 +26,12 @@ analysis:
     std_dev: 0.08           # Standard deviation threshold (Hz) - Accounts for generator variation
     kurtosis: 0.4           # Kurtosis threshold - Detects frequency hunting patterns
 
+# State Machine Configuration
+state_machine:
+  transition_timeout: 30.0       # seconds - Max time in transitioning state before forcing off_grid
+  zero_voltage_threshold: 5.0    # seconds - Time with no cycles before declaring off_grid
+  unsteady_voltage_threshold: 0.1 # Hz - Standard deviation threshold for unsteady voltage
+
 # Logging Configuration
 logging:
   hourly_log_file: "hourly_status.csv"
