@@ -151,11 +151,15 @@ class PowerStateMachine:
 
 class FrequencyAnalyzer:
     """Handles frequency analysis and classification."""
-    
+
     def __init__(self, config, logger: logging.Logger):
         self.config = config
         self.logger = logger
         self.thresholds = config.get('analysis.generator_thresholds', {})
+
+        # Simulator state
+        self.simulator_start_time = None
+        self.simulator_state = "grid"  # grid -> off_grid -> generator -> grid
     
     def count_zero_crossings(self, duration: float = 0.5) -> Optional[float]:
         """Count zero-crossings over duration. Returns frequency (Hz)."""
@@ -195,13 +199,44 @@ class FrequencyAnalyzer:
         
         return float(freq)  # Ensure we return a Python float
     
-    def _simulate_frequency(self) -> float:
-        """Simulate utility-like 60 Hz with noise."""
-        base_freq = 60.0
-        noise = random.gauss(0, 0.01)  # Utility-stable noise
-        result = base_freq + noise
-        
-        return float(result)  # Ensure we return a Python float
+    def _simulate_frequency(self) -> Optional[float]:
+        """Simulate power state cycling: grid (3s) -> off-grid (3s) -> generator (3s) -> grid."""
+        current_time = time.time()
+
+        # Initialize simulator start time
+        if self.simulator_start_time is None:
+            self.simulator_start_time = current_time
+
+        # Calculate elapsed time and current phase (0-11 seconds cycle)
+        elapsed = current_time - self.simulator_start_time
+        cycle_time = elapsed % 12.0  # 12 second cycle: 3s grid + 3s off + 3s gen + 3s grid
+
+        # Determine current state based on cycle time
+        if cycle_time < 3.0:
+            # Grid power (0-3s): stable 60 Hz
+            self.simulator_state = "grid"
+            base_freq = 60.0
+            noise = random.gauss(0, 0.01)  # Small stable noise
+            return float(base_freq + noise)
+
+        elif cycle_time < 6.0:
+            # Off-grid power (3-6s): no frequency (None)
+            self.simulator_state = "off_grid"
+            return None  # No signal
+
+        elif cycle_time < 9.0:
+            # Generator power (6-9s): unstable frequency
+            self.simulator_state = "generator"
+            base_freq = 59.5 + random.uniform(-1.0, 2.5)  # 58.5-62.0 Hz range
+            noise = random.gauss(0, 0.5)  # Large generator noise
+            return float(base_freq + noise)
+
+        else:
+            # Back to grid power (9-12s): stable 60 Hz
+            self.simulator_state = "grid"
+            base_freq = 60.0
+            noise = random.gauss(0, 0.01)  # Small stable noise
+            return float(base_freq + noise)
     
     def analyze_stability(self, frac_freq: np.ndarray) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         """Compute Allan variance and statistical metrics."""
@@ -347,9 +382,14 @@ class FrequencyMonitor:
             simulator_mode = self.config.get('app.simulator_mode', True)
         
         self.logger.info(f"Starting frequency monitor (simulator: {simulator_mode})")
-        
+
         # Initialize display
         self.hardware.update_display("Starting...", "Please wait...")
+
+        # For simulator mode, set up auto-exit after 15 seconds
+        if simulator_mode:
+            self.simulator_exit_time = time.time() + 15.0
+            self.logger.info("Simulator mode: will auto-exit after 15 seconds")
         
         try:
             while self.running:
@@ -383,16 +423,23 @@ class FrequencyMonitor:
                     self.logger.error(f"Invalid frequency value: {freq}")
                     continue
                 
-                # Update buffers
-                self.freq_buffer.append(freq)
-                self.time_buffer.append(current_time)
-                self.sample_count += 1
+                # Update buffers only with valid frequency readings
+                if freq is not None:
+                    self.freq_buffer.append(freq)
+                    self.time_buffer.append(current_time)
+                    self.sample_count += 1
+
                 self.health_monitor.update_activity()
-                
-                # Analyze data
-                frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
-                avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
-                source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
+
+                # Analyze data only if we have enough samples
+                if len(self.freq_buffer) >= 10:
+                    frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
+                    avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
+                    source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
+                else:
+                    # Not enough data for analysis yet
+                    avar_10s, std_freq, kurtosis = None, None, None
+                    source = "Unknown"
 
                 # Update state machine with current conditions
                 current_state = self.state_machine.update_state(freq, source, self.zero_voltage_duration)
@@ -432,26 +479,31 @@ class FrequencyMonitor:
                 # Perform memory cleanup if needed
                 self.memory_monitor.perform_cleanup()
                 
+                # Check for simulator auto-exit
+                if simulator_mode and time.time() >= self.simulator_exit_time:
+                    self.logger.info("Simulator auto-exit time reached (15 seconds)")
+                    break
+
                 # Log hourly status
                 if current_time - self.last_log_time >= 3600:  # 1 hour
                     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                     state_info = self.state_machine.get_state_info()
                     self.data_logger.log_hourly_status(timestamp, freq, source, std_freq, kurtosis, self.sample_count,
                                                      state_info=state_info)
-                    
+
                     # Log memory information to CSV
                     memory_csv_file = self.config.get('logging.memory_log_file', 'memory_usage.csv')
                     self.memory_monitor.log_memory_to_csv(memory_csv_file)
-                    
+
                     # Log memory summary
                     memory_summary = self.memory_monitor.get_memory_summary()
                     self.logger.info(f"Memory status: {memory_summary}")
-                    
+
                     self.last_log_time = current_time
-                
+
                 # Maintain sample rate
                 sample_rate = self.config.get_float('sampling.sample_rate', 2.0)
-                
+
                 sleep_time = max(0, 1.0/sample_rate - (time.time() - self.start_time - current_time))
                 time.sleep(sleep_time)
                 
