@@ -1051,8 +1051,27 @@ def main():
                        help='Input file for offline analysis (default: detailed_frequency_data.csv)')
     parser.add_argument('--output-file', type=str, default='offline_analysis_results.csv',
                        help='Output file for offline analysis results (default: offline_analysis_results.csv)')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable remote debugging on port 5678')
+    parser.add_argument('--debug-port', type=int, default=5678,
+                       help='Remote debugging port (default: 5678)')
+    parser.add_argument('--debug-logging', action='store_true',
+                       help='Enable debug-level logging')
     
     args = parser.parse_args()
+    
+    # Enable remote debugging if requested
+    if args.debug:
+        try:
+            import debugpy
+            debugpy.listen(("0.0.0.0", args.debug_port))
+            print(f"Remote debugging enabled on port {args.debug_port}")
+            print("Waiting for debugger to attach...")
+            debugpy.wait_for_client()
+            print("Debugger attached!")
+        except ImportError:
+            print("debugpy not installed. Install with: pip install debugpy")
+            sys.exit(1)
     
     # Determine simulator mode
     simulator_mode = args.simulator
@@ -1062,8 +1081,8 @@ def main():
     try:
         monitor = FrequencyMonitor()
         
-        # Override log level if verbose
-        if args.verbose:
+        # Override log level if verbose or debug logging
+        if args.verbose or args.debug_logging:
             logging.getLogger().setLevel(logging.DEBUG)
         
         # Override display simulation setting

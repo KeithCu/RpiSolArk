@@ -63,7 +63,7 @@ memory:
 
 # Application Settings
 app:
-  simulator_mode: false     # Use real hardware in production
+  simulator_mode: true     # Use real hardware in production
   display_update_interval: 1.0  # seconds between display updates
   cleanup_on_exit: true
   simulate_display: false   # Use real LCD in production
