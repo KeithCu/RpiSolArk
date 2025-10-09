@@ -421,15 +421,19 @@ class FrequencyMonitor:
         
         try:
             while self.running:
+                self.logger.debug("Main loop iteration start")
                 current_time = time.time() - self.start_time
                 
                 # Get frequency reading
+                self.logger.debug("Getting frequency reading...")
                 if simulator_mode:
                     freq = self.analyzer._simulate_frequency()
                 else:
                     freq = self.analyzer.count_zero_crossings(duration=1.0/self.config.get('sampling.sample_rate', 2.0))
+                self.logger.debug(f"Frequency reading: {freq}")
 
                 # Track zero voltage duration
+                self.logger.debug("Tracking zero voltage duration...")
                 if freq is None or freq == 0:
                     # No frequency detected - voltage is zero
                     if self.zero_voltage_start_time is None:
@@ -441,6 +445,7 @@ class FrequencyMonitor:
                     self.zero_voltage_duration = 0.0
 
                 # Validate frequency reading
+                self.logger.debug("Validating frequency reading...")
                 if freq is None:
                     self.logger.warning(f"No frequency reading (zero voltage duration: {self.zero_voltage_duration:.1f}s)")
                     # Continue processing even with no frequency for state machine updates
@@ -452,19 +457,24 @@ class FrequencyMonitor:
                     continue
                 
                 # Update buffers only with valid frequency readings
+                self.logger.debug("Updating buffers...")
                 if freq is not None:
                     self.freq_buffer.append(freq)
                     self.time_buffer.append(current_time)
                     self.sample_count += 1
 
+                self.logger.debug("Updating health monitor...")
                 self.health_monitor.update_activity()
 
                 # Analyze data only if we have enough samples
+                self.logger.debug("Analyzing data...")
                 if len(self.freq_buffer) >= 10:
+                    self.logger.debug("Full analysis with 10+ samples")
                     frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
                     avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
                     source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
                 elif len(self.freq_buffer) >= 3:
+                    self.logger.debug("Quick analysis with 3+ samples")
                     # Quick detection with fewer samples for better UX
                     recent_freqs = list(self.freq_buffer)[-3:]  # Last 3 readings
                     avg_freq = sum(recent_freqs) / len(recent_freqs)
@@ -478,14 +488,17 @@ class FrequencyMonitor:
                         source = "Unknown"
                     avar_10s, std_freq, kurtosis = None, None, None
                 else:
+                    self.logger.debug("Not enough samples for analysis")
                     # Not enough data for analysis yet
                     avar_10s, std_freq, kurtosis = None, None, None
                     source = "Unknown"
 
                 # Update state machine with current conditions
+                self.logger.debug("Updating state machine...")
                 current_state = self.state_machine.update_state(freq, source, self.zero_voltage_duration)
                 
                 # Collect tuning data if enabled
+                self.logger.debug("Collecting tuning data...")
                 if self.tuning_collector.enabled:
                     analysis_results = {
                         'allan_variance': avar_10s,
@@ -496,6 +509,7 @@ class FrequencyMonitor:
                     self.tuning_collector.collect_analysis_results(analysis_results, source, len(self.freq_buffer))
                 
                 # Log detailed frequency data if enabled
+                self.logger.debug("Logging detailed frequency data...")
                 analysis_results = {
                     'allan_variance': avar_10s,
                     'std_deviation': std_freq,
@@ -507,9 +521,11 @@ class FrequencyMonitor:
                 )
                 
                 # Update display and LEDs once per second
+                self.logger.debug("Checking display update...")
                 display_interval = self.config.get_float('app.display_update_interval', 1.0)
                 
                 if current_time - self.last_display_time >= display_interval:
+                    self.logger.debug("Updating display and LEDs...")
                     self._update_display_and_leds(freq, source, std_freq)
                     self.last_display_time = current_time
                 
@@ -555,10 +571,13 @@ class FrequencyMonitor:
                     self.last_log_time = current_time
 
                 # Maintain sample rate
+                self.logger.debug("Maintaining sample rate...")
                 sample_rate = self.config.get_float('sampling.sample_rate', 2.0)
 
                 sleep_time = max(0, 1.0/sample_rate - (time.time() - self.start_time - current_time))
+                self.logger.debug(f"Sleeping for {sleep_time:.3f} seconds")
                 time.sleep(sleep_time)
+                self.logger.debug("Main loop iteration complete")
                 
         except Exception as e:
             self.logger.error(f"Error in main loop: {e}")
