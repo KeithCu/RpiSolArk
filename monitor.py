@@ -44,8 +44,8 @@ class PowerStateMachine:
     def __init__(self, config, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.current_state = PowerState.OFF_GRID
-        self.previous_state = PowerState.OFF_GRID
+        self.current_state = PowerState.TRANSITIONING  # Start in transitioning to allow detection
+        self.previous_state = PowerState.TRANSITIONING
         self.state_entry_time = time.time()
         self.transition_timeout = config.get('state_machine.transition_timeout', 30)  # seconds
         self.zero_voltage_threshold = config.get('state_machine.zero_voltage_threshold', 5)  # seconds of no cycles
@@ -200,42 +200,47 @@ class FrequencyAnalyzer:
         return float(freq)  # Ensure we return a Python float
     
     def _simulate_frequency(self) -> Optional[float]:
-        """Simulate power state cycling: grid (3s) -> off-grid (3s) -> generator (3s) -> grid."""
+        """Simulate power state cycling: grid (8s) -> off-grid (6s) -> generator (8s) -> grid (6s)."""
         current_time = time.time()
 
         # Initialize simulator start time
         if self.simulator_start_time is None:
             self.simulator_start_time = current_time
 
-        # Calculate elapsed time and current phase (0-11 seconds cycle)
+        # Calculate elapsed time and current phase (0-28 seconds cycle)
         elapsed = current_time - self.simulator_start_time
-        cycle_time = elapsed % 12.0  # 12 second cycle: 3s grid + 3s off + 3s gen + 3s grid
+        cycle_time = elapsed % 28.0  # 28 second cycle: 8s grid + 6s off + 8s gen + 6s grid
 
         # Determine current state based on cycle time
-        if cycle_time < 3.0:
-            # Grid power (0-3s): stable 60 Hz
+        if cycle_time < 8.0:
+            # Grid power (0-8s): very stable 60 Hz - gives time for detection
             self.simulator_state = "grid"
             base_freq = 60.0
-            noise = random.gauss(0, 0.01)  # Small stable noise
+            noise = random.gauss(0, 0.005)  # Very small stable noise
             return float(base_freq + noise)
 
-        elif cycle_time < 6.0:
-            # Off-grid power (3-6s): no frequency (None)
+        elif cycle_time < 14.0:
+            # Off-grid power (8-14s): no frequency (None) - longer than 5s threshold
             self.simulator_state = "off_grid"
             return None  # No signal
 
-        elif cycle_time < 9.0:
-            # Generator power (6-9s): unstable frequency
+        elif cycle_time < 22.0:
+            # Generator power (14-22s): variable frequency with hunting - gives time for detection
             self.simulator_state = "generator"
-            base_freq = 59.5 + random.uniform(-1.0, 2.5)  # 58.5-62.0 Hz range
-            noise = random.gauss(0, 0.5)  # Large generator noise
+            # Simulate generator hunting: alternating high/low every 2 seconds
+            phase_in_cycle = (cycle_time - 14.0) % 4.0
+            if phase_in_cycle < 2.0:
+                base_freq = 58.5 + random.uniform(-0.5, 1.0)  # Low range
+            else:
+                base_freq = 61.0 + random.uniform(-1.0, 0.5)  # High range
+            noise = random.gauss(0, 0.3)  # Moderate generator noise
             return float(base_freq + noise)
 
         else:
-            # Back to grid power (9-12s): stable 60 Hz
+            # Back to grid power (22-28s): stable 60 Hz - final grid period
             self.simulator_state = "grid"
             base_freq = 60.0
-            noise = random.gauss(0, 0.01)  # Small stable noise
+            noise = random.gauss(0, 0.005)  # Very small stable noise
             return float(base_freq + noise)
     
     def analyze_stability(self, frac_freq: np.ndarray) -> Tuple[Optional[float], Optional[float], Optional[float]]:
@@ -386,10 +391,10 @@ class FrequencyMonitor:
         # Initialize display
         self.hardware.update_display("Starting...", "Please wait...")
 
-        # For simulator mode, set up auto-exit after 15 seconds
+        # For simulator mode, set up auto-exit after 20 seconds
         if simulator_mode:
-            self.simulator_exit_time = time.time() + 15.0
-            self.logger.info("Simulator mode: will auto-exit after 15 seconds")
+            self.simulator_exit_time = time.time() + 20.0
+            self.logger.info("Simulator mode: will auto-exit after 20 seconds (28s power cycle)")
         
         try:
             while self.running:
@@ -436,6 +441,19 @@ class FrequencyMonitor:
                     frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
                     avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
                     source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
+                elif len(self.freq_buffer) >= 3:
+                    # Quick detection with fewer samples for better UX
+                    recent_freqs = list(self.freq_buffer)[-3:]  # Last 3 readings
+                    avg_freq = sum(recent_freqs) / len(recent_freqs)
+                    variation = max(recent_freqs) - min(recent_freqs)
+
+                    if variation < 0.1 and 59.9 <= avg_freq <= 60.1:
+                        source = "Utility Grid"  # Quick stable detection
+                    elif variation > 0.5:
+                        source = "Generac Generator"  # Quick unstable detection
+                    else:
+                        source = "Unknown"
+                    avar_10s, std_freq, kurtosis = None, None, None
                 else:
                     # Not enough data for analysis yet
                     avar_10s, std_freq, kurtosis = None, None, None
@@ -481,7 +499,7 @@ class FrequencyMonitor:
                 
                 # Check for simulator auto-exit
                 if simulator_mode and time.time() >= self.simulator_exit_time:
-                    self.logger.info("Simulator auto-exit time reached (15 seconds)")
+                    self.logger.info("Simulator auto-exit time reached (20 seconds)")
                     break
 
                 # Log hourly status
@@ -566,12 +584,12 @@ class FrequencyMonitor:
     def _get_state_display_code(self, state: str) -> str:
         """Get display code for power state."""
         state_codes = {
-            'off_grid': 'OFF',
-            'grid': 'GRID',
-            'generator': 'GEN',
-            'transitioning': 'TRANS'
+            'off_grid': 'OFF-GRID',
+            'grid': 'UTILITY',
+            'generator': 'GENERATOR',
+            'transitioning': 'DETECTING'
         }
-        return state_codes.get(state, 'UNK')
+        return state_codes.get(state, 'UNKNOWN')
 
     def _update_leds_for_state(self, state: str):
         """Update LED indicators based on power state."""
