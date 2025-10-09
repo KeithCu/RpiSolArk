@@ -421,16 +421,13 @@ class FrequencyMonitor:
         
         try:
             while self.running:
-                self.logger.debug("Main loop iteration start")
                 current_time = time.time() - self.start_time
                 
                 # Get frequency reading
-                self.logger.debug("Getting frequency reading...")
                 if simulator_mode:
                     freq = self.analyzer._simulate_frequency()
                 else:
                     freq = self.analyzer.count_zero_crossings(duration=1.0/self.config.get('sampling.sample_rate', 2.0))
-                self.logger.debug(f"Frequency reading: {freq}")
 
                 # Track zero voltage duration
                 self.logger.debug("Tracking zero voltage duration...")
@@ -574,7 +571,8 @@ class FrequencyMonitor:
                 self.logger.debug("Maintaining sample rate...")
                 sample_rate = self.config.get_float('sampling.sample_rate', 2.0)
 
-                sleep_time = max(0, 1.0/sample_rate - (time.time() - self.start_time - current_time))
+                # Simple sleep to maintain sample rate
+                sleep_time = 1.0 / sample_rate
                 self.logger.debug(f"Sleeping for {sleep_time:.3f} seconds")
                 time.sleep(sleep_time)
                 self.logger.debug("Main loop iteration complete")
