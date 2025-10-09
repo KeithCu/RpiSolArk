@@ -1,0 +1,11 @@
+timestamp,elapsed_seconds,frequency_hz,notes
+2024-01-08T20:00:00,0,419.0,false_high_harmonic_error
+2024-01-08T20:00:05,5,419.0,false_high_harmonic_error
+2024-01-08T20:00:10,10,419.0,false_high_harmonic_error
+2024-01-08T20:00:15,15,419.0,false_high_harmonic_error
+2024-01-08T20:00:20,20,419.0,false_high_harmonic_error
+2024-01-08T20:00:25,25,60.0,true_frequency_stabilized
+2024-01-08T20:00:30,30,60.1,true_frequency_stable
+2024-01-08T20:00:35,35,60.0,true_frequency_stable
+2024-01-08T20:00:40,40,60.1,true_frequency_stable
+2024-01-08T20:00:45,45,60.0,true_frequency_stable

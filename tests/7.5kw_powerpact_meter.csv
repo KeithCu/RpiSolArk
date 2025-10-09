@@ -1,0 +1,12 @@
+timestamp,elapsed_seconds,frequency_hz,notes
+2024-01-08T19:00:00,0,177.9,false_high_meter_error
+2024-01-08T19:00:02,2,168.1,false_high_meter_error
+2024-01-08T19:00:04,4,171.8,false_high_meter_error
+2024-01-08T19:00:06,6,202.0,false_high_meter_error
+2024-01-08T19:00:08,8,189.5,false_high_meter_error
+2024-01-08T19:00:10,10,60.2,true_frequency_stabilized
+2024-01-08T19:00:12,12,60.1,true_frequency_stable
+2024-01-08T19:00:14,14,60.2,true_frequency_stable
+2024-01-08T19:00:16,16,60.0,true_frequency_stable
+2024-01-08T19:00:18,18,60.1,true_frequency_stable
+2024-01-08T19:00:20,20,60.2,true_frequency_stable
