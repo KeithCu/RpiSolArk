@@ -333,7 +333,16 @@ class FrequencyMonitor:
         self.logger_setup = Logger(self.config)
         self.logger = logging.getLogger(__name__)
         
-        self.hardware = HardwareManager(self.config, self.logger)
+        # Check if we're in simulator mode
+        self.simulator_mode = self.config.get('app.simulator_mode', True)
+        
+        # Only initialize hardware if not in simulator mode
+        if self.simulator_mode:
+            self.logger.info("Simulator mode: Hardware initialization skipped")
+            self.hardware = None
+        else:
+            self.hardware = HardwareManager(self.config, self.logger)
+        
         self.analyzer = FrequencyAnalyzer(self.config, self.logger)
         self.state_machine = PowerStateMachine(self.config, self.logger)
         self.health_monitor = HealthMonitor(self.config, self.logger)
@@ -341,8 +350,9 @@ class FrequencyMonitor:
         self.data_logger = DataLogger(self.config, self.logger)
         self.tuning_collector = TuningDataCollector(self.config, self.logger)
         
-        # Connect analyzer to hardware
-        self.analyzer.hardware_manager = self.hardware
+        # Connect analyzer to hardware only if available
+        if self.hardware is not None:
+            self.analyzer.hardware_manager = self.hardware
         
         # Initialize data buffers
         sample_rate = self.config.get_float('sampling.sample_rate', 2.0)
@@ -384,6 +394,14 @@ class FrequencyMonitor:
         """Handle shutdown signals."""
         self.logger.info(f"Received signal {signum}, shutting down...")
         self.running = False
+        # Force cleanup and exit
+        try:
+            self.cleanup()
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+        # Force exit the program
+        import sys
+        sys.exit(0)
     
     def run(self, simulator_mode: bool = None):
         """Main monitoring loop."""
@@ -393,7 +411,8 @@ class FrequencyMonitor:
         self.logger.info(f"Starting frequency monitor (simulator: {simulator_mode})")
 
         # Initialize display
-        self.hardware.update_display("Starting...", "Please wait...")
+        if self.hardware is not None:
+            self.hardware.update_display("Starting...", "Please wait...")
 
         # For simulator mode, set up auto-exit after 20 seconds
         if simulator_mode:
@@ -510,7 +529,7 @@ class FrequencyMonitor:
                 current_time = time.time()
                 if current_time - self.last_reset_check >= 0.5:
                     self.last_reset_check = current_time
-                    if self.hardware.check_reset_button():
+                    if self.hardware is not None and self.hardware.check_reset_button():
                         if not self.reset_button_pressed:
                             self.reset_button_pressed = True
                             self.logger.info("Reset button pressed - restarting application")
@@ -592,10 +611,41 @@ class FrequencyMonitor:
         else:
             line2 = f"No Signal ({self.zero_voltage_duration:.0f}s)"
 
-        self.hardware.update_display(line1, line2)
+        if self.hardware is not None:
+            self.hardware.update_display(line1, line2)
+        else:
+            # In simulator mode, use display simulation directly
+            self._simulate_display(line1, line2)
 
         # Update LEDs based on state machine state
         self._update_leds_for_state(current_state)
+
+    def _simulate_display(self, line1: str, line2: str):
+        """Simulate LCD display output for simulator mode."""
+        # Clear screen (simulate LCD clear)
+        print("\033[2J\033[H", end="")  # Clear screen and move cursor to top-left
+        
+        # Display header
+        print("=" * 22)
+        print("  LCD DISPLAY SIMULATION")
+        print("=" * 22)
+        print()
+        
+        # Display the two lines as they would appear on LCD (16x2)
+        print("+-----------------+")
+        print(f"|{line1:<16}|")  # 16 characters wide (LCD width)
+        print(f"|{line2:<16}|")
+        print("+-----------------+")
+        print()
+        
+        # Display additional info
+        print("-" * 22)
+        print("System Status:")
+        print(f"  Mode: SIMULATOR")
+        print(f"  Hardware: NOT INITIALIZED")
+        print("=" * 22)
+        print("Press Ctrl+C to stop")
+        print()
 
     def _get_state_display_code(self, state: str) -> str:
         """Get display code for power state."""
@@ -609,6 +659,9 @@ class FrequencyMonitor:
 
     def _update_leds_for_state(self, state: str):
         """Update LED indicators based on power state."""
+        if self.hardware is None:
+            return  # No hardware available in simulator mode
+            
         # Turn off all LEDs first
         self.hardware.set_led('green', False)
         self.hardware.set_led('red', False)
@@ -631,7 +684,8 @@ class FrequencyMonitor:
         self.logger.info("Initiating application restart...")
 
         # Show reset message on LCD
-        self.hardware.update_display("RESET", "Restarting...")
+        if self.hardware is not None:
+            self.hardware.update_display("RESET", "Restarting...")
 
         # Cleanup resources
         self.cleanup()
@@ -654,7 +708,7 @@ class FrequencyMonitor:
         if self.tuning_collector.enabled:
             self.tuning_collector.stop_collection()
         
-        if self.config.get('app.cleanup_on_exit', True):
+        if self.config.get('app.cleanup_on_exit', True) and self.hardware is not None:
             self.hardware.cleanup()
         
         self.logger.info("Cleanup completed")
