@@ -351,6 +351,7 @@ Press Ctrl+C to stop
 | 🔌 **H11AA1 Optocoupler** | AC line isolation | Safe frequency detection |
 | 📺 **16x2 I2C LCD** | Address 0x27 | Real-time status display |
 | 💡 **LEDs** | Green + Red | Power source indicators |
+| 🔘 **Reset Button** | Momentary push button | Manual system reset/restart |
 | 🔗 **Resistors** | Various values | Circuit protection |
 
 </div>
@@ -362,6 +363,7 @@ Press Ctrl+C to stop
 - [ ] 16x2 I2C LCD display (0x27 address)
 - [ ] Green LED (5mm)
 - [ ] Red LED (5mm)
+- [ ] Momentary push button (reset button)
 - [ ] 220Ω resistors (2x)
 - [ ] 1kΩ resistor
 - [ ] 10kΩ resistor
@@ -411,9 +413,26 @@ python monitor.py --verbose
 | 🔌 Optocoupler Input | GPIO 17 | AC line via optocoupler |
 | 💚 Green LED | GPIO 18 | Utility Grid indicator |
 | ❤️ Red LED | GPIO 27 | Generator indicator |
+| 🔘 Reset Button | GPIO 22 | Active LOW with pull-up |
 | 📺 I2C LCD | SDA/SCL | Address 0x27 |
 
 </div>
+
+#### 🔘 Reset Button Wiring
+The reset button provides manual system reset/restart functionality:
+
+```
+Raspberry Pi GPIO 22 ──┬─── Button ─── GND
+                       │
+                     10kΩ
+                       │
+                     3.3V
+```
+
+- **Active LOW**: Button press connects GPIO 22 to GND
+- **Pull-up resistor**: 10kΩ resistor to 3.3V keeps pin HIGH when button released
+- **Debounced**: Software handles button press/release detection
+- **Function**: Restarts entire application when pressed
 
 ### ☁️ Sol-Ark Cloud Setup
 

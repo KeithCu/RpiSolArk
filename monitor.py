@@ -365,6 +365,10 @@ class FrequencyMonitor:
         self.start_time = time.time()
         self.zero_voltage_start_time = None  # Track when voltage went to zero
         self.zero_voltage_duration = 0.0    # How long voltage has been zero
+
+        # Reset button state tracking
+        self.reset_button_pressed = False
+        self.last_reset_check = 0
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -502,6 +506,18 @@ class FrequencyMonitor:
                     self.logger.info("Simulator auto-exit time reached (20 seconds)")
                     break
 
+                # Check reset button (debounced, check every 0.5 seconds)
+                current_time = time.time()
+                if current_time - self.last_reset_check >= 0.5:
+                    self.last_reset_check = current_time
+                    if self.hardware.check_reset_button():
+                        if not self.reset_button_pressed:
+                            self.reset_button_pressed = True
+                            self.logger.info("Reset button pressed - restarting application")
+                            self._handle_reset()
+                    else:
+                        self.reset_button_pressed = False
+
                 # Log hourly status
                 if current_time - self.last_log_time >= 3600:  # 1 hour
                     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -609,6 +625,25 @@ class FrequencyMonitor:
             # Both LEDs on for transitioning (flashing/unclear state)
             self.hardware.set_led('green', True)
             self.hardware.set_led('red', True)
+
+    def _handle_reset(self):
+        """Handle reset button press - restart the application."""
+        self.logger.info("Initiating application restart...")
+
+        # Show reset message on LCD
+        self.hardware.update_display("RESET", "Restarting...")
+
+        # Cleanup resources
+        self.cleanup()
+
+        # Brief delay to show the message
+        time.sleep(1)
+
+        # Restart the application
+        import sys
+        import os
+        self.logger.info("Restarting application now")
+        os.execv(sys.executable, ['python'] + sys.argv)
 
     def cleanup(self):
         """Cleanup resources."""

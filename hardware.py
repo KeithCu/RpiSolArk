@@ -46,6 +46,10 @@ class HardwareManager:
                 GPIO.setup(self.gpio_pin, GPIO.IN)
                 GPIO.setup(self.led_green, GPIO.OUT, initial=GPIO.LOW)
                 GPIO.setup(self.led_red, GPIO.OUT, initial=GPIO.LOW)
+
+                # Setup reset button with pull-up resistor (active LOW)
+                self.reset_button = self.config.get('hardware.reset_button', 22)
+                GPIO.setup(self.reset_button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
                 
                 self.logger.info("GPIO hardware initialized")
             except Exception as e:
@@ -72,7 +76,14 @@ class HardwareManager:
         if self.gpio_available:
             return GPIO.input(self.gpio_pin)
         return 0
-    
+
+    def check_reset_button(self) -> bool:
+        """Check if reset button is pressed (active LOW)."""
+        if self.gpio_available:
+            # Button is active LOW (pressed = 0, released = 1 due to pull-up)
+            return GPIO.input(self.reset_button) == 0
+        return False
+
     def set_led(self, led: str, state: bool):
         """Set LED state."""
         if not self.gpio_available:

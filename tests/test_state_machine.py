@@ -132,6 +132,28 @@ def test_state_timeout():
     return True
 
 
+def test_reset_button():
+    """Test reset button functionality (mock test)."""
+    print("\nTesting Reset Button Configuration")
+    print("=" * 50)
+
+    # Test that reset button is configured in config
+    try:
+        from config import Config
+        config = Config("config.yaml")
+        reset_pin = config.get('hardware.reset_button', None)
+
+        if reset_pin == 22:
+            print("PASS: Reset button pin configured correctly (GPIO 22)")
+            return True
+        else:
+            print(f"FAIL: Reset button pin not configured correctly. Expected 22, got {reset_pin}")
+            return False
+    except Exception as e:
+        print(f"ERROR: Failed to test reset button configuration: {e}")
+        return False
+
+
 def run_all_tests():
     """Run all state machine tests."""
     print("TEST: Running State Machine Tests")
@@ -141,6 +163,7 @@ def run_all_tests():
         ("Basic State Transitions", test_state_machine),
         ("State Transition Sequences", test_state_transitions),
         ("Transition Timeout", test_state_timeout),
+        ("Reset Button Configuration", test_reset_button),
     ]
 
     results = []
