@@ -31,27 +31,27 @@ def test_state_machine():
 
     # Test scenarios
     test_cases = [
-        # (frequency, std_dev, zero_voltage_duration, expected_state, description)
-        (None, None, 6.0, PowerState.OFF_GRID, "No signal for 6 seconds"),
-        (None, None, 2.0, PowerState.TRANSITIONING, "No signal for 2 seconds"),
-        (59.8, 0.05, 0.0, PowerState.GRID, "Stable 59.8 Hz, low variation"),
-        (60.2, 0.03, 0.0, PowerState.GRID, "Stable 60.2 Hz, low variation"),
-        (58.5, 1.2, 0.0, PowerState.GENERATOR, "Unstable frequency, high variation"),
-        (61.5, 0.8, 0.0, PowerState.GENERATOR, "Unstable frequency, high variation"),
-        (60.0, 0.15, 0.0, PowerState.TRANSITIONING, "Moderate variation"),
-        (None, None, 8.0, PowerState.OFF_GRID, "Extended no signal"),
+        # (frequency, power_source, zero_voltage_duration, expected_state, description)
+        (None, "Unknown", 6.0, PowerState.OFF_GRID, "No signal for 6 seconds"),
+        (None, "Unknown", 2.0, PowerState.TRANSITIONING, "No signal for 2 seconds"),
+        (59.8, "Utility Grid", 0.0, PowerState.GRID, "Stable utility power"),
+        (60.2, "Utility Grid", 0.0, PowerState.GRID, "Stable utility power"),
+        (58.5, "Generac Generator", 0.0, PowerState.GENERATOR, "Generator power detected"),
+        (61.5, "Generac Generator", 0.0, PowerState.GENERATOR, "Generator power detected"),
+        (60.0, "Unknown", 0.0, PowerState.TRANSITIONING, "Uncertain classification"),
+        (None, "Unknown", 8.0, PowerState.OFF_GRID, "Extended no signal"),
     ]
 
     all_passed = True
-    for freq, std_dev, zero_duration, expected, description in test_cases:
-        state = state_machine.update_state(freq, std_dev, zero_duration)
+    for freq, power_source, zero_duration, expected, description in test_cases:
+        state = state_machine.update_state(freq, power_source, zero_duration)
         status = "PASS" if state == expected else "FAIL"
         if state != expected:
             all_passed = False
         print(f"{status}: {description}")
         print(f"    State: {state.value} (expected: {expected.value})")
         if freq is not None:
-            print(f"    Frequency: {freq:.1f} Hz, StdDev: {std_dev:.3f}, ZeroDuration: {zero_duration:.1f}s")
+            print(f"    Frequency: {freq:.1f} Hz, Source: {power_source}, ZeroDuration: {zero_duration:.1f}s")
         else:
             print(f"    No signal, ZeroDuration: {zero_duration:.1f}s")
         print()
@@ -79,23 +79,23 @@ def test_state_transitions():
 
     # Test: Off-grid -> Grid (power restoration)
     print("Test 1: Power restoration sequence")
-    state_machine.update_state(None, None, 6.0)  # OFF_GRID
+    state_machine.update_state(None, "Unknown", 6.0)  # OFF_GRID
     assert state_machine.current_state == PowerState.OFF_GRID
     print("  OFF_GRID: OK")
 
-    state_machine.update_state(60.0, 0.05, 0.0)  # GRID
+    state_machine.update_state(60.0, "Utility Grid", 0.0)  # GRID
     assert state_machine.current_state == PowerState.GRID
     print("  -> GRID: OK")
 
     # Test: Grid -> Generator (generator starts)
     print("\nTest 2: Generator startup sequence")
-    state_machine.update_state(58.5, 1.2, 0.0)  # GENERATOR
+    state_machine.update_state(58.5, "Generac Generator", 0.0)  # GENERATOR
     assert state_machine.current_state == PowerState.GENERATOR
     print("  -> GENERATOR: OK")
 
     # Test: Generator -> Off-grid (power failure)
     print("\nTest 3: Complete power failure")
-    state_machine.update_state(None, None, 6.0)  # OFF_GRID
+    state_machine.update_state(None, "Unknown", 6.0)  # OFF_GRID
     assert state_machine.current_state == PowerState.OFF_GRID
     print("  -> OFF_GRID: OK")
 
@@ -115,7 +115,7 @@ def test_state_timeout():
     print("=" * 50)
 
     # Put in transitioning state
-    state_machine.update_state(None, None, 2.0)  # TRANSITIONING
+    state_machine.update_state(None, "Unknown", 2.0)  # TRANSITIONING
     assert state_machine.current_state == PowerState.TRANSITIONING
     print("Initial state: TRANSITIONING: OK")
 
@@ -124,7 +124,7 @@ def test_state_timeout():
     state_machine.state_entry_time = time.time() - 35  # 35 seconds ago (past timeout)
 
     # This should trigger timeout and force OFF_GRID
-    state_machine.update_state(None, None, 2.0)  # Should timeout
+    state_machine.update_state(None, "Unknown", 2.0)  # Should timeout
     assert state_machine.current_state == PowerState.OFF_GRID
     print("Timeout triggered: OFF_GRID: OK")
 

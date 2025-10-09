@@ -51,27 +51,26 @@ class PowerStateMachine:
         self.zero_voltage_threshold = config.get('state_machine.zero_voltage_threshold', 5)  # seconds of no cycles
         self.unsteady_voltage_threshold = config.get('state_machine.unsteady_voltage_threshold', 0.1)  # Hz variation
 
-        # State change callbacks
+        # State change callbacks - only for main power states
         self.on_state_change_callbacks = {
             PowerState.OFF_GRID: self._on_enter_off_grid,
             PowerState.GRID: self._on_enter_grid,
-            PowerState.GENERATOR: self._on_enter_generator,
-            PowerState.TRANSITIONING: self._on_enter_transitioning
+            PowerState.GENERATOR: self._on_enter_generator
         }
 
         self.logger.info(f"Power state machine initialized in {self.current_state.value} state")
 
-    def update_state(self, frequency: Optional[float], std_dev: Optional[float],
+    def update_state(self, frequency: Optional[float], power_source: str,
                     zero_voltage_duration: float) -> PowerState:
         """
-        Update state based on current conditions.
+        Update state based on current conditions using existing frequency analysis.
 
         Args:
             frequency: Current frequency reading (None if no signal)
-            std_dev: Standard deviation of recent frequency readings
+            power_source: Classification from FrequencyAnalyzer ("Utility Grid", "Generac Generator", or "Unknown")
             zero_voltage_duration: How long voltage has been zero (seconds)
         """
-        new_state = self._determine_state(frequency, std_dev, zero_voltage_duration)
+        new_state = self._determine_state(frequency, power_source, zero_voltage_duration)
 
         # Check if state changed
         if new_state != self.current_state:
@@ -85,32 +84,25 @@ class PowerStateMachine:
 
         return self.current_state
 
-    def _determine_state(self, frequency: Optional[float], std_dev: Optional[float],
+    def _determine_state(self, frequency: Optional[float], power_source: str,
                         zero_voltage_duration: float) -> PowerState:
-        """Determine the appropriate state based on current conditions."""
+        """Determine the appropriate state based on existing frequency analysis."""
 
-        # No voltage detected for extended period
+        # No voltage detected for extended period = OFF_GRID
         if zero_voltage_duration >= self.zero_voltage_threshold:
             return PowerState.OFF_GRID
 
-        # No frequency reading available
+        # No frequency reading available = TRANSITIONING
         if frequency is None:
             return PowerState.TRANSITIONING
 
-        # Check for unsteady voltage (high variation indicates grid issues or generator)
-        if std_dev is not None and std_dev > self.unsteady_voltage_threshold:
-            # Could be generator or unstable grid - let frequency analysis decide
-            if std_dev > 0.5:  # Very high variation = likely generator
-                return PowerState.GENERATOR
-            else:  # Moderate variation = unstable grid
-                return PowerState.TRANSITIONING
-
-        # Stable frequency in normal range = grid power
-        if 59.5 <= frequency <= 60.5 and (std_dev is None or std_dev <= self.unsteady_voltage_threshold):
+        # Use existing frequency analysis classification
+        if power_source == "Utility Grid":
             return PowerState.GRID
-
-        # Default to transitioning if unclear
-        return PowerState.TRANSITIONING
+        elif power_source == "Generac Generator":
+            return PowerState.GENERATOR
+        else:  # "Unknown" or any other classification
+            return PowerState.TRANSITIONING
 
     def _transition_to_state(self, new_state: PowerState):
         """Handle state transition."""
@@ -141,78 +133,20 @@ class PowerStateMachine:
     def _on_enter_off_grid(self):
         """Called when entering OFF_GRID state."""
         self.logger.info("🔌 POWER OUTAGE: System is now OFF-GRID")
-        # TODO: Implement real actions
-        self._action_power_outage_detected()
-        self._action_notify_systems_off_grid()
-        self._action_start_backup_power_if_available()
+        # TODO: Implement power outage response actions
+        pass
 
     def _on_enter_grid(self):
         """Called when entering GRID state."""
         self.logger.info("⚡ GRID POWER: Stable utility power detected")
-        # TODO: Implement real actions
-        self._action_grid_power_restored()
-        self._action_switch_to_grid_configuration()
-        self._action_notify_systems_grid_power()
+        # TODO: Implement grid power restoration actions
+        pass
 
     def _on_enter_generator(self):
         """Called when entering GENERATOR state."""
         self.logger.info("🔧 GENERATOR: Backup generator power detected")
-        # TODO: Implement real actions
-        self._action_generator_power_detected()
-        self._action_switch_to_generator_configuration()
-        self._action_monitor_generator_health()
-
-    def _on_enter_transitioning(self):
-        """Called when entering TRANSITIONING state."""
-        self.logger.info("🔄 TRANSITIONING: Power source is unstable or changing")
-        # TODO: Implement real actions
-        self._action_power_transition_detected()
-        self._action_enter_safe_mode()
-
-    # Template action functions - one-liners to be expanded later
-    def _action_power_outage_detected(self):
-        """Template: Handle power outage detection."""
-        pass  # TODO: Send alerts, switch to battery backup, etc.
-
-    def _action_notify_systems_off_grid(self):
-        """Template: Notify other systems about off-grid status."""
-        pass  # TODO: Update inverters, notify monitoring systems, etc.
-
-    def _action_start_backup_power_if_available(self):
-        """Template: Start backup power systems."""
-        pass  # TODO: Start generator, switch to battery, etc.
-
-    def _action_grid_power_restored(self):
-        """Template: Handle grid power restoration."""
-        pass  # TODO: Stop generator, switch back to grid config, etc.
-
-    def _action_switch_to_grid_configuration(self):
-        """Template: Switch system to grid power configuration."""
-        pass  # TODO: Update Sol-Ark settings, notify appliances, etc.
-
-    def _action_notify_systems_grid_power(self):
-        """Template: Notify systems about grid power availability."""
-        pass  # TODO: Send notifications, update status displays, etc.
-
-    def _action_generator_power_detected(self):
-        """Template: Handle generator power detection."""
-        pass  # TODO: Monitor generator parameters, adjust settings, etc.
-
-    def _action_switch_to_generator_configuration(self):
-        """Template: Switch system to generator power configuration."""
-        pass  # TODO: Update Sol-Ark settings, limit power usage, etc.
-
-    def _action_monitor_generator_health(self):
-        """Template: Monitor generator health and performance."""
-        pass  # TODO: Check frequency stability, fuel levels, etc.
-
-    def _action_power_transition_detected(self):
-        """Template: Handle power source transitions."""
-        pass  # TODO: Enter safe mode, pause operations, etc.
-
-    def _action_enter_safe_mode(self):
-        """Template: Enter safe mode during transitions."""
-        pass  # TODO: Reduce power consumption, pause non-essential systems, etc.
+        # TODO: Implement generator power response actions
+        pass
 
 
 class FrequencyAnalyzer:
@@ -461,8 +395,7 @@ class FrequencyMonitor:
                 source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
 
                 # Update state machine with current conditions
-                current_std_dev = std_freq if len(self.freq_buffer) > 10 else None
-                current_state = self.state_machine.update_state(freq, current_std_dev, self.zero_voltage_duration)
+                current_state = self.state_machine.update_state(freq, source, self.zero_voltage_duration)
                 
                 # Collect tuning data if enabled
                 if self.tuning_collector.enabled:
