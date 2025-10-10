@@ -646,12 +646,12 @@ class FrequencyMonitor:
 
         # Show time and frequency with power source indicator, updated once per second
         current_time = time.strftime("%H:%M:%S")
-        line1 = f"{current_time} {ug_indicator}"
+        line1 = f"{current_time}"
 
         if freq is not None:
-            line2 = f"{freq:.2f} Hz"
+            line2 = f"{freq:.2f} Hz {ug_indicator}"
         else:
-            line2 = f"No Signal ({self.zero_voltage_duration:.0f}s)"
+            line2 = f"No Signal ({self.zero_voltage_duration:.0f}s) {ug_indicator}"
 
         if self.hardware is not None:
             self.hardware.update_display(line1, line2)
