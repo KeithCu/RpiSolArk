@@ -50,6 +50,9 @@ class PowerStateMachine:
         self.transition_timeout = config.get('state_machine.transition_timeout', 30)  # seconds
         self.zero_voltage_threshold = config.get('state_machine.zero_voltage_threshold', 5)  # seconds of no cycles
         self.unsteady_voltage_threshold = config.get('state_machine.unsteady_voltage_threshold', 0.1)  # Hz variation
+        
+        # Upgrade lock file path
+        self.upgrade_lock_path = "/var/run/unattended-upgrades.lock"
 
         # State change callbacks - only for main power states
         self.on_state_change_callbacks = {
@@ -129,24 +132,54 @@ class PowerStateMachine:
             'transition_timeout': self.transition_timeout
         }
 
+    def _create_upgrade_lock(self):
+        """Create lock file to prevent automatic system upgrades."""
+        try:
+            with open(self.upgrade_lock_path, 'w') as f:
+                f.write(f"# Lock file created by RpiSolArk monitor\n")
+                f.write(f"# Created at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# Reason: System is off-grid\n")
+            self.logger.info(f"Created upgrade lock file: {self.upgrade_lock_path}")
+            return True
+        except PermissionError:
+            self.logger.error("Permission denied: Cannot create upgrade lock file. Run with sudo privileges.")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error creating upgrade lock file: {e}")
+            return False
+
+    def _remove_upgrade_lock(self):
+        """Remove lock file to allow automatic system upgrades."""
+        try:
+            if os.path.exists(self.upgrade_lock_path):
+                os.remove(self.upgrade_lock_path)
+                self.logger.info(f"Removed upgrade lock file: {self.upgrade_lock_path}")
+            return True
+        except PermissionError:
+            self.logger.error("Permission denied: Cannot remove upgrade lock file. Run with sudo privileges.")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error removing upgrade lock file: {e}")
+            return False
+
     # Template action functions - to be implemented with real work
     def _on_enter_off_grid(self):
         """Called when entering OFF_GRID state."""
         self.logger.info("POWER OUTAGE: System is now OFF-GRID")
-        # TODO: Implement power outage response actions
-        pass
+        # Prevent automatic system upgrades when off-grid
+        self._create_upgrade_lock()
 
     def _on_enter_grid(self):
         """Called when entering GRID state."""
         self.logger.info("GRID POWER: Stable utility power detected")
-        # TODO: Implement grid power restoration actions
-        pass
+        # Allow automatic system upgrades when on grid power
+        self._remove_upgrade_lock()
 
     def _on_enter_generator(self):
         """Called when entering GENERATOR state."""
         self.logger.info("GENERATOR: Backup generator power detected")
-        # TODO: Implement generator power response actions
-        pass
+        # Prevent automatic system upgrades when on generator (unstable power)
+        self._create_upgrade_lock()
 
 
 class FrequencyAnalyzer:
