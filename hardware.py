@@ -16,11 +16,11 @@ except ImportError:
     print("Warning: RPi.GPIO not available. Running in simulation mode.")
 
 try:
-    from rplcd.i2c import CharLCD
+    from LCD1602 import CharLCD1602
     LCD_AVAILABLE = True
 except ImportError:
     LCD_AVAILABLE = False
-    print("Warning: rplcd not available. LCD display disabled.")
+    print("Warning: LCD1602 not available. LCD display disabled.")
 
 
 class HardwareManager:
@@ -58,14 +58,14 @@ class HardwareManager:
         
         if self.lcd_available:
             try:
-                self.lcd = CharLCD(
-                    i2c_expander='PCF8574',
-                    address=self.config.get('hardware.lcd_address', 0x27),
-                    port=self.config.get('hardware.lcd_port', 1),
-                    cols=self.config.get('hardware.lcd_cols', 16),
-                    rows=self.config.get('hardware.lcd_rows', 2)
-                )
-                self.logger.info("LCD hardware initialized")
+                self.lcd = CharLCD1602()
+                # Initialize the LCD
+                if self.lcd.init_lcd():
+                    self.logger.info("LCD hardware initialized")
+                else:
+                    self.logger.error("Failed to initialize LCD")
+                    self.lcd_available = False
+                    self.lcd = None
             except Exception as e:
                 self.logger.error(f"Failed to initialize LCD: {e}")
                 self.lcd_available = False
@@ -104,9 +104,8 @@ class HardwareManager:
         if self.lcd_available and self.lcd and not simulate_display:
             try:
                 self.lcd.clear()
-                self.lcd.write_string(line1)
-                self.lcd.cursor_pos = (1, 0)
-                self.lcd.write_string(line2)
+                self.lcd.write(0, 0, line1)  # Write to line 1, column 0
+                self.lcd.write(0, 1, line2)  # Write to line 2, column 0
             except Exception as e:
                 self.logger.error(f"Failed to update display: {e}")
     
