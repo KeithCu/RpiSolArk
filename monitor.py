@@ -364,6 +364,11 @@ class FrequencyMonitor:
         
         # Initialize power source classification buffer for U/G indicator
         classification_window = self.config.get_float('display.classification_window', 300)  # 5 minutes default
+        
+        # Use smaller window in simulator mode for better testing
+        if self.simulator_mode:
+            classification_window = min(classification_window, 10)  # Max 10 seconds in simulator
+        
         classification_buffer_size = int(classification_window * sample_rate)
         self.classification_buffer = deque(maxlen=classification_buffer_size)
         
@@ -465,11 +470,28 @@ class FrequencyMonitor:
 
                 # Analyze data only if we have enough samples
                 self.logger.debug("Analyzing data...")
-                if len(self.freq_buffer) >= 10:
+                if freq is None:
+                    # No frequency reading - classify as Unknown
+                    self.logger.debug("No frequency reading - classifying as Unknown")
+                    source = "Unknown"
+                    avar_10s, std_freq, kurtosis = None, None, None
+                    
+                    # Clear classification buffer when signal is lost to show "?" immediately
+                    if len(self.classification_buffer) > 0:
+                        self.logger.debug("Clearing classification buffer due to signal loss")
+                        self.classification_buffer.clear()
+                elif len(self.freq_buffer) >= 10:
                     self.logger.debug("Full analysis with 10+ samples")
                     frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
                     avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
                     source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
+                    
+                    # Debug logging for classification
+                    self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, kurtosis={kurtosis}, source={source}")
+                    if len(self.freq_buffer) >= 5:
+                        recent_freqs = list(self.freq_buffer)[-5:]
+                        freq_range = max(recent_freqs) - min(recent_freqs)
+                        self.logger.debug(f"Recent frequency range: {freq_range:.2f} Hz (min: {min(recent_freqs):.2f}, max: {max(recent_freqs):.2f})")
                 elif len(self.freq_buffer) >= 3:
                     self.logger.debug("Quick analysis with 3+ samples")
                     # Quick detection with fewer samples for better UX
@@ -490,6 +512,9 @@ class FrequencyMonitor:
                     avar_10s, std_freq, kurtosis = None, None, None
                     source = "Unknown"
 
+                # Update classification buffer immediately after analysis
+                self.classification_buffer.append(source)
+                
                 # Update state machine with current conditions
                 self.logger.debug("Updating state machine...")
                 current_state = self.state_machine.update_state(freq, source, self.zero_voltage_duration)
@@ -601,15 +626,16 @@ class FrequencyMonitor:
             indicator = "?"  # Unknown/Equal
         
         # Log classification details for debugging (only occasionally to avoid spam)
-        if total_count % 10 == 0:  # Log every 10th update
+        if total_count % 5 == 0:  # Log every 5th update for more frequent debugging
             self.logger.debug(f"U/G Indicator: {indicator} (U:{utility_count}, G:{generator_count}, Total:{total_count})")
+            # Show recent classifications for debugging
+            recent_classifications = list(self.classification_buffer)[-10:] if len(self.classification_buffer) >= 10 else list(self.classification_buffer)
+            self.logger.debug(f"Recent classifications: {recent_classifications}")
         
         return indicator
     
     def _update_display_and_leds(self, freq: float, source: str, std_freq: Optional[float]):
         """Update LCD display and LED indicators."""
-        # Add current classification to buffer
-        self.classification_buffer.append(source)
 
         # Get state machine status
         state_info = self.state_machine.get_state_info()
