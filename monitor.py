@@ -619,15 +619,15 @@ class FrequencyMonitor:
         
         # Determine majority classification
         if utility_count > generator_count:
-            indicator = "U"  # Utility
+            indicator = "Util"  # Utility
         elif generator_count > utility_count:
-            indicator = "G"  # Generator
+            indicator = "Gen"   # Generator
         else:
-            indicator = "?"  # Unknown/Equal
+            indicator = "??"    # Unknown/Equal
         
         # Log classification details for debugging (only occasionally to avoid spam)
         if total_count % 5 == 0:  # Log every 5th update for more frequent debugging
-            self.logger.debug(f"U/G Indicator: {indicator} (U:{utility_count}, G:{generator_count}, Total:{total_count})")
+            self.logger.debug(f"Power Source Indicator: {indicator} (U:{utility_count}, G:{generator_count}, Total:{total_count})")
             # Show recent classifications for debugging
             recent_classifications = list(self.classification_buffer)[-10:] if len(self.classification_buffer) >= 10 else list(self.classification_buffer)
             self.logger.debug(f"Recent classifications: {recent_classifications}")
@@ -644,12 +644,12 @@ class FrequencyMonitor:
         # Get U/G indicator based on recent data
         ug_indicator = self._get_current_power_source_indicator()
 
-        # Show time and frequency with U/G indicator, updated once per second
+        # Show time and frequency with power source indicator, updated once per second
         current_time = time.strftime("%H:%M:%S")
-        line1 = f"Time: {current_time} {ug_indicator}"
+        line1 = f"{current_time} {ug_indicator}"
 
         if freq is not None:
-            line2 = f"Freq: {freq:.2f} Hz"
+            line2 = f"{freq:.2f} Hz"
         else:
             line2 = f"No Signal ({self.zero_voltage_duration:.0f}s)"
 

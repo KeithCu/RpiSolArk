@@ -23,22 +23,25 @@ class Config:
             return yaml.safe_load(f)
     
     
-    def get(self, key_path: str):
+    def get(self, key_path: str, default=None):
         """Get configuration value using dot notation (e.g., 'hardware.gpio_pin')."""
         keys = key_path.split('.')
         value = self.config
-        for key in keys:
-            value = value[key]
-        return value
+        try:
+            for key in keys:
+                value = value[key]
+            return value
+        except (KeyError, TypeError):
+            return default
     
-    def get_float(self, key_path: str) -> float:
+    def get_float(self, key_path: str, default: float = 0.0) -> float:
         """Get configuration value as float."""
-        value = self.get(key_path)
+        value = self.get(key_path, default)
         return float(value)
     
-    def get_int(self, key_path: str) -> int:
+    def get_int(self, key_path: str, default: int = 0) -> int:
         """Get configuration value as int."""
-        value = self.get(key_path)
+        value = self.get(key_path, default)
         return int(value)
 
 
