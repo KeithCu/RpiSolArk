@@ -618,10 +618,9 @@ class FrequencyMonitor:
         # Get U/G indicator based on recent data
         ug_indicator = self._get_current_power_source_indicator()
 
-        # Show time and frequency with state indicator, updated once per second
+        # Show time and frequency with U/G indicator, updated once per second
         current_time = time.strftime("%H:%M:%S")
-        state_display = self._get_state_display_code(current_state)
-        line1 = f"Time: {current_time} [{state_display}]"
+        line1 = f"Time: {current_time} {ug_indicator}"
 
         if freq is not None:
             line2 = f"Freq: {freq:.2f} Hz"
