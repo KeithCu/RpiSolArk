@@ -651,7 +651,7 @@ class FrequencyMonitor:
         if freq is not None:
             line2 = f"{freq:.2f} Hz {ug_indicator}"
         else:
-            line2 = f"No Signal ({self.zero_voltage_duration:.0f}s) {ug_indicator}"
+            line2 = f"0V ({self.zero_voltage_duration:.0f}s) {ug_indicator}"
 
         if self.hardware is not None:
             self.hardware.update_display(line1, line2)
