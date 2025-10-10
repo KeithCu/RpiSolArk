@@ -336,12 +336,13 @@ class FrequencyMonitor:
         # Check if we're in simulator mode
         self.simulator_mode = self.config.get('app.simulator_mode', True)
         
-        # Only initialize hardware if not in simulator mode
+        # Always initialize hardware manager (it handles graceful degradation internally)
+        # Simulator mode only affects frequency data source, not hardware availability
+        self.hardware = HardwareManager(self.config, self.logger)
         if self.simulator_mode:
-            self.logger.info("Simulator mode: Hardware initialization skipped")
-            self.hardware = None
+            self.logger.info("Simulator mode: Using simulated frequency data, but hardware manager initialized")
         else:
-            self.hardware = HardwareManager(self.config, self.logger)
+            self.logger.info("Real mode: Using real hardware for frequency data")
         
         self.analyzer = FrequencyAnalyzer(self.config, self.logger)
         self.state_machine = PowerStateMachine(self.config, self.logger)
@@ -350,9 +351,8 @@ class FrequencyMonitor:
         self.data_logger = DataLogger(self.config, self.logger)
         self.tuning_collector = TuningDataCollector(self.config, self.logger)
         
-        # Connect analyzer to hardware only if available
-        if self.hardware is not None:
-            self.analyzer.hardware_manager = self.hardware
+        # Connect analyzer to hardware (always available now)
+        self.analyzer.hardware_manager = self.hardware
         
         # Initialize data buffers
         sample_rate = self.config.get_float('sampling.sample_rate', 2.0)
