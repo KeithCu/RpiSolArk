@@ -166,6 +166,48 @@ class FrequencyAnalyzer:
         if not hasattr(self, 'hardware_manager'):
             return self._simulate_frequency()
         
+        # Check if optocoupler is available and enabled
+        if (hasattr(self.hardware_manager, 'optocoupler_initialized') and 
+            self.hardware_manager.optocoupler_initialized):
+            return self._count_optocoupler_frequency(duration)
+        
+        # Fall back to original zero-crossing method
+        return self._count_zero_crossings_original(duration)
+    
+    def _count_optocoupler_frequency(self, duration: float = 0.5) -> Optional[float]:
+        """Count frequency using optocoupler pulse counting method."""
+        try:
+            # Count pulses using optocoupler
+            pulse_count = self.hardware_manager.count_optocoupler_pulses(duration)
+            
+            if pulse_count <= 0:
+                self.logger.debug(f"No pulses detected in {duration:.2f} seconds")
+                return None
+            
+            # Calculate frequency from pulse count
+            frequency = self.hardware_manager.calculate_frequency_from_pulses(pulse_count, duration)
+            
+            if frequency is None:
+                self.logger.warning(f"Failed to calculate frequency from {pulse_count} pulses")
+                return None
+            
+            # Validate frequency range
+            min_freq = self.config.get('sampling.min_freq', 40.0)
+            max_freq = self.config.get('sampling.max_freq', 80.0)
+            
+            if frequency < min_freq or frequency > max_freq:
+                self.logger.warning(f"Invalid frequency reading: {frequency:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
+                return None
+            
+            self.logger.debug(f"Optocoupler frequency: {frequency:.2f} Hz from {pulse_count} pulses in {duration:.2f}s")
+            return float(frequency)
+            
+        except Exception as e:
+            self.logger.error(f"Error in optocoupler frequency measurement: {e}")
+            return None
+    
+    def _count_zero_crossings_original(self, duration: float = 0.5) -> Optional[float]:
+        """Original zero-crossing counting method (fallback)."""
         # Validate duration parameter
         if not isinstance(duration, (int, float)) or duration <= 0:
             self.logger.error(f"Invalid duration parameter: {duration}. Must be a positive number.")

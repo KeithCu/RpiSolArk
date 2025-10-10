@@ -10,6 +10,14 @@ hardware:
   lcd_port: 1           # I2C port
   lcd_cols: 16          # LCD columns
   lcd_rows: 2           # LCD rows
+  
+  # Optocoupler Configuration
+  optocoupler:
+    enabled: true       # Enable optocoupler falling edge detection
+    gpio_pin: 18        # GPIO pin for optocoupler input (H11AA1)
+    pull_up: true       # Enable internal pull-up resistor
+    pulses_per_cycle: 2 # H11AA1 gives 2 pulses per AC cycle
+    measurement_duration: 1.0  # Duration in seconds for frequency measurement
 
 # Sampling Configuration
 sampling:
