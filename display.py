@@ -87,8 +87,8 @@ class DisplayManager:
     
     def _simulate_display(self, line1: str, line2: str):
         """Simulate LCD display output."""
-        # Clear screen (simulate LCD clear)
-        print("\033[2J\033[H", end="")  # Clear screen and move cursor to top-left
+        # Don't clear screen so we can see any errors
+        print("\n" + "="*50)  # Just add a separator
         
         # Display header
         print("=" * 22)

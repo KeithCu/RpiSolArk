@@ -43,7 +43,6 @@ class LCD1602_RPLCD:
             charmap='A00',
             auto_linebreaks=True,
             backlight_enabled=backlight_enabled,
-            compat_mode=True  # Enable compatibility mode for timing issues
         )
     
     def _detect_i2c_address(self, preferred_address, port):
