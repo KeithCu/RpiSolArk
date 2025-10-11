@@ -40,7 +40,7 @@ class LCD1602_RPLCD:
             cols=cols,
             rows=rows,
             dotsize=8,
-            charmap='A02',
+            charmap='A00',
             auto_linebreaks=True,
             backlight_enabled=backlight_enabled,
             compat_mode=True  # Enable compatibility mode for timing issues
