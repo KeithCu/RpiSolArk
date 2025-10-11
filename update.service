@@ -1,0 +1,11 @@
+[Unit]
+Description=Auto-update RpiSolArk from GitHub
+After=network.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/RpiSolArk
+ExecStart=/home/pi/RpiSolArk/update.sh
+StandardOutput=journal
+StandardError=journal

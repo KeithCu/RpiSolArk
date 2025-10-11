@@ -29,6 +29,7 @@ from health import HealthMonitor, MemoryMonitor
 from data_logger import DataLogger
 from tuning_collector import TuningDataCollector
 from offline_analyzer import OfflineAnalyzer
+from restart_manager import RestartManager
 
 
 class PowerState(Enum):
@@ -427,6 +428,7 @@ class FrequencyMonitor:
         self.data_logger = DataLogger(self.config, self.logger)
         self.tuning_collector = TuningDataCollector(self.config, self.logger)
         self.offline_analyzer = OfflineAnalyzer(self.config, self.logger)
+        self.restart_manager = RestartManager(self.config, self.logger)
         
         # Connect analyzer to hardware (always available now)
         self.analyzer.hardware_manager = self.hardware
@@ -471,6 +473,9 @@ class FrequencyMonitor:
         # Start tuning data collection if enabled
         if self.tuning_collector.enabled:
             self.tuning_collector.start_collection()
+        
+        # Start restart manager (auto-updates handled by system services)
+        self.restart_manager.start_update_monitor()
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -648,8 +653,13 @@ class FrequencyMonitor:
                     if self.hardware is not None and self.hardware.check_reset_button():
                         if not self.reset_button_pressed:
                             self.reset_button_pressed = True
-                            self.logger.info("Reset button pressed - restarting application")
-                            self._handle_reset()
+                            self.logger.info("Reset button pressed - initiating restart")
+                            if self.restart_manager.handle_restart_button():
+                                # Restart was initiated successfully
+                                break  # Exit main loop
+                            else:
+                                # Restart was blocked by safety checks
+                                self.reset_button_pressed = False
                     else:
                         self.reset_button_pressed = False
 

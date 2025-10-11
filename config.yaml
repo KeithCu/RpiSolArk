@@ -150,3 +150,16 @@ solark_cloud:
     enabled: true           # Enable automatic parameter changes
     dry_run: false          # Set to true to log changes without applying
     backup_before_change: true # Backup current settings before changes
+
+# Restart Configuration
+restart:
+  cooldown_seconds: 5       # Minimum time between restarts (seconds)
+  max_per_hour: 3          # Maximum restarts allowed per hour
+  safety_checks: true      # Enable safety checks before restart
+
+# Auto-Update Configuration
+# Auto-updates are handled by system-level services (systemd, cron, etc.)
+# See setup_zero_code_updates.sh for setup instructions
+updates:
+  # These settings are not used - auto-updates handled by system services
+  note: "Use setup_zero_code_updates.sh to configure system-level auto-updates"
