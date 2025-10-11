@@ -21,9 +21,9 @@ class HardwareManager:
         self.logger = logger
         
         # Initialize component managers
-        self.display = DisplayManager(config, logger)
         self.gpio = GPIOManager(config, logger)
         self.optocoupler = OptocouplerManager(config, logger)
+        self.display = DisplayManager(config, logger, self)  # Pass self as hardware_manager
         
         # Expose availability flags for backward compatibility
         self.gpio_available = self.gpio.gpio_available

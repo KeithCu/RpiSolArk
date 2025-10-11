@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 Display management for the frequency monitor.
-Handles LCD display and simulation with graceful degradation.
+Handles LCD display, LED controls, and simulation with graceful degradation.
 """
 
 import logging
-from typing import Optional
+import time
+from typing import Optional, Deque
+from collections import deque
 
 # Hardware imports with graceful degradation
 try:
@@ -17,11 +19,12 @@ except ImportError:
 
 
 class DisplayManager:
-    """Manages LCD display with graceful degradation."""
+    """Manages LCD display, LED controls, and display logic with graceful degradation."""
     
-    def __init__(self, config, logger: logging.Logger):
+    def __init__(self, config, logger: logging.Logger, hardware_manager=None):
         self.config = config
         self.logger = logger
+        self.hardware_manager = hardware_manager
         self.lcd_available = LCD_AVAILABLE
         self.lcd = None
         
@@ -107,6 +110,62 @@ class DisplayManager:
         print("=" * 22)
         print("Press Ctrl+C to stop")
         print()
+    
+    def update_display_and_leds(self, freq: Optional[float], ug_indicator: str, 
+                               state_machine, zero_voltage_duration: float = 0.0):
+        """Update LCD display and LED indicators."""
+        
+        # Get state machine status
+        state_info = state_machine.get_state_info()
+        current_state = state_info['current_state']
+
+        # Show time and frequency with power source indicator, updated once per second
+        current_time = time.strftime("%H:%M:%S")
+        line1 = f"{current_time}"
+
+        if freq is not None:
+            line2 = f"{freq:.2f} Hz {ug_indicator}"
+        else:
+            line2 = f"0V ({zero_voltage_duration:.0f}s) {ug_indicator}"
+
+        # Update display
+        self.update_display(line1, line2)
+
+        # Update LEDs based on state machine state
+        self.update_leds_for_state(current_state)
+    
+    def get_state_display_code(self, state: str) -> str:
+        """Get display code for power state."""
+        state_codes = {
+            'off_grid': 'OFF-GRID',
+            'grid': 'UTILITY',
+            'generator': 'GENERATOR',
+            'transitioning': 'DETECTING'
+        }
+        return state_codes.get(state, 'UNKNOWN')
+
+    def update_leds_for_state(self, state: str):
+        """Update LED indicators based on power state."""
+        if self.hardware_manager is None:
+            return  # No hardware available in simulator mode
+            
+        # Turn off all LEDs first
+        self.hardware_manager.set_led('green', False)
+        self.hardware_manager.set_led('red', False)
+
+        # Set LEDs based on state
+        if state == 'grid':
+            self.hardware_manager.set_led('green', True)  # Green for grid power
+        elif state == 'generator':
+            self.hardware_manager.set_led('red', True)    # Red for generator power
+        elif state == 'off_grid':
+            # Both LEDs off for off-grid (power outage)
+            pass
+        elif state == 'transitioning':
+            # Both LEDs on for transitioning (flashing/unclear state)
+            self.hardware_manager.set_led('green', True)
+            self.hardware_manager.set_led('red', True)
+    
     
     def cleanup(self):
         """Cleanup display resources."""
