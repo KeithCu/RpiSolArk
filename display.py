@@ -11,11 +11,11 @@ from collections import deque
 
 # Hardware imports with graceful degradation
 try:
-    from LCD1602 import CharLCD1602
+    from lcd_rplcd import LCD1602_RPLCD
     LCD_AVAILABLE = True
 except ImportError:
     LCD_AVAILABLE = False
-    print("Warning: LCD1602 not available. LCD display disabled.")
+    print("Warning: LCD1602_RPLCD not available. LCD display disabled.")
 
 
 class DisplayManager:
@@ -36,21 +36,10 @@ class DisplayManager:
         
         if self.lcd_available:
             try:
-                self.logger.info("Creating LCD1602 object...")
-                self.lcd = CharLCD1602()
-                self.logger.info("LCD1602 object created successfully")
-                
-                # Initialize the LCD
-                self.logger.info("Attempting to initialize LCD...")
-                init_result = self.lcd.init_lcd()
-                self.logger.info(f"LCD init_lcd() returned: {init_result}")
-                
-                if init_result:
-                    self.logger.info("LCD hardware initialized successfully")
-                else:
-                    self.logger.error("LCD init_lcd() returned False - initialization failed")
-                    self.lcd_available = False
-                    self.lcd = None
+                self.logger.info("Creating LCD1602_RPLCD object...")
+                self.lcd = LCD1602_RPLCD()
+                self.logger.info("LCD1602_RPLCD object created successfully")
+                self.logger.info("LCD hardware initialized successfully")
             except Exception as e:
                 self.logger.error(f"Failed to initialize LCD: {e}")
                 import traceback
@@ -172,6 +161,7 @@ class DisplayManager:
         if self.lcd_available and self.lcd:
             try:
                 self.lcd.clear()
+                self.lcd.close()
                 self.logger.info("LCD cleanup completed")
             except Exception as e:
                 self.logger.error(f"LCD cleanup error: {e}")
