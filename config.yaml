@@ -60,6 +60,12 @@ health:
   watchdog_timeout: 30.0    # seconds - restart if no activity
   memory_warning_threshold: 0.8  # fraction of available memory
   cpu_warning_threshold: 0.8     # fraction of CPU usage
+  memory_critical: 95       # Reboot if memory usage > 95%
+  disk_critical: 5          # Reboot if disk space < 5%
+  temp_critical: 85         # Reboot if CPU temp > 85°C
+  max_uptime_days: 45       # Reboot if uptime > 45 days
+  auto_reboot: true         # Enable automatic health reboots
+  cleanup_before_reboot: true # Clean system before reboot
 
 # Memory Monitoring
 memory:
@@ -121,14 +127,7 @@ reboot:
   enabled: true             # Enable scheduled reboots
   grace_period: 30          # Graceful shutdown timeout (seconds)
 
-# System Health Configuration
-health:
-  memory_critical: 95       # Reboot if memory usage > 95%
-  disk_critical: 5          # Reboot if disk space < 5%
-  temp_critical: 85         # Reboot if CPU temp > 85°C
-  max_uptime_days: 45       # Reboot if uptime > 45 days
-  auto_reboot: true         # Enable automatic health reboots
-  cleanup_before_reboot: true # Clean system before reboot
+# System Health Configuration (merged with Health Monitoring above)
 
 # Sol-Ark Cloud Configuration
 solark_cloud:
