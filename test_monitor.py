@@ -50,15 +50,25 @@ class TestConfig(unittest.TestCase):
     
     def test_config_defaults(self):
         """Test default configuration values."""
-        config = Config('nonexistent.yaml')
+        # Test with actual config file
+        config = Config('config.yaml')
         self.assertIsNotNone(config.get('hardware.gpio_pin'))
         self.assertIsNotNone(config.get('sampling.sample_rate'))
+
+        # Test defaults for missing keys
+        self.assertEqual(config.get('nonexistent.key', 'default'), 'default')
+        self.assertEqual(config.get('missing.nested.key', 42), 42)
     
     def test_config_get_with_default(self):
         """Test getting configuration values with defaults."""
+        # Test with empty config (nonexistent file)
         config = Config('nonexistent.yaml')
         self.assertEqual(config.get('nonexistent.key', 'default'), 'default')
+
+        # Test with actual config file
+        config = Config('config.yaml')
         self.assertEqual(config.get('hardware.gpio_pin', 999), 17)  # Should get actual value
+        self.assertEqual(config.get('nonexistent.key', 'fallback'), 'fallback')  # Should get default
 
 
 class TestFrequencyAnalyzer(unittest.TestCase):
@@ -188,13 +198,18 @@ class TestIntegration(unittest.TestCase):
     
     def test_config_and_analyzer_integration(self):
         """Test that Config and FrequencyAnalyzer work together."""
-        config = Config('nonexistent.yaml')  # Use defaults
+        config = Config('config.yaml')  # Use actual config
         logger = Mock()
         analyzer = FrequencyAnalyzer(config, logger)
-        
+
         # Test that analyzer can access config values
         self.assertIsNotNone(analyzer.thresholds)
         self.assertIn('allan_variance', analyzer.thresholds)
+
+        # Test with empty config (should still work with defaults)
+        empty_config = Config('nonexistent.yaml')
+        analyzer_empty = FrequencyAnalyzer(empty_config, logger)
+        self.assertIsNotNone(analyzer_empty.thresholds)  # Should be empty dict but not None
 
 
 if __name__ == '__main__':
