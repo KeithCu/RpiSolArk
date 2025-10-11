@@ -78,9 +78,6 @@ TEST_CONFIGS = [
     ('A02', 'PCF8574', 8, True, 'A02 with backlight disabled'),
     ('A00', 'PCF8574', 8, True, 'A00 with backlight disabled'),
     
-    # Port variations (some systems use port 0)
-    ('A02', 'PCF8574', 8, True, 'A02 on port 0'),
-    ('A00', 'PCF8574', 8, True, 'A00 on port 0'),
     
     # Additional timing and initialization variations
     ('A02', 'PCF8574', 8, True, 'A02 with longer delays'),
@@ -96,8 +93,8 @@ TEST_CONFIGS = [
     ('A00', 'PCF8574', 8, True, 'A00 minimal init'),
 ]
 
-# I2C addresses to test
-I2C_ADDRESSES = [0x27, 0x3f]
+# I2C addresses to test - fixed to known working address
+I2C_ADDRESSES = [0x27]
 
 def scan_i2c_devices(port: int = 1) -> List[str]:
     """Scan for I2C devices on the specified port."""
@@ -228,14 +225,13 @@ def main():
         
         # Determine test parameters based on description
         backlight_enabled = True
-        port = 1
+        port = 1  # Fixed to known working port
         cols = 16  # Fixed to 16x2 display
         rows = 2
         
         if "backlight disabled" in description:
             backlight_enabled = False
-        if "port 0" in description:
-            port = 0
+        # Note: port 0 tests removed since we know it's port 1
         
         for address in I2C_ADDRESSES:
             if test_rplcd_config(charmap, i2c_expander, dotsize, auto_linebreaks, 
