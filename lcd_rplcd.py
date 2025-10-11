@@ -6,10 +6,11 @@ Replaces the custom LCD1602.py with the more robust RPLCD library
 
 import time
 import sys
+import subprocess
 from RPLCD.i2c import CharLCD
 
 class LCD1602_RPLCD:
-    def __init__(self, address=0x27, port=1, cols=16, rows=2, backlight_enabled=True):
+    def __init__(self, address=0x27, port=1, cols=16, rows=2, backlight_enabled=True, auto_detect=True):
         """
         Initialize LCD using RPLCD library
         
@@ -19,6 +20,7 @@ class LCD1602_RPLCD:
             cols (int): Number of columns (16 for 1602)
             rows (int): Number of rows (2 for 1602)
             backlight_enabled (bool): Initial backlight state
+            auto_detect (bool): Auto-detect I2C address if specified address fails
         """
         self.address = address
         self.port = port
@@ -26,10 +28,14 @@ class LCD1602_RPLCD:
         self.rows = rows
         self.backlight_enabled = backlight_enabled
         
+        # Try to initialize with specified address, fallback to auto-detection
+        if auto_detect and address is not None:
+            self.address = self._detect_i2c_address(address, port)
+        
         # Initialize the LCD
         self.lcd = CharLCD(
             i2c_expander='PCF8574',
-            address=address,
+            address=self.address,
             port=port,
             cols=cols,
             rows=rows,
@@ -38,6 +44,36 @@ class LCD1602_RPLCD:
             auto_linebreaks=True,
             backlight_enabled=backlight_enabled
         )
+    
+    def _detect_i2c_address(self, preferred_address, port):
+        """Detect I2C address, similar to the old LCD1602.py logic"""
+        try:
+            # Scan for I2C devices
+            cmd = f"i2cdetect -y {port} | awk 'NR>1 {{$1=\"\";print}}'"
+            result = subprocess.check_output(cmd, shell=True).decode()
+            result = result.replace("\n", "").replace(" --", "")
+            i2c_list = result.split(' ')
+            
+            # Convert to hex strings for comparison
+            i2c_hex_list = [hex(int(addr, 16))[2:] for addr in i2c_list if addr.strip()]
+            
+            # Try preferred address first
+            preferred_hex = hex(preferred_address)[2:]
+            if preferred_hex in i2c_hex_list:
+                return preferred_address
+            
+            # Try common LCD addresses
+            for addr in [0x27, 0x3f]:
+                addr_hex = hex(addr)[2:]
+                if addr_hex in i2c_hex_list:
+                    return addr
+            
+            # If no LCD found, return preferred address (will fail gracefully)
+            return preferred_address
+            
+        except Exception:
+            # If detection fails, return preferred address
+            return preferred_address
         
     def clear(self):
         """Clear the LCD display"""

@@ -37,7 +37,23 @@ class DisplayManager:
         if self.lcd_available:
             try:
                 self.logger.info("Creating LCD1602_RPLCD object...")
-                self.lcd = LCD1602_RPLCD()
+                
+                # Get LCD configuration from config.yaml
+                lcd_address = self.config.get('hardware.lcd_address', 0x27)
+                lcd_port = self.config.get('hardware.lcd_port', 1)
+                lcd_cols = self.config.get('hardware.lcd_cols', 16)
+                lcd_rows = self.config.get('hardware.lcd_rows', 2)
+                
+                self.logger.info(f"LCD config: address=0x{lcd_address:02x}, port={lcd_port}, cols={lcd_cols}, rows={lcd_rows}")
+                
+                # Try to initialize with configured settings
+                self.lcd = LCD1602_RPLCD(
+                    address=lcd_address,
+                    port=lcd_port,
+                    cols=lcd_cols,
+                    rows=lcd_rows,
+                    backlight_enabled=True
+                )
                 self.logger.info("LCD1602_RPLCD object created successfully")
                 self.logger.info("LCD hardware initialized successfully")
             except Exception as e:
