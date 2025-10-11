@@ -81,6 +81,19 @@ TEST_CONFIGS = [
     # Port variations (some systems use port 0)
     ('A02', 'PCF8574', 8, True, 'A02 on port 0'),
     ('A00', 'PCF8574', 8, True, 'A00 on port 0'),
+    
+    # Additional timing and initialization variations
+    ('A02', 'PCF8574', 8, True, 'A02 with longer delays'),
+    ('A00', 'PCF8574', 8, True, 'A00 with longer delays'),
+    
+    
+    # Try without any auto-detection
+    ('A02', 'PCF8574', 8, True, 'A02 direct mode'),
+    ('A00', 'PCF8574', 8, True, 'A00 direct mode'),
+    
+    # Try different initialization sequences
+    ('A02', 'PCF8574', 8, True, 'A02 minimal init'),
+    ('A00', 'PCF8574', 8, True, 'A00 minimal init'),
 ]
 
 # I2C addresses to test
@@ -100,22 +113,22 @@ def scan_i2c_devices(port: int = 1) -> List[str]:
 
 def test_rplcd_config(charmap: str, i2c_expander: str, dotsize: int, 
                      auto_linebreaks: bool, address: int, port: int = 1, 
-                     backlight_enabled: bool = True) -> bool:
+                     backlight_enabled: bool = True, cols: int = 16, rows: int = 2) -> bool:
     """Test a specific RPLCD configuration."""
     try:
         from RPLCD.i2c import CharLCD
         
         print(f"  Testing: {charmap}, {i2c_expander}, dotsize={dotsize}, "
               f"auto_linebreaks={auto_linebreaks}, address=0x{address:02x}, "
-              f"port={port}, backlight={backlight_enabled}")
+              f"port={port}, backlight={backlight_enabled}, {cols}x{rows}")
         
         # Initialize LCD with test configuration
         lcd = CharLCD(
             i2c_expander=i2c_expander,
             address=address,
             port=port,
-            cols=16,
-            rows=2,
+            cols=cols,
+            rows=rows,
             dotsize=dotsize,
             charmap=charmap,
             auto_linebreaks=auto_linebreaks,
@@ -138,8 +151,17 @@ def test_rplcd_config(charmap: str, i2c_expander: str, dotsize: int,
         lcd.clear()
         lcd.close()
         
-        print(f"  ✓ SUCCESS: Configuration works!")
-        return True
+        # Ask user to verify if display actually shows readable text
+        print(f"  ? CHECK: Does the LCD show readable text (not garbage)?")
+        print(f"     Look for: 'Test 123' and 'Line 1' / 'Line 2'")
+        response = input("     Does it work? (y/n): ").lower().strip()
+        
+        if response in ['y', 'yes']:
+            print(f"  ✓ SUCCESS: Configuration works!")
+            return True
+        else:
+            print(f"  ✗ FAILED: Display shows garbage")
+            return False
         
     except Exception as e:
         print(f"  ✗ FAILED: {e}")
@@ -207,6 +229,8 @@ def main():
         # Determine test parameters based on description
         backlight_enabled = True
         port = 1
+        cols = 16  # Fixed to 16x2 display
+        rows = 2
         
         if "backlight disabled" in description:
             backlight_enabled = False
@@ -215,7 +239,7 @@ def main():
         
         for address in I2C_ADDRESSES:
             if test_rplcd_config(charmap, i2c_expander, dotsize, auto_linebreaks, 
-                               address, port, backlight_enabled):
+                               address, port, backlight_enabled, cols, rows):
                 working_configs.append({
                     'charmap': charmap,
                     'i2c_expander': i2c_expander,
