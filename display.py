@@ -9,9 +9,16 @@ import time
 from typing import Optional, Deque
 from collections import deque
 
+# Global flag to switch between LCD implementations
+USE_RPLCD = False  # Set to True to use RPLCD, False to use original LCD1602.py
+
 # Hardware imports
-from lcd_rplcd import LCD1602_RPLCD
-LCD_AVAILABLE = True
+if USE_RPLCD:
+    from lcd_rplcd import LCD1602_RPLCD
+    LCD_AVAILABLE = True
+else:
+    from LCD1602 import CharLCD1602
+    LCD_AVAILABLE = True
 
 
 class DisplayManager:
@@ -32,25 +39,46 @@ class DisplayManager:
         
         if self.lcd_available:
             try:
-                self.logger.info("Creating LCD1602_RPLCD object...")
+                if USE_RPLCD:
+                    self.logger.info("Creating LCD1602_RPLCD object...")
+                    
+                    # Get LCD configuration from config.yaml
+                    lcd_address = self.config.get('hardware.lcd_address', 0x27)
+                    lcd_port = self.config.get('hardware.lcd_port', 1)
+                    lcd_cols = self.config.get('hardware.lcd_cols', 16)
+                    lcd_rows = self.config.get('hardware.lcd_rows', 2)
+                    
+                    self.logger.info(f"LCD config: address=0x{lcd_address:02x}, port={lcd_port}, cols={lcd_cols}, rows={lcd_rows}")
+                    
+                    # Initialize with configured settings
+                    self.lcd = LCD1602_RPLCD(
+                        address=lcd_address,
+                        port=lcd_port,
+                        cols=lcd_cols,
+                        rows=lcd_rows,
+                        backlight_enabled=True
+                    )
+                    self.logger.info("LCD1602_RPLCD object created successfully")
+                else:
+                    self.logger.info("Creating original LCD1602 object...")
+                    
+                    # Get LCD configuration from config.yaml
+                    lcd_address = self.config.get('hardware.lcd_address', 0x27)
+                    
+                    self.logger.info(f"LCD config: address=0x{lcd_address:02x}")
+                    
+                    # Initialize with the old working method
+                    self.lcd = CharLCD1602()
+                    init_result = self.lcd.init_lcd(addr=lcd_address, bl=1)
+                    
+                    if init_result:
+                        self.logger.info("Original LCD1602 initialized successfully")
+                    else:
+                        self.logger.error("LCD init_lcd() returned False - initialization failed")
+                        self.lcd_available = False
+                        self.lcd = None
+                        return
                 
-                # Get LCD configuration from config.yaml
-                lcd_address = self.config.get('hardware.lcd_address', 0x27)
-                lcd_port = self.config.get('hardware.lcd_port', 1)
-                lcd_cols = self.config.get('hardware.lcd_cols', 16)
-                lcd_rows = self.config.get('hardware.lcd_rows', 2)
-                
-                self.logger.info(f"LCD config: address=0x{lcd_address:02x}, port={lcd_port}, cols={lcd_cols}, rows={lcd_rows}")
-                
-                # Initialize with configured settings
-                self.lcd = LCD1602_RPLCD(
-                    address=lcd_address,
-                    port=lcd_port,
-                    cols=lcd_cols,
-                    rows=lcd_rows,
-                    backlight_enabled=True
-                )
-                self.logger.info("LCD1602_RPLCD object created successfully")
                 self.logger.info("LCD hardware initialized successfully")
             except Exception as e:
                 self.logger.error(f"Failed to initialize LCD: {e}")
@@ -173,7 +201,9 @@ class DisplayManager:
         if self.lcd_available and self.lcd:
             try:
                 self.lcd.clear()
-                self.lcd.close()
+                # Only call close() if it's the RPLCD version (has close method)
+                if USE_RPLCD and hasattr(self.lcd, 'close'):
+                    self.lcd.close()
                 self.logger.info("LCD cleanup completed")
             except Exception as e:
                 self.logger.error(f"LCD cleanup error: {e}")
