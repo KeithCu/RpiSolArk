@@ -19,8 +19,17 @@ class Config:
     
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
-        with open(self.config_file, 'r') as f:
-            return yaml.safe_load(f)
+        try:
+            with open(self.config_file, 'r') as f:
+                config = yaml.safe_load(f)
+                return config if config is not None else {}
+        except FileNotFoundError:
+            # Return empty config if file doesn't exist - tests can rely on defaults
+            return {}
+        except Exception as e:
+            # Log warning but continue with empty config
+            print(f"Warning: Failed to load config from {self.config_file}: {e}")
+            return {}
     
     
     def get(self, key_path: str, default=None):
