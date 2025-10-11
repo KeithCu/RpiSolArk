@@ -32,7 +32,7 @@ class LCD1602_RPLCD:
         if auto_detect and address is not None:
             self.address = self._detect_i2c_address(address, port)
         
-        # Initialize the LCD
+        # Initialize the LCD with compatibility mode for better stability
         self.lcd = CharLCD(
             i2c_expander='PCF8574',
             address=self.address,
@@ -42,7 +42,8 @@ class LCD1602_RPLCD:
             dotsize=8,
             charmap='A02',
             auto_linebreaks=True,
-            backlight_enabled=backlight_enabled
+            backlight_enabled=backlight_enabled,
+            compat_mode=True  # Enable compatibility mode for timing issues
         )
     
     def _detect_i2c_address(self, preferred_address, port):

@@ -9,13 +9,9 @@ import time
 from typing import Optional, Deque
 from collections import deque
 
-# Hardware imports with graceful degradation
-try:
-    from lcd_rplcd import LCD1602_RPLCD
-    LCD_AVAILABLE = True
-except ImportError:
-    LCD_AVAILABLE = False
-    print("Warning: LCD1602_RPLCD not available. LCD display disabled.")
+# Hardware imports
+from lcd_rplcd import LCD1602_RPLCD
+LCD_AVAILABLE = True
 
 
 class DisplayManager:
@@ -46,7 +42,7 @@ class DisplayManager:
                 
                 self.logger.info(f"LCD config: address=0x{lcd_address:02x}, port={lcd_port}, cols={lcd_cols}, rows={lcd_rows}")
                 
-                # Try to initialize with configured settings
+                # Initialize with configured settings
                 self.lcd = LCD1602_RPLCD(
                     address=lcd_address,
                     port=lcd_port,
