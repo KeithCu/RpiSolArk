@@ -42,7 +42,7 @@ class LCD1602_RPLCD:
             cols=cols,
             rows=rows,
             dotsize=8,
-            charmap='A00',
+            charmap='A02',
             auto_linebreaks=True,
             backlight_enabled=backlight_enabled,
         )
