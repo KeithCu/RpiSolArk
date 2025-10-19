@@ -38,6 +38,7 @@ class OptocouplerManager:
         self.pulse_count = 0
         self.pulse_count_lock = threading.Lock()
         self.optocoupler_initialized = False
+        self.cpu_affinity_set = False
         
         # Thread priority optimization
         self._setup_thread_priority()
@@ -142,8 +143,10 @@ class OptocouplerManager:
         last_state = GPIO.input(self.optocoupler_pin)
         last_change_time = start_time
         
-        # Optimize for high-frequency polling
-        self._optimize_polling_thread()
+        # Optimize for high-frequency polling (only once)
+        if not self.cpu_affinity_set:
+            self._optimize_polling_thread()
+            self.cpu_affinity_set = True
         
         while time.perf_counter() - start_time < duration:
             current_state = GPIO.input(self.optocoupler_pin)
