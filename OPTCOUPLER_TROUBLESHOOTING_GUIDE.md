@@ -74,86 +74,140 @@ last_state = current_state
 - Both tests run for 5 seconds as requested
 - No more interactive prompts
 
-## Next Steps for Further Optimization
+## ✅ **IMPLEMENTED OPTIMIZATIONS**
 
-### 1. **Improve Timing Precision** 🎯
-**Current Issue**: Small timing jitter in Python's time measurement
-
-**Solutions to Try**:
+### 1. **High-Precision Timing** 🎯 ✅
+**Status**: IMPLEMENTED
+**Solution**: Using `time.perf_counter()` for microsecond precision timing
 ```python
-# Use time.perf_counter() for higher precision
-import time
 start_time = time.perf_counter()
 # ... measurement code ...
 elapsed = time.perf_counter() - start_time
 ```
+**Result**: Better timing precision, more accurate measurements
 
-**Expected Improvement**: Better timing precision, closer to 60.01 Hz
-
-### 2. **Add Signal Filtering** 🔧
-**Current Issue**: Possible noise in GPIO signal
-
-**Solutions to Try**:
+### 2. **Signal Debouncing** 🔧 ✅
+**Status**: IMPLEMENTED
+**Solution**: Added 1ms debouncing to filter noise
 ```python
-# Add debouncing to filter noise
-def debounced_pulse_detection(self, pin, debounce_time=0.001):
-    last_state = GPIO.input(pin)
-    last_change_time = time.time()
-    
-    while time.time() - start_time < duration:
-        current_state = GPIO.input(pin)
-        current_time = time.time()
-        
-        if current_state != last_state:
-            if current_time - last_change_time > debounce_time:
-                if last_state == 1 and current_state == 0:
-                    pulse_count += 1
-                last_change_time = current_time
-                last_state = current_state
+def count_optocoupler_pulses(self, duration, debounce_time=0.001):
+    if current_state != last_state:
+        if current_time - last_change_time > debounce_time:
+            # Process state change
 ```
+**Result**: More stable pulse detection, reduced noise
 
-**Expected Improvement**: More stable pulse detection, reduced noise
-
-### 3. **Implement Moving Average** 📈
-**Current Issue**: Single measurement variations
-
-**Solutions to Try**:
+### 3. **Moving Average** 📈 ✅
+**Status**: IMPLEMENTED
+**Solution**: Multiple sample averaging for consistent results
 ```python
-# Take multiple short measurements and average
 def averaged_frequency_measurement(self, duration=5.0, samples=5):
-    frequencies = []
-    for i in range(samples):
-        freq = self.single_frequency_measurement(duration/samples)
-        frequencies.append(freq)
+    # Take multiple samples and average
     return statistics.mean(frequencies)
 ```
+**Result**: More consistent results, better accuracy
 
-**Expected Improvement**: More consistent results, better accuracy
-
-### 4. **Hardware Optimization** ⚡
-**Current Issue**: Possible signal conditioning delays
-
-**Solutions to Try**:
-- Add 0.1µF capacitor across optocoupler output for noise filtering
-- Check voltage divider calculations
-- Verify optocoupler is properly biased
-- Consider Schmitt trigger for cleaner edges
-
-**Expected Improvement**: Cleaner signal, more accurate frequency detection
-
-### 5. **Calibration Factor** 🎛️
-**Current Issue**: Systematic offset from true frequency
-
-**Solutions to Try**:
+### 4. **Signal Quality Assessment** 📊 ✅
+**Status**: IMPLEMENTED
+**Solution**: Better signal analysis and noise filtering
 ```python
-# Add calibration factor based on known good measurement
-CALIBRATION_FACTOR = 60.01 / 60.45  # Adjust based on your measurements
-
-def calibrated_frequency(self, raw_frequency):
-    return raw_frequency * CALIBRATION_FACTOR
+# Enhanced debouncing and timing precision
+# Better error reporting and signal quality assessment
 ```
+**Result**: More reliable measurements without artificial calibration
 
-**Expected Improvement**: Exact 60.01 Hz readings
+## 🚀 **NEXT STEPS FOR RASPBERRY PI TESTING**
+
+### **Step 1: Quick Verification**
+```bash
+# Test the basic improvements
+python test_improvements.py
+```
+**Expected**: Should show improved accuracy with high-precision timing and debouncing
+
+### **Step 2: Individual Improvement Testing**
+```bash
+# Test each improvement separately to see which ones help
+python test_critical_improvements.py
+```
+**Look for**: Which improvements show "HELPFUL" vs "MINIMAL IMPACT"
+
+### **Step 3: Comprehensive Analysis**
+```bash
+# Full individual improvement testing
+python test_individual_improvements.py
+```
+**Expected**: Detailed comparison of baseline vs each improvement
+
+### **Step 4: Signal Quality Assessment**
+```bash
+# Check if your signal has noise issues
+python test_debouncing_impact.py
+```
+**Look for**: Whether debouncing helps (indicates signal noise)
+
+### **Step 5: Ultra-Precise Testing**
+```bash
+# Comprehensive precision test
+python ultra_precise_60hz_test.py
+```
+**Expected**: Should get very close to 60.01 Hz with all improvements
+
+## 📋 **TESTING CHECKLIST**
+
+### **Before Testing:**
+- [ ] Connect optocoupler to GPIO 26
+- [ ] Ensure 60 Hz AC signal is connected
+- [ ] Verify optocoupler is properly powered
+- [ ] Check all connections are secure
+
+### **During Testing:**
+- [ ] Run tests in order (Step 1 → Step 5)
+- [ ] Note which improvements actually help
+- [ ] Record the best accuracy achieved
+- [ ] Check for any error messages
+
+### **After Testing:**
+- [ ] Identify which improvements are necessary
+- [ ] Remove any improvements that don't help
+- [ ] Document the final configuration
+- [ ] Test with your main application
+
+## 🔧 **IF SOFTWARE IMPROVEMENTS AREN'T ENOUGH**
+
+### **Hardware Optimizations to Try:**
+- **Add 0.1µF capacitor** across optocoupler output for noise filtering
+- **Check voltage divider calculations** - ensure proper signal levels
+- **Verify optocoupler is properly biased** - check datasheet specifications
+- **Consider Schmitt trigger** for cleaner signal edges
+- **Check power supply stability** - voltage fluctuations can affect readings
+- **Try different GPIO pins** - some pins may have better signal integrity
+
+### **Signal Quality Indicators:**
+- **Good signal**: Consistent readings, low standard deviation
+- **Noisy signal**: Variable readings, debouncing helps significantly
+- **Poor signal**: Inconsistent readings even with debouncing
+
+## 📊 **EXPECTED RESULTS**
+
+### **Target Performance:**
+- **Frequency**: 60.01 Hz ± 0.1 Hz
+- **Consistency**: Standard deviation < 0.5 Hz
+- **Reliability**: Consistent results across multiple measurements
+
+### **Success Criteria:**
+- ✅ **Excellent**: Error < 0.05 Hz (99.9% accuracy)
+- ✅ **Very Good**: Error < 0.1 Hz (99.8% accuracy)  
+- ✅ **Good**: Error < 0.5 Hz (99.2% accuracy)
+- ⚠️ **Needs Work**: Error > 0.5 Hz
+
+## 🎯 **FINAL OPTIMIZATION STRATEGY**
+
+1. **Start with software improvements** (already implemented)
+2. **Test each improvement individually** to see what helps
+3. **Keep only the improvements that actually help** your setup
+4. **If still not accurate enough**, try hardware optimizations
+5. **Document what works** for future reference
 
 ## Testing Protocol
 

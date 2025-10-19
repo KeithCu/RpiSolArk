@@ -89,12 +89,13 @@ class OptocouplerManager:
             self.pulse_count += 1
             self.logger.debug(f"Optocoupler pulse detected, count: {self.pulse_count}")
     
-    def count_optocoupler_pulses(self, duration: float = None) -> int:
+    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.001) -> int:
         """
-        Count optocoupler pulses over specified duration using polling.
+        Count optocoupler pulses over specified duration using high-precision polling with debouncing.
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
+            debounce_time: Minimum time between state changes to filter noise (default 1ms)
             
         Returns:
             Number of pulses counted
@@ -106,23 +107,29 @@ class OptocouplerManager:
         if duration is None:
             duration = self.measurement_duration
         
-        # Count pulses using polling method (like the simple test that worked)
+        # Use high-precision timing for better accuracy
         pulse_count = 0
-        start_time = time.time()
+        start_time = time.perf_counter()
         last_state = GPIO.input(self.optocoupler_pin)
+        last_change_time = start_time
         
-        while time.time() - start_time < duration:
+        while time.perf_counter() - start_time < duration:
             current_state = GPIO.input(self.optocoupler_pin)
+            current_time = time.perf_counter()
             
-            # Detect only falling edges (1 -> 0) for optocoupler
-            if last_state == 1 and current_state == 0:
-                pulse_count += 1
-            
-            last_state = current_state
+            # Detect only falling edges (1 -> 0) for optocoupler with debouncing
+            if current_state != last_state:
+                if current_time - last_change_time > debounce_time:
+                    if last_state == 1 and current_state == 0:
+                        pulse_count += 1
+                    last_change_time = current_time
+                    last_state = current_state
             # No sleep for maximum accuracy - let the system scheduler handle timing
         
-        self.logger.debug(f"Counted {pulse_count} pulses in {duration:.2f} seconds")
+        elapsed = time.perf_counter() - start_time
+        self.logger.debug(f"Counted {pulse_count} pulses in {elapsed:.3f} seconds")
         return pulse_count
+    
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:
         """
@@ -145,7 +152,7 @@ class OptocouplerManager:
         # H11AA1 gives 2 pulses per AC cycle
         frequency = pulse_count / (duration * self.pulses_per_cycle)
         
-        self.logger.debug(f"Calculated frequency: {frequency:.2f} Hz from {pulse_count} pulses in {duration:.2f}s")
+        self.logger.debug(f"Calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {duration:.2f}s")
         return frequency
     
     def cleanup(self):

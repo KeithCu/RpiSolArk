@@ -100,7 +100,7 @@ class OptocouplerTester:
             print("⚠️  No pulses detected - check connections")
     
     def test_frequency_measurement(self, duration: float = 5.0):
-        """Test frequency measurement."""
+        """Test frequency measurement with improved precision."""
         print(f"\n=== Frequency Measurement Test ({duration}s) ===")
         
         if not self.optocoupler.optocoupler_initialized:
@@ -111,11 +111,11 @@ class OptocouplerTester:
         with self.optocoupler.pulse_count_lock:
             self.optocoupler.pulse_count = 0
             
-        print(f"Counting pulses for {duration} seconds...")
+        print(f"Counting pulses for {duration} seconds with high precision timing...")
         start_time = time.time()
         
-        # Count pulses over duration
-        pulse_count = self.optocoupler.count_optocoupler_pulses(duration)
+        # Count pulses over duration with debouncing
+        pulse_count = self.optocoupler.count_optocoupler_pulses(duration, debounce_time=0.001)
         
         # Calculate frequency
         frequency = self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration)
@@ -124,17 +124,31 @@ class OptocouplerTester:
         print(f"Duration: {duration:.2f}s")
         
         if frequency is not None:
-            print(f"Calculated frequency: {frequency:.2f} Hz")
+            print(f"Calculated frequency: {frequency:.3f} Hz")
+            
+            # Check how close to 60.01 Hz
+            error = abs(frequency - 60.01)
+            accuracy = (1 - error / 60.01) * 100
+            
+            print(f"Error from 60.01 Hz: {error:.3f} Hz")
+            print(f"Accuracy: {accuracy:.2f}%")
             
             # Validate frequency range (typical AC is 50-60 Hz)
             if 45 <= frequency <= 65:
                 print("✅ Frequency within expected range (45-65 Hz)")
+                if error < 0.1:
+                    print("🎯 Very close to target 60.01 Hz!")
+                elif error < 0.5:
+                    print("✅ Close to target 60.01 Hz")
+                else:
+                    print("⚠️  Somewhat off from target 60.01 Hz")
             else:
                 print(f"⚠️  Frequency outside typical range (45-65 Hz): {frequency:.2f} Hz")
         else:
             print("❌ Could not calculate frequency")
             
         return frequency
+    
     
     def test_continuous_monitoring(self, duration: float = 5.0):
         """Test continuous monitoring with frequency updates."""
@@ -175,7 +189,7 @@ class OptocouplerTester:
     
     def run_all_tests(self):
         """Run all optocoupler tests."""
-        print("🔧 Optocoupler Test Suite")
+        print("🔧 Enhanced Optocoupler Test Suite")
         print("=" * 50)
         
         # Test 1: GPIO Setup
@@ -186,10 +200,15 @@ class OptocouplerTester:
         # Test 2: Pulse Detection (5 seconds)
         self.test_pulse_detection(5.0)
         
-        # Test 3: Frequency Measurement (5 seconds)
+        # Test 3: Standard Frequency Measurement (5 seconds)
         frequency = self.test_frequency_measurement(5.0)
         
-        print("\n🏁 Test suite completed")
+        print("\n🏁 Enhanced test suite completed")
+        print(f"📊 Final Results:")
+        if frequency is not None:
+            print(f"  Frequency measurement: {frequency:.3f} Hz")
+            error = abs(frequency - 60.01)
+            print(f"  Error from 60.01 Hz: {error:.3f} Hz")
     
     def cleanup(self):
         """Cleanup resources."""
