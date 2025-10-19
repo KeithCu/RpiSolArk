@@ -68,6 +68,14 @@ class OptocouplerManager:
             initial_state = GPIO.input(self.optocoupler_pin)
             self.logger.info(f"Optocoupler pin {self.optocoupler_pin} initial state: {initial_state}")
             
+            # Set up interrupt-based pulse detection
+            try:
+                GPIO.add_event_detect(self.optocoupler_pin, GPIO.FALLING, callback=self._optocoupler_callback)
+                self.logger.info("Optocoupler interrupt detection configured for falling edges")
+            except Exception as e:
+                self.logger.warning(f"Could not set up interrupt detection: {e}")
+                self.logger.info("Will use polling method for pulse detection")
+            
             self.optocoupler_initialized = True
             self.logger.info("Optocoupler setup completed successfully")
             
@@ -106,7 +114,7 @@ class OptocouplerManager:
         while time.time() - start_time < duration:
             current_state = GPIO.input(self.optocoupler_pin)
             
-            # Detect falling edge (1 -> 0)
+            # Detect only falling edges (1 -> 0) for optocoupler
             if last_state == 1 and current_state == 0:
                 pulse_count += 1
             

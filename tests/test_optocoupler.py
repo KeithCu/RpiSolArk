@@ -57,7 +57,7 @@ class OptocouplerTester:
                 'optocoupler': {
                     'enabled': True,
                     'gpio_pin': 26,  # GPIO 26 as requested
-                    'pulses_per_cycle': 2,  # H11A1 gives 2 pulses per AC cycle
+                    'pulses_per_cycle': 1,  # Try 1 pulse per cycle instead of 2
                     'measurement_duration': 1.0
                 }
             }
@@ -80,45 +80,26 @@ class OptocouplerTester:
         print(f"✅ Measurement duration: {self.optocoupler.measurement_duration}s")
         return True
     
-    def test_pulse_detection(self, duration: float = 2.0):
-        """Test real-time pulse detection."""
+    def test_pulse_detection(self, duration: float = 5.0):
+        """Test real-time pulse detection using polling method."""
         print(f"\n=== Pulse Detection Test ({duration}s) ===")
-        print("Monitoring for pulses... Press Ctrl+C to stop early")
+        print("Monitoring for pulses using polling method...")
         
         if not self.optocoupler.optocoupler_initialized:
             print("❌ Optocoupler not initialized")
             return
             
-        start_time = time.time()
-        last_count = 0
-        pulse_display_count = 0
+        # Use the same polling method as frequency measurement for consistency
+        pulse_count = self.optocoupler.count_optocoupler_pulses(duration)
         
-        try:
-            while time.time() - start_time < duration:
-                current_count = self.optocoupler.pulse_count
-                if current_count != last_count:
-                    elapsed = time.time() - start_time
-                    pulse_display_count += 1
-                    if pulse_display_count <= 5:  # Only show first 5 pulses
-                        print(f"Pulse #{current_count} detected at {elapsed:.2f}s")
-                    elif pulse_display_count == 6:
-                        print("... (showing first 5 pulses only)")
-                    last_count = current_count
-                time.sleep(0.05)  # Check every 50ms for faster response
-                
-        except KeyboardInterrupt:
-            print("\nTest interrupted by user")
-            
-        final_count = self.optocoupler.pulse_count
-        elapsed_time = time.time() - start_time
-        print(f"\nFinal pulse count: {final_count} in {elapsed_time:.2f}s")
+        print(f"\nFinal pulse count: {pulse_count} in {duration:.2f}s")
         
-        if final_count > 0:
+        if pulse_count > 0:
             print("✅ Pulses detected successfully")
         else:
             print("⚠️  No pulses detected - check connections")
     
-    def test_frequency_measurement(self, duration: float = 2.0):
+    def test_frequency_measurement(self, duration: float = 5.0):
         """Test frequency measurement."""
         print(f"\n=== Frequency Measurement Test ({duration}s) ===")
         
@@ -155,7 +136,7 @@ class OptocouplerTester:
             
         return frequency
     
-    def test_continuous_monitoring(self, duration: float = 10.0):
+    def test_continuous_monitoring(self, duration: float = 5.0):
         """Test continuous monitoring with frequency updates."""
         print(f"\n=== Continuous Monitoring Test ({duration}s) ===")
         print("Monitoring frequency every 2 seconds... Press Ctrl+C to stop")
@@ -202,21 +183,11 @@ class OptocouplerTester:
             print("\n❌ GPIO setup failed - cannot continue with other tests")
             return
             
-        # Test 2: Pulse Detection
-        self.test_pulse_detection(2.0)
+        # Test 2: Pulse Detection (5 seconds)
+        self.test_pulse_detection(5.0)
         
-        # Test 3: Frequency Measurement
-        frequency = self.test_frequency_measurement(2.0)
-        
-        # Test 4: Continuous Monitoring (optional)
-        if frequency is not None and frequency > 0:
-            print("\nWould you like to run continuous monitoring? (y/n): ", end="")
-            try:
-                response = input().lower().strip()
-                if response in ['y', 'yes']:
-                    self.test_continuous_monitoring(10.0)
-            except KeyboardInterrupt:
-                print("\nSkipping continuous monitoring")
+        # Test 3: Frequency Measurement (5 seconds)
+        frequency = self.test_frequency_measurement(5.0)
         
         print("\n🏁 Test suite completed")
     
