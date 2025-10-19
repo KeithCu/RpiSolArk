@@ -57,7 +57,7 @@ class OptocouplerTester:
                 'optocoupler': {
                     'enabled': True,
                     'gpio_pin': 26,  # GPIO 26 as requested
-                    'pulses_per_cycle': 1,  # Try 1 pulse per cycle instead of 2
+                    'pulses_per_cycle': 2,  # H11A1 gives 2 pulses per AC cycle
                     'measurement_duration': 1.0
                 }
             }
