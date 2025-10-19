@@ -119,7 +119,7 @@ class OptocouplerManager:
                 pulse_count += 1
             
             last_state = current_state
-            time.sleep(0.0001)  # 0.1ms polling interval for better pulse detection
+            # No sleep for maximum accuracy - let the system scheduler handle timing
         
         self.logger.debug(f"Counted {pulse_count} pulses in {duration:.2f} seconds")
         return pulse_count
