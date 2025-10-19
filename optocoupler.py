@@ -7,6 +7,8 @@ Handles pulse counting and frequency calculation with graceful degradation.
 import logging
 import time
 import threading
+import os
+import psutil
 from typing import Optional
 
 # Hardware imports with graceful degradation
@@ -37,8 +39,33 @@ class OptocouplerManager:
         self.pulse_count_lock = threading.Lock()
         self.optocoupler_initialized = False
         
+        # Thread priority optimization
+        self._setup_thread_priority()
+        
         if self.optocoupler_enabled:
             self._setup_optocoupler()
+    
+    def _setup_thread_priority(self):
+        """Setup high-priority threading for optocoupler measurements."""
+        try:
+            # Set current process to high priority (safe for RPi 4)
+            current_process = psutil.Process()
+            
+            # Set process priority to high (but not realtime to avoid system issues)
+            if hasattr(psutil, 'HIGH_PRIORITY_CLASS'):
+                current_process.nice(psutil.HIGH_PRIORITY_CLASS)
+                self.logger.info("Set process priority to HIGH")
+            else:
+                # On Linux, use nice value (-10 to 19, lower = higher priority)
+                # Use -5 for high priority (safe for RPi 4)
+                os.nice(-5)
+                self.logger.info("Set process nice value to -5 (high priority)")
+                
+        except (PermissionError, OSError) as e:
+            self.logger.warning(f"Could not set high priority: {e}")
+            self.logger.info("Continuing with normal priority")
+        except Exception as e:
+            self.logger.warning(f"Thread priority setup failed: {e}")
     
     def _setup_optocoupler(self):
         """Setup optocoupler for falling edge detection."""
@@ -92,6 +119,7 @@ class OptocouplerManager:
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.001) -> int:
         """
         Count optocoupler pulses over specified duration using high-precision polling with debouncing.
+        Uses high-priority threading for maximum accuracy.
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
@@ -113,6 +141,9 @@ class OptocouplerManager:
         last_state = GPIO.input(self.optocoupler_pin)
         last_change_time = start_time
         
+        # Optimize for high-frequency polling
+        self._optimize_polling_thread()
+        
         while time.perf_counter() - start_time < duration:
             current_state = GPIO.input(self.optocoupler_pin)
             current_time = time.perf_counter()
@@ -129,6 +160,25 @@ class OptocouplerManager:
         elapsed = time.perf_counter() - start_time
         self.logger.debug(f"Counted {pulse_count} pulses in {elapsed:.3f} seconds")
         return pulse_count
+    
+    def _optimize_polling_thread(self):
+        """Optimize the current thread for high-frequency polling."""
+        try:
+            # Set CPU affinity to a single core for consistent timing
+            # This helps reduce context switching and improves timing precision
+            current_process = psutil.Process()
+            
+            # Get available CPUs (RPi 4 has 4 cores)
+            available_cpus = list(range(psutil.cpu_count()))
+            
+            # Use CPU 0 for optocoupler measurements (dedicated core)
+            # This provides the most consistent timing
+            if len(available_cpus) > 1:
+                current_process.cpu_affinity([0])  # Pin to CPU 0
+                self.logger.debug("Set CPU affinity to core 0 for optocoupler")
+            
+        except Exception as e:
+            self.logger.debug(f"CPU affinity optimization failed: {e}")
     
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:

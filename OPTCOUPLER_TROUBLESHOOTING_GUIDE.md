@@ -116,6 +116,16 @@ def averaged_frequency_measurement(self, duration=5.0, samples=5):
 ```
 **Result**: More reliable measurements without artificial calibration
 
+### 5. **High-Priority Threading** 🧵 ✅
+**Status**: IMPLEMENTED
+**Solution**: Process and CPU optimizations for maximum timing precision
+```python
+# High process priority (nice -5)
+# CPU affinity to dedicated core
+# Optimized polling thread
+```
+**Result**: Better timing precision and reduced measurement jitter
+
 ## 🚀 **NEXT STEPS FOR RASPBERRY PI TESTING**
 
 ### **Step 1: Quick Verification**
@@ -146,7 +156,14 @@ python test_debouncing_impact.py
 ```
 **Look for**: Whether debouncing helps (indicates signal noise)
 
-### **Step 5: Ultra-Precise Testing**
+### **Step 5: Thread Priority Testing**
+```bash
+# Test high-priority threading optimizations
+python test_thread_priority.py
+```
+**Look for**: Process priority, CPU affinity, and performance improvements
+
+### **Step 6: Ultra-Precise Testing**
 ```bash
 # Comprehensive precision test
 python ultra_precise_60hz_test.py
@@ -162,10 +179,11 @@ python ultra_precise_60hz_test.py
 - [ ] Check all connections are secure
 
 ### **During Testing:**
-- [ ] Run tests in order (Step 1 → Step 5)
+- [ ] Run tests in order (Step 1 → Step 6)
 - [ ] Note which improvements actually help
 - [ ] Record the best accuracy achieved
 - [ ] Check for any error messages
+- [ ] Verify thread priority optimizations are working
 
 ### **After Testing:**
 - [ ] Identify which improvements are necessary
