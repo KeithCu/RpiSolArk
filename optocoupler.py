@@ -29,7 +29,6 @@ class OptocouplerManager:
         # Optocoupler configuration
         self.optocoupler_enabled = config.get('hardware.optocoupler.enabled', True)
         self.optocoupler_pin = config.get('hardware.optocoupler.gpio_pin', 18)
-        self.optocoupler_pull_up = config.get('hardware.optocoupler.pull_up', True)
         self.pulses_per_cycle = config.get('hardware.optocoupler.pulses_per_cycle', 2)
         self.measurement_duration = config.get('hardware.optocoupler.measurement_duration', 1.0)
         
@@ -51,12 +50,8 @@ class OptocouplerManager:
             self.logger.info(f"Setting up optocoupler on GPIO pin {self.optocoupler_pin}")
             
             # Configure GPIO pin for optocoupler input
-            if self.optocoupler_pull_up:
-                GPIO.setup(self.optocoupler_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-                self.logger.info("Optocoupler configured with internal pull-up resistor")
-            else:
-                GPIO.setup(self.optocoupler_pin, GPIO.IN)
-                self.logger.info("Optocoupler configured without pull-up resistor")
+            GPIO.setup(self.optocoupler_pin, GPIO.IN)
+            self.logger.info("Optocoupler configured for input")
             
             # Add falling edge detection callback
             GPIO.add_event_detect(self.optocoupler_pin, GPIO.FALLING, callback=self._optocoupler_callback)
