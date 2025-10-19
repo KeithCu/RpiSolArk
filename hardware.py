@@ -28,6 +28,7 @@ class HardwareManager:
         # Expose availability flags for backward compatibility
         self.gpio_available = self.gpio.gpio_available
         self.lcd_available = self.display.lcd_available
+        self.optocoupler_initialized = self.optocoupler.optocoupler_initialized
     
     def _setup_hardware(self):
         """Setup hardware components."""

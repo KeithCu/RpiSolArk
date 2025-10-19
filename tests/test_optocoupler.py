@@ -80,7 +80,7 @@ class OptocouplerTester:
         print(f"✅ Measurement duration: {self.optocoupler.measurement_duration}s")
         return True
     
-    def test_pulse_detection(self, duration: float = 10.0):
+    def test_pulse_detection(self, duration: float = 2.0):
         """Test real-time pulse detection."""
         print(f"\n=== Pulse Detection Test ({duration}s) ===")
         print("Monitoring for pulses... Press Ctrl+C to stop early")
@@ -91,15 +91,20 @@ class OptocouplerTester:
             
         start_time = time.time()
         last_count = 0
+        pulse_display_count = 0
         
         try:
             while time.time() - start_time < duration:
                 current_count = self.optocoupler.pulse_count
                 if current_count != last_count:
                     elapsed = time.time() - start_time
-                    print(f"Pulse #{current_count} detected at {elapsed:.2f}s")
+                    pulse_display_count += 1
+                    if pulse_display_count <= 5:  # Only show first 5 pulses
+                        print(f"Pulse #{current_count} detected at {elapsed:.2f}s")
+                    elif pulse_display_count == 6:
+                        print("... (showing first 5 pulses only)")
                     last_count = current_count
-                time.sleep(0.1)  # Check every 100ms
+                time.sleep(0.05)  # Check every 50ms for faster response
                 
         except KeyboardInterrupt:
             print("\nTest interrupted by user")
@@ -113,7 +118,7 @@ class OptocouplerTester:
         else:
             print("⚠️  No pulses detected - check connections")
     
-    def test_frequency_measurement(self, duration: float = 5.0):
+    def test_frequency_measurement(self, duration: float = 2.0):
         """Test frequency measurement."""
         print(f"\n=== Frequency Measurement Test ({duration}s) ===")
         
@@ -150,7 +155,7 @@ class OptocouplerTester:
             
         return frequency
     
-    def test_continuous_monitoring(self, duration: float = 30.0):
+    def test_continuous_monitoring(self, duration: float = 10.0):
         """Test continuous monitoring with frequency updates."""
         print(f"\n=== Continuous Monitoring Test ({duration}s) ===")
         print("Monitoring frequency every 2 seconds... Press Ctrl+C to stop")
@@ -198,10 +203,10 @@ class OptocouplerTester:
             return
             
         # Test 2: Pulse Detection
-        self.test_pulse_detection(10.0)
+        self.test_pulse_detection(2.0)
         
         # Test 3: Frequency Measurement
-        frequency = self.test_frequency_measurement(5.0)
+        frequency = self.test_frequency_measurement(2.0)
         
         # Test 4: Continuous Monitoring (optional)
         if frequency is not None and frequency > 0:
@@ -209,7 +214,7 @@ class OptocouplerTester:
             try:
                 response = input().lower().strip()
                 if response in ['y', 'yes']:
-                    self.test_continuous_monitoring(30.0)
+                    self.test_continuous_monitoring(10.0)
             except KeyboardInterrupt:
                 print("\nSkipping continuous monitoring")
         

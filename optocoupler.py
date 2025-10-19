@@ -27,10 +27,10 @@ class OptocouplerManager:
         self.gpio_available = GPIO_AVAILABLE
         
         # Optocoupler configuration
-        self.optocoupler_enabled = config.get('hardware.optocoupler.enabled', True)
-        self.optocoupler_pin = config.get('hardware.optocoupler.gpio_pin', 18)
-        self.pulses_per_cycle = config.get('hardware.optocoupler.pulses_per_cycle', 2)
-        self.measurement_duration = config.get('hardware.optocoupler.measurement_duration', 1.0)
+        self.optocoupler_enabled = config.get('hardware', {}).get('optocoupler', {}).get('enabled', True)
+        self.optocoupler_pin = config.get('hardware', {}).get('optocoupler', {}).get('gpio_pin', 18)
+        self.pulses_per_cycle = config.get('hardware', {}).get('optocoupler', {}).get('pulses_per_cycle', 2)
+        self.measurement_duration = config.get('hardware', {}).get('optocoupler', {}).get('measurement_duration', 1.0)
         
         # Optocoupler pulse counting
         self.pulse_count = 0
@@ -49,15 +49,27 @@ class OptocouplerManager:
         try:
             self.logger.info(f"Setting up optocoupler on GPIO pin {self.optocoupler_pin}")
             
-            # Configure GPIO pin for optocoupler input
-            GPIO.setup(self.optocoupler_pin, GPIO.IN)
-            self.logger.info("Optocoupler configured for input")
+            # Don't set GPIO mode here - let the main GPIO manager handle it
+            # Just check if it's already set to BCM
+            try:
+                # Try to read a pin to see if GPIO is already initialized
+                GPIO.input(self.optocoupler_pin)
+                self.logger.debug("GPIO already initialized")
+            except RuntimeError:
+                # GPIO not initialized yet, set mode to BCM
+                GPIO.setmode(GPIO.BCM)
+                self.logger.info("GPIO mode set to BCM")
             
-            # Add falling edge detection callback
-            GPIO.add_event_detect(self.optocoupler_pin, GPIO.FALLING, callback=self._optocoupler_callback)
-            self.logger.info("Optocoupler falling edge detection enabled")
+            # Configure GPIO pin for optocoupler input with pull-up resistor
+            GPIO.setup(self.optocoupler_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            self.logger.info("Optocoupler configured for input with pull-up resistor")
+            
+            # Test the pin to make sure it's working
+            initial_state = GPIO.input(self.optocoupler_pin)
+            self.logger.info(f"Optocoupler pin {self.optocoupler_pin} initial state: {initial_state}")
             
             self.optocoupler_initialized = True
+            self.logger.info("Optocoupler setup completed successfully")
             
         except Exception as e:
             self.logger.error(f"Failed to setup optocoupler: {e}")
@@ -71,7 +83,7 @@ class OptocouplerManager:
     
     def count_optocoupler_pulses(self, duration: float = None) -> int:
         """
-        Count optocoupler pulses over specified duration.
+        Count optocoupler pulses over specified duration using polling.
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
@@ -86,19 +98,23 @@ class OptocouplerManager:
         if duration is None:
             duration = self.measurement_duration
         
-        # Reset pulse counter
-        with self.pulse_count_lock:
-            self.pulse_count = 0
+        # Count pulses using polling method (like the simple test that worked)
+        pulse_count = 0
+        start_time = time.time()
+        last_state = GPIO.input(self.optocoupler_pin)
         
-        # Wait for measurement duration
-        time.sleep(duration)
+        while time.time() - start_time < duration:
+            current_state = GPIO.input(self.optocoupler_pin)
+            
+            # Detect falling edge (1 -> 0)
+            if last_state == 1 and current_state == 0:
+                pulse_count += 1
+            
+            last_state = current_state
+            time.sleep(0.001)  # 1ms polling interval
         
-        # Get final pulse count
-        with self.pulse_count_lock:
-            final_count = self.pulse_count
-        
-        self.logger.debug(f"Counted {final_count} pulses in {duration:.2f} seconds")
-        return final_count
+        self.logger.debug(f"Counted {pulse_count} pulses in {duration:.2f} seconds")
+        return pulse_count
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:
         """

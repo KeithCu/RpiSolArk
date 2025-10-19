@@ -514,7 +514,7 @@ class FrequencyMonitor:
                 if simulator_mode:
                     freq = self.analyzer._simulate_frequency()
                 else:
-                    freq = self.analyzer.count_zero_crossings(duration=1.0/self.config.get('sampling.sample_rate', 2.0))
+                    freq = self.analyzer.count_zero_crossings(duration=2.0)  # Use 2.0 seconds like the test code for better accuracy
 
                 # Track zero voltage duration
                 self.logger.debug("Tracking zero voltage duration...")

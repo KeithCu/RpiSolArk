@@ -22,8 +22,8 @@ hardware:
 sampling:
   sample_rate: 2.0      # Hz (samples per second) - Optimal for generator detection
   buffer_duration: 300  # seconds (5 minutes) - Captures generator hunting cycles
-  min_freq: 45.0        # Minimum valid frequency (Hz) - Accounts for generator drops
-  max_freq: 65.0        # Maximum valid frequency (Hz) - Accounts for generator overspeed
+  min_freq: 30.0        # Minimum valid frequency (Hz) - Accounts for generator drops and optocoupler readings
+  max_freq: 80.0        # Maximum valid frequency (Hz) - Accounts for generator overspeed and optocoupler readings
 
 # Analysis Configuration
 analysis:
