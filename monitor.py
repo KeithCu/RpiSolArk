@@ -209,11 +209,14 @@ class FrequencyAnalyzer:
         # Fall back to original zero-crossing method
         return self._count_zero_crossings_original(duration)
     
-    def _count_optocoupler_frequency(self, duration: float = 0.5) -> Optional[float]:
-        """Count frequency using optocoupler pulse counting method."""
+    def _count_optocoupler_frequency(self, duration: float = 2.0) -> Optional[float]:
+        """
+        Optimized 2-second optocoupler frequency measurement.
+        NO AVERAGING - measures actual frequency changes.
+        """
         try:
-            # Count pulses using optocoupler
-            pulse_count = self.hardware_manager.count_optocoupler_pulses(duration)
+            # Use optimized 2-second measurement with no debouncing for clean signals
+            pulse_count = self.hardware_manager.count_optocoupler_pulses(duration, debounce_time=0.0)
             
             if pulse_count <= 0:
                 self.logger.debug(f"No pulses detected in {duration:.2f} seconds")
@@ -514,7 +517,7 @@ class FrequencyMonitor:
                 if simulator_mode:
                     freq = self.analyzer._simulate_frequency()
                 else:
-                    freq = self.analyzer.count_zero_crossings(duration=2.0)  # Use 2.0 seconds like the test code for better accuracy
+                    freq = self.analyzer.count_zero_crossings(duration=2.0)  # Optimized 2-second measurement with no averaging
 
                 # Track zero voltage duration
                 self.logger.debug("Tracking zero voltage duration...")

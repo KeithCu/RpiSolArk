@@ -32,7 +32,7 @@ class OptocouplerManager:
         self.optocoupler_enabled = config.get('hardware', {}).get('optocoupler', {}).get('enabled', True)
         self.optocoupler_pin = config.get('hardware', {}).get('optocoupler', {}).get('gpio_pin', 18)
         self.pulses_per_cycle = config.get('hardware', {}).get('optocoupler', {}).get('pulses_per_cycle', 2)
-        self.measurement_duration = config.get('hardware', {}).get('optocoupler', {}).get('measurement_duration', 1.0)
+        self.measurement_duration = config.get('hardware', {}).get('optocoupler', {}).get('measurement_duration', 2.0)
         
         # Optocoupler pulse counting
         self.pulse_count = 0
@@ -116,14 +116,15 @@ class OptocouplerManager:
             self.pulse_count += 1
             self.logger.debug(f"Optocoupler pulse detected, count: {self.pulse_count}")
     
-    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.001) -> int:
+    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> int:
         """
-        Count optocoupler pulses over specified duration using high-precision polling with debouncing.
+        Count optocoupler pulses over specified duration using high-precision polling.
         Uses high-priority threading for maximum accuracy.
+        NO AVERAGING - measures actual frequency changes.
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
-            debounce_time: Minimum time between state changes to filter noise (default 1ms)
+            debounce_time: Minimum time between state changes to filter noise (0.0 for clean signals)
             
         Returns:
             Number of pulses counted
