@@ -20,14 +20,17 @@ class SystemHealthMonitor:
         self.health_log.parent.mkdir(exist_ok=True)
         
         # Health thresholds
-        self.memory_threshold = config.get('health.memory_critical', 95)
-        self.disk_threshold = config.get('health.disk_critical', 5)
-        self.temp_threshold = config.get('health.temp_critical', 85)
-        self.uptime_max_days = config.get('health.max_uptime_days', 45)
-        
-        # Recovery actions
-        self.auto_reboot_on_critical = config.get('health.auto_reboot', True)
-        self.cleanup_before_reboot = config.get('health.cleanup_before_reboot', True)
+        try:
+            self.memory_threshold = config['health']['memory_critical']
+            self.disk_threshold = config['health']['disk_critical']
+            self.temp_threshold = config['health']['temp_critical']
+            self.uptime_max_days = config['health']['max_uptime_days']
+            
+            # Recovery actions
+            self.auto_reboot_on_critical = config['health']['auto_reboot']
+            self.cleanup_before_reboot = config['health']['cleanup_before_reboot']
+        except KeyError as e:
+            raise KeyError(f"Missing required health configuration key: {e}")
         
     def log_health_status(self, status):
         """Log health status to file."""

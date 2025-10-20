@@ -49,9 +49,12 @@ class PowerStateMachine:
         self.current_state = PowerState.TRANSITIONING  # Start in transitioning to allow detection
         self.previous_state = PowerState.TRANSITIONING
         self.state_entry_time = time.time()
-        self.transition_timeout = config.get('state_machine.transition_timeout', 30)  # seconds
-        self.zero_voltage_threshold = config.get('state_machine.zero_voltage_threshold', 5)  # seconds of no cycles
-        self.unsteady_voltage_threshold = config.get('state_machine.unsteady_voltage_threshold', 0.1)  # Hz variation
+        try:
+            self.transition_timeout = config['state_machine']['transition_timeout']  # seconds
+            self.zero_voltage_threshold = config['state_machine']['zero_voltage_threshold']  # seconds of no cycles
+            self.unsteady_voltage_threshold = config['state_machine']['unsteady_voltage_threshold']  # Hz variation
+        except KeyError as e:
+            raise KeyError(f"Missing required state machine configuration key: {e}")
         
         # Upgrade lock file path
         self.upgrade_lock_path = "/var/run/unattended-upgrades.lock"
@@ -230,7 +233,10 @@ class FrequencyAnalyzer:
     def __init__(self, config, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.thresholds = config.get('analysis.generator_thresholds', {})
+        try:
+            self.thresholds = config['analysis']['generator_thresholds']
+        except KeyError as e:
+            raise KeyError(f"Missing required analysis configuration key: {e}")
 
         # Simulator state
         self.simulator_start_time = None
@@ -255,8 +261,11 @@ class FrequencyAnalyzer:
             return False
         
         # Check 1: Frequency range validation
-        min_freq = self.config.get('sampling.min_freq', 40.0)
-        max_freq = self.config.get('sampling.max_freq', 80.0)
+        try:
+            min_freq = self.config['sampling']['min_freq']
+            max_freq = self.config['sampling']['max_freq']
+        except KeyError as e:
+            raise KeyError(f"Missing required sampling configuration key: {e}")
         if not (min_freq <= freq <= max_freq):
             self.logger.warning(f"Frequency {freq:.2f}Hz outside valid range {min_freq}-{max_freq}Hz")
             return False
@@ -334,8 +343,11 @@ class FrequencyAnalyzer:
                 return None
             
             # Validate frequency range
-            min_freq = self.config.get('sampling.min_freq', 40.0)
-            max_freq = self.config.get('sampling.max_freq', 80.0)
+            try:
+                min_freq = self.config['sampling']['min_freq']
+                max_freq = self.config['sampling']['max_freq']
+            except KeyError as e:
+                raise KeyError(f"Missing required sampling configuration key: {e}")
             
             if frequency < min_freq or frequency > max_freq:
                 self.logger.warning(f"Invalid frequency reading: {frequency:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
@@ -358,8 +370,11 @@ class FrequencyAnalyzer:
             primary_freq, secondary_freq = self.hardware_manager.get_dual_frequencies(duration, debounce_time=0.0)
             
             # Validate frequency ranges for both readings
-            min_freq = self.config.get('sampling.min_freq', 40.0)
-            max_freq = self.config.get('sampling.max_freq', 80.0)
+            try:
+                min_freq = self.config['sampling']['min_freq']
+                max_freq = self.config['sampling']['max_freq']
+            except KeyError as e:
+                raise KeyError(f"Missing required sampling configuration key: {e}")
             
             if primary_freq is not None and (primary_freq < min_freq or primary_freq > max_freq):
                 self.logger.warning(f"Invalid primary frequency reading: {primary_freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
@@ -402,8 +417,11 @@ class FrequencyAnalyzer:
             return None
         
         # Filter erratic readings
-        min_freq = self.config.get('sampling.min_freq', 40.0)
-        max_freq = self.config.get('sampling.max_freq', 80.0)
+        try:
+            min_freq = self.config['sampling']['min_freq']
+            max_freq = self.config['sampling']['max_freq']
+        except KeyError as e:
+            raise KeyError(f"Missing required sampling configuration key: {e}")
         
         if freq < min_freq or freq > max_freq:
             self.logger.warning(f"Invalid frequency reading: {freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
@@ -494,11 +512,13 @@ class FrequencyAnalyzer:
                 self.logger.error("frac_freq contains NaN or infinite values")
                 return None, None, None
             
-            sample_rate = self.config.get('sampling.sample_rate', 2.0)
+            try:
+                sample_rate = self.config['sampling']['sample_rate']
+                tau_target = self.config['analysis']['allan_variance_tau']
+            except KeyError as e:
+                raise KeyError(f"Missing required configuration key: {e}")
             # Use allantools.adev for Allan deviation calculation
             taus_out, adev, _, _ = allantools.adev(frac_freq_array, rate=sample_rate, data_type='freq')
-            
-            tau_target = self.config.get('analysis.allan_variance_tau', 10.0)
             if taus_out.size > 0 and adev.size > 0:
                 avar_10s = float(adev[np.argmin(np.abs(taus_out - tau_target))])
             else:
@@ -551,9 +571,12 @@ class FrequencyAnalyzer:
             return "Unknown"
         
         # Get thresholds and ensure they are numeric
-        avar_thresh = self.thresholds.get('allan_variance', 1e-9)
-        std_thresh = self.thresholds.get('std_dev', 0.05)
-        kurt_thresh = self.thresholds.get('kurtosis', 0.5)
+        try:
+            avar_thresh = self.thresholds['allan_variance']
+            std_thresh = self.thresholds['std_dev']
+            kurt_thresh = self.thresholds['kurtosis']
+        except KeyError as e:
+            raise KeyError(f"Missing required threshold configuration key: {e}")
         
         # Convert to float to ensure numeric comparison
         try:
@@ -575,9 +598,12 @@ class FrequencyAnalyzer:
             return "Unknown", 0.0
         
         # Get thresholds
-        avar_thresh = self.thresholds.get('allan_variance', 1e-9)
-        std_thresh = self.thresholds.get('std_dev', 0.05)
-        kurt_thresh = self.thresholds.get('kurtosis', 0.5)
+        try:
+            avar_thresh = self.thresholds['allan_variance']
+            std_thresh = self.thresholds['std_dev']
+            kurt_thresh = self.thresholds['kurtosis']
+        except KeyError as e:
+            raise KeyError(f"Missing required threshold configuration key: {e}")
         
         # Calculate confidence based on how far values are from thresholds
         avar_confidence = min(1.0, avar_10s / avar_thresh) if avar_10s > avar_thresh else 0.0
@@ -611,7 +637,10 @@ class FrequencyMonitor:
         self.logger = logging.getLogger(__name__)
         
         # Check if we're in simulator mode
-        self.simulator_mode = self.config.get('app.simulator_mode', True)
+        try:
+            self.simulator_mode = self.config['app']['simulator_mode']
+        except KeyError as e:
+            raise KeyError(f"Missing required app configuration key: {e}")
         
         # Always initialize hardware manager (it handles graceful degradation internally)
         # Simulator mode only affects frequency data source, not hardware availability
@@ -700,7 +729,10 @@ class FrequencyMonitor:
     def run(self, simulator_mode: bool = None):
         """Main monitoring loop."""
         if simulator_mode is None:
-            simulator_mode = self.config.get('app.simulator_mode', True)
+            try:
+                simulator_mode = self.config['app']['simulator_mode']
+            except KeyError as e:
+                raise KeyError(f"Missing required app configuration key: {e}")
         
         self.logger.info(f"Starting frequency monitor (simulator: {simulator_mode})")
 
@@ -913,7 +945,10 @@ class FrequencyMonitor:
                                                      state_info=state_info)
 
                     # Log memory information to CSV
-                    memory_csv_file = self.config.get('logging.memory_log_file', 'memory_usage.csv')
+                    try:
+                        memory_csv_file = self.config['logging']['memory_log_file']
+                    except KeyError as e:
+                        raise KeyError(f"Missing required logging configuration key: {e}")
                     self.memory_monitor.log_memory_to_csv(memory_csv_file)
 
                     # Log memory summary
@@ -1006,7 +1041,11 @@ class FrequencyMonitor:
         if self.tuning_collector.enabled:
             self.tuning_collector.stop_collection()
         
-        if self.config.get('app.cleanup_on_exit', True) and self.hardware is not None:
+        try:
+            cleanup_on_exit = self.config['app']['cleanup_on_exit']
+        except KeyError as e:
+            raise KeyError(f"Missing required app configuration key: {e}")
+        if cleanup_on_exit and self.hardware is not None:
             self.hardware.cleanup()
         
         self.logger.info("Cleanup completed")

@@ -38,7 +38,10 @@ class SolArkCloud:
             config_path: Path to configuration file
         """
         self.config = self._load_config(config_path)
-        self.solark_config = self.config.get('solark_cloud', {})
+        try:
+            self.solark_config = self.config['solark_cloud']
+        except KeyError as e:
+            raise KeyError(f"Missing required solark_cloud configuration key: {e}")
         
         # Setup logging
         self.logger = logging.getLogger(__name__)
@@ -49,7 +52,7 @@ class SolArkCloud:
         self.page: Optional[Page] = None
         
         # Cache directory
-        self.cache_dir = Path(self.solark_config.get('cache_dir', 'solark_cache'))
+        self.cache_dir = Path(self.solark_config['cache_dir'])
         self.cache_dir.mkdir(exist_ok=True)
         
         # State tracking
@@ -58,17 +61,17 @@ class SolArkCloud:
         self.last_sync = None
         
         # Configuration
-        self.base_url = self.solark_config.get('base_url', 'https://solarkcloud.com')
-        self.username = self.solark_config.get('username', '')
-        self.password = self.solark_config.get('password', '')
-        self.plant_id = self.solark_config.get('plant_id', '')
-        self.timeout = self.solark_config.get('timeout', 30) * 1000  # Convert to ms
-        self.retry_attempts = self.solark_config.get('retry_attempts', 3)
-        self.headless = self.solark_config.get('headless', True)
-        self.cache_pages = self.solark_config.get('cache_pages', True)
-        self.session_persistence = self.solark_config.get('session_persistence', True)
-        self.session_file = self.solark_config.get('session_file', 'solark_session.json')
-        self.session_timeout = self.solark_config.get('session_timeout', 3600)
+        self.base_url = self.solark_config['base_url']
+        self.username = self.solark_config['username']
+        self.password = self.solark_config['password']
+        self.plant_id = self.solark_config['plant_id']
+        self.timeout = self.solark_config['timeout'] * 1000  # Convert to ms
+        self.retry_attempts = self.solark_config['retry_attempts']
+        self.headless = self.solark_config['headless']
+        self.cache_pages = self.solark_config['cache_pages']
+        self.session_persistence = self.solark_config['session_persistence']
+        self.session_file = self.solark_config['session_file']
+        self.session_timeout = self.solark_config['session_timeout']
         
         if not self.username or not self.password:
             self.logger.warning("Sol-Ark credentials not configured in config.yaml")
@@ -828,7 +831,7 @@ class SolArkCloud:
         Returns:
             Dictionary containing sync results
         """
-        if not self.solark_config.get('enabled', False):
+        if not self.solark_config['enabled']:
             self.logger.info("Sol-Ark cloud integration disabled")
             return {'status': 'disabled'}
         
@@ -869,11 +872,11 @@ class SolArkCloud:
         Returns:
             bool: True if all changes applied successfully
         """
-        if not self.solark_config.get('parameter_changes', {}).get('enabled', False):
+        if not self.solark_config['parameter_changes']['enabled']:
             self.logger.info("Parameter changes disabled")
             return False
         
-        dry_run = self.solark_config.get('parameter_changes', {}).get('dry_run', False)
+        dry_run = self.solark_config['parameter_changes']['dry_run']
         
         try:
             self.logger.info(f"Applying {len(changes)} parameter changes (dry_run={dry_run})")
@@ -887,7 +890,7 @@ class SolArkCloud:
                     return False
             
             # Get current parameters for backup
-            if self.solark_config.get('parameter_changes', {}).get('backup_before_change', False):
+            if self.solark_config['parameter_changes']['backup_before_change']:
                 current_params = await self.get_parameters()
                 backup_file = self.cache_dir / f"backup_{self.current_plant_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
                 with open(backup_file, 'w') as f:

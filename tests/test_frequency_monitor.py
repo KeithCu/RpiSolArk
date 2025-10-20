@@ -139,7 +139,7 @@ def test_frequency_monitor_buffer_sizes(mock_offline, mock_restart, mock_tuning,
 
     classification_window = config.get_float('display.classification_window', 300)
     # In simulator mode, classification window is capped at 10 seconds
-    if config.get('app.simulator_mode', True):
+    if config['app']['simulator_mode']:
         classification_window = min(classification_window, 10)
     expected_class_buffer_size = int(classification_window * sample_rate)
 

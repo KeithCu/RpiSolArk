@@ -49,10 +49,13 @@ class DisplayManager:
                     self.logger.info("Creating LCD1602_RPLCD object...")
                     
                     # Get LCD configuration from config.yaml
-                    lcd_address = self.config.get('hardware.lcd_address', 0x27)
-                    lcd_port = self.config.get('hardware.lcd_port', 1)
-                    lcd_cols = self.config.get('hardware.lcd_cols', 16)
-                    lcd_rows = self.config.get('hardware.lcd_rows', 2)
+                    try:
+                        lcd_address = self.config['hardware']['lcd_address']
+                        lcd_port = self.config['hardware']['lcd_port']
+                        lcd_cols = self.config['hardware']['lcd_cols']
+                        lcd_rows = self.config['hardware']['lcd_rows']
+                    except KeyError as e:
+                        raise KeyError(f"Missing required hardware configuration key: {e}")
                     
                     self.logger.info(f"LCD config: address=0x{lcd_address:02x}, port={lcd_port}, cols={lcd_cols}, rows={lcd_rows}")
                     
@@ -69,7 +72,10 @@ class DisplayManager:
                     self.logger.info("Creating original LCD1602 object...")
                     
                     # Get LCD configuration from config.yaml
-                    lcd_address = self.config.get('hardware.lcd_address', 0x27)
+                    try:
+                        lcd_address = self.config['hardware']['lcd_address']
+                    except KeyError as e:
+                        raise KeyError(f"Missing required hardware configuration key: {e}")
                     
                     self.logger.info(f"LCD config: address=0x{lcd_address:02x}")
                     
@@ -98,7 +104,10 @@ class DisplayManager:
     def update_display(self, line1: str, line2: str):
         """Update LCD display."""
         # Always show simulation if configured to do so
-        simulate_display = self.config.get('app.simulate_display', True)
+        try:
+            simulate_display = self.config['app']['simulate_display']
+        except KeyError as e:
+            raise KeyError(f"Missing required app configuration key: {e}")
         
         self.logger.debug(f"update_display called: simulate_display={simulate_display}, lcd_available={self.lcd_available}, lcd={self.lcd is not None}")
         
@@ -221,8 +230,11 @@ class DisplayManager:
             if hasattr(self.hardware_manager, 'config'):
                 config = self.hardware_manager.config
                 if hasattr(config, 'get'):
-                    name = config.get(f'hardware.optocoupler.{optocoupler_type}.name', optocoupler_type.capitalize())
-                    return name
+                    try:
+                        name = config[f'hardware']['optocoupler'][optocoupler_type]['name']
+                        return name
+                    except KeyError:
+                        return optocoupler_type.capitalize()
         except Exception as e:
             self.logger.debug(f"Could not get optocoupler name: {e}")
         

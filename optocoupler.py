@@ -180,17 +180,30 @@ class OptocouplerManager:
         self.logger = logger
         self.gpio_available = GPIO_AVAILABLE
         
-        # Auto-detect single vs dual mode based on secondary GPIO pin
-        optocoupler_config = config.get('hardware', {}).get('optocoupler', {})
-        secondary_config = optocoupler_config.get('secondary', {})
-        secondary_pin = secondary_config.get('gpio_pin', -1)
+        # Get optocoupler configuration
+        try:
+            optocoupler_config = config['hardware']['optocoupler']
+            self.optocoupler_enabled = optocoupler_config['enabled']
+        except KeyError as e:
+            raise KeyError(f"Missing required configuration key: {e}")
         
-        # If secondary GPIO pin is -1, it's single mode, otherwise dual mode
-        self.dual_mode = secondary_pin != -1
-        self.optocoupler_enabled = optocoupler_config.get('enabled', True)
-        
-        # Choose measurement method to avoid GIL issues
-        self.measurement_method = optocoupler_config.get('measurement_method', 'interrupt')
+        # Only proceed with optocoupler setup if enabled
+        if self.optocoupler_enabled:
+            try:
+                secondary_config = optocoupler_config['secondary']
+                secondary_pin = secondary_config['gpio_pin']
+            except KeyError as e:
+                raise KeyError(f"Missing required secondary optocoupler configuration key: {e}")
+            
+            # If secondary GPIO pin is -1, it's single mode, otherwise dual mode
+            self.dual_mode = secondary_pin != -1
+            
+            # Choose measurement method to avoid GIL issues
+            self.measurement_method = optocoupler_config['measurement_method']
+        else:
+            # Optocoupler disabled - set defaults
+            self.dual_mode = False
+            self.measurement_method = 'interrupt'
         # Options: 'interrupt' (recommended), 'alternating' (fallback)
         
         # Initialize optocouplers
@@ -206,36 +219,44 @@ class OptocouplerManager:
     
     def _setup_optocouplers(self):
         """Setup optocouplers based on configuration."""
-        optocoupler_config = self.config.get('hardware', {}).get('optocoupler', {})
-        
-        # Always setup primary optocoupler
-        primary_config = optocoupler_config.get('primary', {})
-        if primary_config.get('enabled', True):
-            primary_pin = primary_config.get('gpio_pin', 26)
-            primary_pulses = primary_config.get('pulses_per_cycle', 2)
-            primary_duration = primary_config.get('measurement_duration', 2.0)
-            primary_name = primary_config.get('name', 'Primary')
+        if not self.optocoupler_enabled:
+            self.logger.info("Optocoupler disabled, skipping setup")
+            return
             
-            self.optocouplers['primary'] = SingleOptocoupler(
-                self.config, self.logger, primary_name, primary_pin, 
-                primary_pulses, primary_duration
-            )
-            self.logger.info(f"Primary optocoupler configured on pin {primary_pin}")
+        try:
+            optocoupler_config = self.config['hardware']['optocoupler']
+            
+            # Always setup primary optocoupler
+            primary_config = optocoupler_config['primary']
+            primary_pin = primary_config['gpio_pin']
+            primary_pulses = primary_config['pulses_per_cycle']
+            primary_duration = primary_config['measurement_duration']
+            primary_name = primary_config['name']
+        except KeyError as e:
+            raise KeyError(f"Missing required configuration key: {e}")
+        
+        self.optocouplers['primary'] = SingleOptocoupler(
+            self.config, self.logger, primary_name, primary_pin, 
+            primary_pulses, primary_duration
+        )
+        self.logger.info(f"Primary optocoupler configured on pin {primary_pin}")
         
         # Setup secondary optocoupler only if dual mode (secondary pin != -1)
         if self.dual_mode:
-            secondary_config = optocoupler_config.get('secondary', {})
-            if secondary_config.get('enabled', True):
-                secondary_pin = secondary_config.get('gpio_pin', 19)
-                secondary_pulses = secondary_config.get('pulses_per_cycle', 2)
-                secondary_duration = secondary_config.get('measurement_duration', 2.0)
-                secondary_name = secondary_config.get('name', 'Secondary')
-                
-                self.optocouplers['secondary'] = SingleOptocoupler(
-                    self.config, self.logger, secondary_name, secondary_pin, 
-                    secondary_pulses, secondary_duration
-                )
-                self.logger.info(f"Secondary optocoupler configured on pin {secondary_pin}")
+            try:
+                secondary_config = optocoupler_config['secondary']
+                secondary_pin = secondary_config['gpio_pin']
+                secondary_pulses = secondary_config['pulses_per_cycle']
+                secondary_duration = secondary_config['measurement_duration']
+                secondary_name = secondary_config['name']
+            except KeyError as e:
+                raise KeyError(f"Missing required secondary optocoupler configuration key: {e}")
+            
+            self.optocouplers['secondary'] = SingleOptocoupler(
+                self.config, self.logger, secondary_name, secondary_pin, 
+                secondary_pulses, secondary_duration
+            )
+            self.logger.info(f"Secondary optocoupler configured on pin {secondary_pin}")
         
         # Check if any optocouplers were initialized
         self.optocoupler_initialized = any(opt.initialized for opt in self.optocouplers.values())
@@ -296,6 +317,10 @@ class OptocouplerManager:
         Returns:
             Number of pulses counted
         """
+        if not self.optocoupler_enabled:
+            self.logger.debug("Optocoupler disabled, returning 0 pulses")
+            return 0
+            
         if optocoupler_name not in self.optocouplers:
             self.logger.warning(f"Optocoupler '{optocoupler_name}' not found")
             return 0
@@ -316,6 +341,10 @@ class OptocouplerManager:
         Returns:
             Calculated frequency in Hz, or None if invalid
         """
+        if not self.optocoupler_enabled:
+            self.logger.debug("Optocoupler disabled, returning None frequency")
+            return None
+            
         if optocoupler_name not in self.optocouplers:
             self.logger.warning(f"Optocoupler '{optocoupler_name}' not found")
             return None
@@ -335,6 +364,10 @@ class OptocouplerManager:
         Returns:
             Tuple of (primary_frequency, secondary_frequency) or (None, None) if not available
         """
+        if not self.optocoupler_enabled:
+            self.logger.debug("Optocoupler disabled, returning None frequencies")
+            return None, None
+            
         if not self.dual_mode:
             self.logger.warning("Dual mode not enabled, cannot get dual frequencies")
             return None, None
@@ -446,6 +479,10 @@ class OptocouplerManager:
         Returns:
             Tuple of (primary_frequency, secondary_frequency) or (None, None) if not available
         """
+        if not self.optocoupler_enabled:
+            self.logger.debug("Optocoupler disabled, returning None frequencies")
+            return None, None
+            
         if not self.dual_mode:
             self.logger.warning("Dual mode not enabled, cannot get dual frequencies")
             return None, None
@@ -485,6 +522,8 @@ class OptocouplerManager:
     
     def get_available_optocouplers(self) -> List[str]:
         """Get list of available optocoupler names."""
+        if not self.optocoupler_enabled:
+            return []
         return [name for name, opt in self.optocouplers.items() if opt.initialized]
     
     def is_dual_mode(self) -> bool:

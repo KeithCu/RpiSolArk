@@ -40,9 +40,9 @@ class SolArkIntegration:
         self.solark_config = self.solark_cloud.solark_config
         
         # Integration settings
-        self.enabled = self.solark_config.get('enabled', False)
-        self.sync_interval = self.solark_config.get('sync_interval', 300)  # 5 minutes
-        self.parameter_changes_enabled = self.solark_config.get('parameter_changes', {}).get('enabled', False)
+        self.enabled = self.solark_config['enabled']
+        self.sync_interval = self.solark_config['sync_interval']  # 5 minutes
+        self.parameter_changes_enabled = self.solark_config['parameter_changes']['enabled']
         
         # State tracking
         self.last_power_source = None

@@ -90,5 +90,5 @@ def test_state_timeout(state_machine):
 
 def test_reset_button_config(config):
     """Test reset button configuration."""
-    reset_pin = config.get('hardware.reset_button', None)
+    reset_pin = config['hardware']['reset_button']
     assert reset_pin == 22, f"Reset button pin should be 22, got {reset_pin}"

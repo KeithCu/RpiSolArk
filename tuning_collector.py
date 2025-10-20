@@ -19,25 +19,28 @@ class TuningDataCollector:
     def __init__(self, config, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.tuning_config = config.get('tuning', {})
-        
-        # Tuning mode settings
-        self.enabled = self.tuning_config.get('enabled', False)
-        self.detailed_logging = self.tuning_config.get('detailed_logging', False)
-        self.sample_interval = self.tuning_config.get('sample_interval', 0.1)
-        self.analysis_interval = self.tuning_config.get('analysis_interval', 1.0)
-        self.data_file = self.tuning_config.get('data_file', 'tuning_data.csv')
-        self.analysis_file = self.tuning_config.get('analysis_file', 'tuning_analysis.csv')
-        self.collection_duration = self.tuning_config.get('collection_duration', 3600)
-        self.auto_stop = self.tuning_config.get('auto_stop', True)
-        self.export_format = self.tuning_config.get('export_format', 'csv')
-        
-        # Data collection settings
-        self.include_raw_data = self.tuning_config.get('include_raw_data', True)
-        self.include_analysis = self.tuning_config.get('include_analysis', True)
-        self.include_classification = self.tuning_config.get('include_classification', True)
-        self.include_timestamps = self.tuning_config.get('include_timestamps', True)
-        self.buffer_analysis = self.tuning_config.get('buffer_analysis', True)
+        try:
+            self.tuning_config = config['tuning']
+            
+            # Tuning mode settings
+            self.enabled = self.tuning_config['enabled']
+            self.detailed_logging = self.tuning_config['detailed_logging']
+            self.sample_interval = self.tuning_config['sample_interval']
+            self.analysis_interval = self.tuning_config['analysis_interval']
+            self.data_file = self.tuning_config['data_file']
+            self.analysis_file = self.tuning_config['analysis_file']
+            self.collection_duration = self.tuning_config['collection_duration']
+            self.auto_stop = self.tuning_config['auto_stop']
+            self.export_format = self.tuning_config['export_format']
+            
+            # Data collection settings
+            self.include_raw_data = self.tuning_config['include_raw_data']
+            self.include_analysis = self.tuning_config['include_analysis']
+            self.include_classification = self.tuning_config['include_classification']
+            self.include_timestamps = self.tuning_config['include_timestamps']
+            self.buffer_analysis = self.tuning_config['buffer_analysis']
+        except KeyError as e:
+            raise KeyError(f"Missing required tuning configuration key: {e}")
         
         # Collection state
         self.start_time = None
@@ -261,10 +264,13 @@ class TuningDataCollector:
             return 0.0
         
         # Simple confidence calculation based on how far values are from thresholds
-        thresholds = self.config.get('analysis.generator_thresholds', {})
-        avar_thresh = thresholds.get('allan_variance', 5e-10)
-        std_thresh = thresholds.get('std_dev', 0.08)
-        kurt_thresh = thresholds.get('kurtosis', 0.4)
+        try:
+            thresholds = self.config['analysis']['generator_thresholds']
+            avar_thresh = thresholds['allan_variance']
+            std_thresh = thresholds['std_dev']
+            kurt_thresh = thresholds['kurtosis']
+        except KeyError as e:
+            raise KeyError(f"Missing required analysis configuration key: {e}")
         
         avar = analysis_results.get('allan_variance', 0)
         std_dev = analysis_results.get('std_deviation', 0)
@@ -286,13 +292,13 @@ class TuningDataCollector:
     
     def _get_current_thresholds(self) -> str:
         """Get current threshold values as string."""
-        thresholds = self.config.get('analysis.generator_thresholds', {})
         try:
-            avar = float(thresholds.get('allan_variance', 0))
-            std = float(thresholds.get('std_dev', 0))
-            kurt = float(thresholds.get('kurtosis', 0))
+            thresholds = self.config['analysis']['generator_thresholds']
+            avar = float(thresholds['allan_variance'])
+            std = float(thresholds['std_dev'])
+            kurt = float(thresholds['kurtosis'])
             return f"avar={avar:.2e},std={std:.3f},kurt={kurt:.2f}"
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, KeyError) as e:
             return "avar=0.00e+00,std=0.000,kurt=0.00"
     
     def stop_collection(self):
