@@ -656,10 +656,10 @@ class FrequencyMonitor:
 
                     if variation < 0.1 and 59.9 <= avg_freq <= 60.1:
                         source = "Utility Grid"  # Quick stable detection
-                    elif variation > 0.5:
+                    elif variation > 2.0:  # Increased threshold for utility power (was 0.5)
                         source = "Generac Generator"  # Quick unstable detection
                     else:
-                        source = "Unknown"
+                        source = "Unknown"  # Default to Unknown for moderate variation
                     avar_10s, std_freq, kurtosis = None, None, None
                 else:
                     self.logger.debug("Not enough samples for analysis")

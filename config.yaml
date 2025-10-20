@@ -23,7 +23,7 @@ hardware:
       name: "Mechanical"   # Display name for primary optocoupler
     secondary:
       enabled: true     # Enable secondary optocoupler (set gpio_pin to -1 to disable)
-      gpio_pin: 19      # GPIO pin for secondary optocoupler input (H11AA1), set to -1 for single optocoupler mode
+      gpio_pin: -1      # GPIO pin for secondary optocoupler input (H11AA1), set to -1 for single optocoupler mode
       pulses_per_cycle: 2 # H11AA1 gives 2 pulses per AC cycle
       measurement_duration: 1.0  # Duration in seconds for frequency measurement
       name: "Lights" # Display name for secondary optocoupler
@@ -39,10 +39,10 @@ sampling:
 analysis:
   allan_variance_tau: 10.0  # seconds for Allan variance calculation - Matches generator cycles
   generator_thresholds:
-    # Based on real-world generator data analysis
-    allan_variance: 1e-4    # Adjusted for realistic utility vs generator detection
-    std_dev: 0.08           # Standard deviation threshold (Hz) - Accounts for generator variation
-    kurtosis: 0.4           # Kurtosis threshold - Detects frequency hunting patterns
+    # Based on real-world generator data analysis - Adjusted for utility power sensitivity
+    allan_variance: 0.01    # Increased threshold for utility power (was 1e-4)
+    std_dev: 1.0            # Increased threshold for utility power (was 0.08)
+    kurtosis: 2.0           # Increased threshold for utility power (was 0.4)
 
 # State Machine Configuration
 state_machine:
