@@ -6,14 +6,12 @@
  */
 
 #include <Python.h>
-#include <pthread.h>
 #include <stdint.h>
 #include <time.h>
 
 // Global counters for each GPIO pin (max 4 pins)
 static volatile uint64_t pulse_counts[4] = {0};
 static volatile int pin_mapping[4] = {-1, -1, -1, -1};
-static pthread_mutex_t counter_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int counter_initialized = 0;
 
 // Initialize the counter system
@@ -34,19 +32,15 @@ static int init_counters() {
 static int register_pin(int pin) {
     if (!init_counters()) return 0;
     
-    pthread_mutex_lock(&counter_mutex);
-    
     // Find available slot
     for (int i = 0; i < 4; i++) {
         if (pin_mapping[i] == -1) {
             pin_mapping[i] = pin;
             pulse_counts[i] = 0;
-            pthread_mutex_unlock(&counter_mutex);
             return i;
         }
     }
     
-    pthread_mutex_unlock(&counter_mutex);
     return -1; // No available slots
 }
 
@@ -54,17 +48,12 @@ static int register_pin(int pin) {
 static uint64_t get_count(int pin) {
     if (!counter_initialized) return 0;
     
-    pthread_mutex_lock(&counter_mutex);
-    
     for (int i = 0; i < 4; i++) {
         if (pin_mapping[i] == pin) {
-            uint64_t count = pulse_counts[i];
-            pthread_mutex_unlock(&counter_mutex);
-            return count;
+            return pulse_counts[i];
         }
     }
     
-    pthread_mutex_unlock(&counter_mutex);
     return 0;
 }
 
@@ -72,16 +61,12 @@ static uint64_t get_count(int pin) {
 static void reset_count(int pin) {
     if (!counter_initialized) return;
     
-    pthread_mutex_lock(&counter_mutex);
-    
     for (int i = 0; i < 4; i++) {
         if (pin_mapping[i] == pin) {
             pulse_counts[i] = 0;
             break;
         }
     }
-    
-    pthread_mutex_unlock(&counter_mutex);
 }
 
 // Increment count for a pin (called from interrupt)
