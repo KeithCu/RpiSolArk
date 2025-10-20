@@ -209,6 +209,26 @@ class FrequencyAnalyzer:
         # Fall back to original zero-crossing method
         return self._count_zero_crossings_original(duration)
     
+    def get_dual_frequencies(self, duration: float = 2.0) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Get frequency readings from both optocouplers simultaneously.
+        Returns tuple of (primary_frequency, secondary_frequency).
+        """
+        if not hasattr(self, 'hardware_manager'):
+            # In simulator mode, return simulated frequencies
+            primary_freq = self._simulate_frequency()
+            secondary_freq = self._simulate_frequency()
+            return primary_freq, secondary_freq
+        
+        # Check if dual optocoupler mode is enabled
+        if (hasattr(self.hardware_manager, 'is_dual_optocoupler_mode') and 
+            self.hardware_manager.is_dual_optocoupler_mode()):
+            return self._count_dual_optocoupler_frequencies(duration)
+        
+        # Fall back to single optocoupler mode
+        primary_freq = self._count_optocoupler_frequency(duration)
+        return primary_freq, None
+    
     def _count_optocoupler_frequency(self, duration: float = 2.0) -> Optional[float]:
         """
         Optimized 2-second optocoupler frequency measurement.
@@ -243,6 +263,34 @@ class FrequencyAnalyzer:
         except Exception as e:
             self.logger.error(f"Error in optocoupler frequency measurement: {e}")
             return None
+    
+    def _count_dual_optocoupler_frequencies(self, duration: float = 2.0) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Get frequency readings from both optocouplers simultaneously.
+        Returns tuple of (primary_frequency, secondary_frequency).
+        """
+        try:
+            # Use hardware manager's dual frequency method
+            primary_freq, secondary_freq = self.hardware_manager.get_dual_frequencies(duration, debounce_time=0.0)
+            
+            # Validate frequency ranges for both readings
+            min_freq = self.config.get('sampling.min_freq', 40.0)
+            max_freq = self.config.get('sampling.max_freq', 80.0)
+            
+            if primary_freq is not None and (primary_freq < min_freq or primary_freq > max_freq):
+                self.logger.warning(f"Invalid primary frequency reading: {primary_freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
+                primary_freq = None
+            
+            if secondary_freq is not None and (secondary_freq < min_freq or secondary_freq > max_freq):
+                self.logger.warning(f"Invalid secondary frequency reading: {secondary_freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
+                secondary_freq = None
+            
+            self.logger.debug(f"Dual optocoupler frequencies: Primary={primary_freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
+            return primary_freq, secondary_freq
+            
+        except Exception as e:
+            self.logger.error(f"Error in dual optocoupler frequency measurement: {e}")
+            return None, None
     
     def _count_zero_crossings_original(self, duration: float = 0.5) -> Optional[float]:
         """Original zero-crossing counting method (fallback)."""
@@ -444,6 +492,13 @@ class FrequencyMonitor:
         self.freq_buffer = deque(maxlen=buffer_size)
         self.time_buffer = deque(maxlen=buffer_size)
         
+        # Initialize dual optocoupler buffers if dual mode is enabled
+        self.dual_mode = (hasattr(self.hardware, 'is_dual_optocoupler_mode') and 
+                         self.hardware.is_dual_optocoupler_mode())
+        if self.dual_mode:
+            self.secondary_freq_buffer = deque(maxlen=buffer_size)
+            self.logger.info("Dual optocoupler mode enabled - tracking both primary and secondary frequencies")
+        
         # Initialize power source classification buffer for U/G indicator
         classification_window = self.config.get_float('display.classification_window', 300)  # 5 minutes default
         
@@ -513,11 +568,21 @@ class FrequencyMonitor:
             while self.running:
                 current_time = time.time() - self.start_time
                 
-                # Get frequency reading
+                # Get frequency reading(s)
                 if simulator_mode:
                     freq = self.analyzer._simulate_frequency()
+                    secondary_freq = None  # No secondary in simulator mode
                 else:
-                    freq = self.analyzer.count_zero_crossings(duration=2.0)  # Optimized 2-second measurement with no averaging
+                    # Check if dual optocoupler mode is enabled
+                    if (hasattr(self.hardware, 'is_dual_optocoupler_mode') and 
+                        self.hardware.is_dual_optocoupler_mode()):
+                        # Get dual frequency readings
+                        freq, secondary_freq = self.analyzer.get_dual_frequencies(duration=2.0)
+                        self.logger.debug(f"Dual optocoupler readings: Primary={freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
+                    else:
+                        # Single optocoupler mode
+                        freq = self.analyzer.count_zero_crossings(duration=2.0)  # Optimized 2-second measurement with no averaging
+                        secondary_freq = None
 
                 # Track zero voltage duration
                 self.logger.debug("Tracking zero voltage duration...")
@@ -549,6 +614,11 @@ class FrequencyMonitor:
                     self.freq_buffer.append(freq)
                     self.time_buffer.append(current_time)
                     self.sample_count += 1
+                    
+                    # Update secondary frequency buffer if in dual mode
+                    if self.dual_mode and secondary_freq is not None:
+                        self.secondary_freq_buffer.append(secondary_freq)
+                        self.logger.debug(f"Updated dual frequency buffers: Primary={freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
 
                 self.logger.debug("Updating health monitor...")
                 self.health_monitor.update_activity()
@@ -634,7 +704,9 @@ class FrequencyMonitor:
                 if current_time - self.last_display_time >= display_interval:
                     self.logger.debug("Updating display and LEDs...")
                     ug_indicator = self._get_current_power_source_indicator()
-                    self.hardware.display.update_display_and_leds(freq, ug_indicator, self.state_machine, self.zero_voltage_duration)
+                    # Pass secondary frequency if in dual mode
+                    secondary_freq = secondary_freq if self.dual_mode else None
+                    self.hardware.display.update_display_and_leds(freq, ug_indicator, self.state_machine, self.zero_voltage_duration, secondary_freq)
                     self.last_display_time = current_time
                 
                 # Memory monitoring and cleanup

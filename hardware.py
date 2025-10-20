@@ -5,7 +5,7 @@ Coordinates all hardware components with graceful degradation.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 # Import hardware component managers
 from display import DisplayManager
@@ -39,13 +39,27 @@ class HardwareManager:
     
     # Delegate methods to component managers for backward compatibility
     
-    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> int:
+    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
+                                 optocoupler_name: str = 'primary') -> int:
         """Count optocoupler pulses over specified duration."""
-        return self.optocoupler.count_optocoupler_pulses(duration, debounce_time)
+        return self.optocoupler.count_optocoupler_pulses(duration, debounce_time, optocoupler_name)
     
-    def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:
+    def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, 
+                                       optocoupler_name: str = 'primary') -> Optional[float]:
         """Calculate AC frequency from pulse count."""
-        return self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration)
+        return self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration, optocoupler_name)
+    
+    def get_dual_frequencies(self, duration: float = None, debounce_time: float = 0.0) -> Tuple[Optional[float], Optional[float]]:
+        """Get frequency readings from both optocouplers simultaneously."""
+        return self.optocoupler.get_dual_frequencies(duration, debounce_time)
+    
+    def is_dual_optocoupler_mode(self) -> bool:
+        """Check if dual optocoupler mode is enabled."""
+        return self.optocoupler.is_dual_mode()
+    
+    def get_available_optocouplers(self) -> list:
+        """Get list of available optocoupler names."""
+        return self.optocoupler.get_available_optocouplers()
     
     def read_gpio(self) -> int:
         """Read GPIO pin state."""
