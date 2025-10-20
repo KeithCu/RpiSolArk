@@ -14,6 +14,7 @@ hardware:
   # Optocoupler Configuration
   optocoupler:
     enabled: true       # Enable optocoupler falling edge detection
+    measurement_method: "interrupt"  # Method for dual optocoupler measurement: "interrupt" (recommended) or "alternating" (fallback)
     primary:
       enabled: true     # Enable primary optocoupler
       gpio_pin: 26      # GPIO pin for primary optocoupler input (H11AA1)
