@@ -127,8 +127,8 @@ class SingleOptocoupler:
         while time.perf_counter() - start_time < duration:
             # Check for interrupts and update counters (GIL-free)
             self.counter.check_interrupts()
-            # Small sleep to prevent busy waiting
-            time.sleep(0.001)  # 1ms sleep for reasonable CPU usage
+            # Optimized sleep for better performance - reduced from 1ms to 100μs
+            time.sleep(0.0001)  # 100μs sleep for faster response while preventing busy waiting
         
         # Get final count from C extension
         pulse_count = self.counter.get_count(self.pin)

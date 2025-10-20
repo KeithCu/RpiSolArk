@@ -160,27 +160,23 @@ static void reset_count(int pin) {
 static void check_interrupts() {
     if (!counter_initialized || gpio_map == NULL) return;
     
-    // Check for falling edge events on all registered pins
-    uint32_t events0 = gpio_map[GPEDS0/4];
-    uint32_t events1 = gpio_map[GPEDS1/4];
+    // Batch memory reads for both event registers in one operation
+    volatile uint32_t events0 = gpio_map[GPEDS0/4];
+    volatile uint32_t events1 = gpio_map[GPEDS1/4];
     
-    // Clear events and increment counters
-    if (events0) {
-        gpio_map[GPEDS0/4] = events0;  // Clear events by writing back
+    // Process all events in one pass if any are detected
+    if (events0 || events1) {
+        // Clear events immediately after reading
+        gpio_map[GPEDS0/4] = events0;
+        gpio_map[GPEDS1/4] = events1;
+        
+        // Process all pins in one loop for better cache efficiency
         for (int i = 0; i < 4; i++) {
-            if (pin_mapping[i] != -1 && pin_mapping[i] < 32) {
-                if (events0 & (1 << pin_mapping[i])) {
+            if (pin_mapping[i] != -1) {
+                int pin = pin_mapping[i];
+                if (pin < 32 && (events0 & (1 << pin))) {
                     pulse_counts[i]++;
-                }
-            }
-        }
-    }
-    
-    if (events1) {
-        gpio_map[GPEDS1/4] = events1;  // Clear events by writing back
-        for (int i = 0; i < 4; i++) {
-            if (pin_mapping[i] != -1 && pin_mapping[i] >= 32) {
-                if (events1 & (1 << (pin_mapping[i] - 32))) {
+                } else if (pin >= 32 && (events1 & (1 << (pin - 32)))) {
                     pulse_counts[i]++;
                 }
             }

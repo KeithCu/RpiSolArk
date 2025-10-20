@@ -392,7 +392,7 @@ class FrequencyAnalyzer:
             if state != prev_state and state == 1:  # Rising edge
                 count += 1
             prev_state = state
-            time.sleep(0.0001)  # Avoid CPU overload
+            time.sleep(0.00005)  # 50μs sleep for faster polling while avoiding CPU overload
         
         freq = count / (2 * duration)
         
