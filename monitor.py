@@ -88,6 +88,46 @@ class PowerStateMachine:
                 self._transition_to_state(PowerState.OFF_GRID)
 
         return self.current_state
+    
+    def update_state_with_confidence(self, frequency: Optional[float], power_source: str, 
+                                   confidence: float, zero_voltage_duration: float) -> PowerState:
+        """Update state with confidence-based logic for maximum accuracy."""
+        
+        # Add confidence tracking to state machine
+        if not hasattr(self, 'confidence_history'):
+            self.confidence_history = deque(maxlen=10)
+        
+        self.confidence_history.append(confidence)
+        avg_confidence = sum(self.confidence_history) / len(self.confidence_history)
+        
+        # Only transition if confidence is high enough
+        if avg_confidence < 0.6:
+            self.logger.debug(f"Low confidence ({avg_confidence:.2f}), maintaining current state")
+            return self.current_state
+        
+        # Enhanced state determination with confidence
+        if zero_voltage_duration >= self.zero_voltage_threshold:
+            new_state = PowerState.OFF_GRID
+        elif frequency is None:
+            new_state = PowerState.TRANSITIONING
+        elif power_source == "Utility Grid" and avg_confidence > 0.8:
+            new_state = PowerState.GRID
+        elif power_source == "Generac Generator" and avg_confidence > 0.8:
+            new_state = PowerState.GENERATOR
+        else:
+            new_state = PowerState.TRANSITIONING
+        
+        # Check if state changed
+        if new_state != self.current_state:
+            self._transition_to_state(new_state)
+
+        # Check for transition timeout
+        elif self.current_state == PowerState.TRANSITIONING:
+            if time.time() - self.state_entry_time > self.transition_timeout:
+                self.logger.warning(f"Transition timeout exceeded, forcing to OFF_GRID")
+                self._transition_to_state(PowerState.OFF_GRID)
+
+        return self.current_state
 
     def _determine_state(self, frequency: Optional[float], power_source: str,
                         zero_voltage_duration: float) -> PowerState:
@@ -208,6 +248,50 @@ class FrequencyAnalyzer:
         
         # Fall back to original zero-crossing method
         return self._count_zero_crossings_original(duration)
+    
+    def validate_signal_quality(self, freq: Optional[float], pulse_count: int, duration: float) -> bool:
+        """Comprehensive signal quality validation for maximum accuracy."""
+        if freq is None:
+            return False
+        
+        # Check 1: Frequency range validation
+        min_freq = self.config.get('sampling.min_freq', 40.0)
+        max_freq = self.config.get('sampling.max_freq', 80.0)
+        if not (min_freq <= freq <= max_freq):
+            self.logger.warning(f"Frequency {freq:.2f}Hz outside valid range {min_freq}-{max_freq}Hz")
+            return False
+        
+        # Check 2: Pulse count reasonableness
+        expected_min = int(duration * 50 * 2)  # 50Hz * 2 pulses/cycle
+        expected_max = int(duration * 70 * 2)  # 70Hz * 2 pulses/cycle
+        if not (expected_min <= pulse_count <= expected_max):
+            self.logger.warning(f"Pulse count {pulse_count} unreasonable for {duration:.1f}s (expected {expected_min}-{expected_max})")
+            return False
+        
+        # Check 3: Signal stability (if we have recent history)
+        if hasattr(self, 'freq_buffer') and len(self.freq_buffer) >= 3:
+            recent_freqs = list(self.freq_buffer)[-3:]
+            freq_std = np.std(recent_freqs)
+            if freq_std > 2.0:  # >2Hz standard deviation indicates noise
+                self.logger.warning(f"High frequency variation detected: {freq_std:.2f}Hz std dev")
+                return False
+        
+        return True
+    
+    def validate_frequency_reading(self, freq: Optional[float], pulse_count: int, duration: float) -> Optional[float]:
+        """Comprehensive frequency reading validation with multi-layer checks."""
+        # Multi-layer validation
+        if not self.validate_signal_quality(freq, pulse_count, duration):
+            return None
+        
+        # Additional checks for sudden jumps
+        if freq and hasattr(self, 'freq_buffer') and len(self.freq_buffer) >= 5:
+            recent_freqs = list(self.freq_buffer)[-5:]
+            if abs(freq - np.mean(recent_freqs)) > 5.0:  # >5Hz jump
+                self.logger.warning(f"Sudden frequency jump detected: {freq:.2f}Hz")
+                return None
+        
+        return freq
     
     def get_dual_frequencies(self, duration: float = 2.0) -> Tuple[Optional[float], Optional[float]]:
         """
@@ -428,6 +512,38 @@ class FrequencyAnalyzer:
             self.logger.error(f"Error in stability analysis: {e}")
             return None, None, None
     
+    def analyze_signal_quality(self, freq_data: List[float]) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+        """Enhanced signal quality analysis for maximum accuracy."""
+        if len(freq_data) < 10:
+            return None, None, None, None
+        
+        freq_array = np.array(freq_data)
+        
+        # Standard metrics
+        frac_freq = (freq_array - 60.0) / 60.0
+        avar_10s, std_freq, kurtosis = self.analyze_stability(frac_freq)
+        
+        # Additional accuracy metrics
+        freq_range = np.max(freq_array) - np.min(freq_array)
+        freq_trend = np.polyfit(range(len(freq_array)), freq_array, 1)[0]  # Linear trend
+        
+        # Signal quality score (0-1, higher is better)
+        quality_score = self._calculate_signal_quality(freq_array, std_freq, freq_range)
+        
+        return avar_10s, std_freq, kurtosis, quality_score
+    
+    def _calculate_signal_quality(self, freq_array: np.ndarray, std_freq: float, freq_range: float) -> float:
+        """Calculate signal quality score for accuracy assessment."""
+        # Utility grid should have low std dev and small range
+        if std_freq < 0.1 and freq_range < 0.5:
+            return 1.0  # Excellent signal quality
+        elif std_freq < 0.5 and freq_range < 2.0:
+            return 0.8  # Good signal quality
+        elif std_freq < 1.0 and freq_range < 5.0:
+            return 0.6  # Fair signal quality
+        else:
+            return 0.3  # Poor signal quality
+    
     def classify_power_source(self, avar_10s: Optional[float], std_freq: Optional[float], 
                             kurtosis: Optional[float]) -> str:
         """Classify as Generac generator or utility."""
@@ -451,6 +567,39 @@ class FrequencyAnalyzer:
         if avar_10s > avar_thresh or std_freq > std_thresh or kurtosis > kurt_thresh:
             return "Generac Generator"
         return "Utility Grid"
+    
+    def classify_power_source_with_confidence(self, avar_10s: Optional[float], std_freq: Optional[float], 
+                                            kurtosis: Optional[float], quality_score: Optional[float]) -> Tuple[str, float]:
+        """Classify power source with confidence scoring for maximum accuracy."""
+        if any(x is None for x in [avar_10s, std_freq, kurtosis]):
+            return "Unknown", 0.0
+        
+        # Get thresholds
+        avar_thresh = self.thresholds.get('allan_variance', 1e-9)
+        std_thresh = self.thresholds.get('std_dev', 0.05)
+        kurt_thresh = self.thresholds.get('kurtosis', 0.5)
+        
+        # Calculate confidence based on how far values are from thresholds
+        avar_confidence = min(1.0, avar_10s / avar_thresh) if avar_10s > avar_thresh else 0.0
+        std_confidence = min(1.0, std_freq / std_thresh) if std_freq > std_thresh else 0.0
+        kurt_confidence = min(1.0, kurtosis / kurt_thresh) if kurtosis > kurt_thresh else 0.0
+        
+        # Weight by signal quality
+        quality_weight = quality_score if quality_score else 0.5
+        
+        # Generator indicators
+        generator_indicators = [avar_confidence, std_confidence, kurt_confidence]
+        max_confidence = max(generator_indicators)
+        
+        # Apply quality weighting
+        final_confidence = max_confidence * quality_weight
+        
+        if final_confidence > 0.7:
+            return "Generac Generator", final_confidence
+        elif final_confidence < 0.3:
+            return "Utility Grid", 1.0 - final_confidence
+        else:
+            return "Unknown", 0.5
 
 
 class FrequencyMonitor:
@@ -596,7 +745,7 @@ class FrequencyMonitor:
                     self.zero_voltage_start_time = None
                     self.zero_voltage_duration = 0.0
 
-                # Validate frequency reading
+                # Validate frequency reading with enhanced accuracy checks
                 self.logger.debug("Validating frequency reading...")
                 if freq is None:
                     self.logger.warning(f"No frequency reading (zero voltage duration: {self.zero_voltage_duration:.1f}s)")
@@ -607,6 +756,14 @@ class FrequencyMonitor:
                 elif np.isnan(freq) or np.isinf(freq):
                     self.logger.error(f"Invalid frequency value: {freq}")
                     continue
+                else:
+                    # Enhanced validation for accuracy
+                    pulse_count = getattr(self, 'last_pulse_count', 0)  # Get from optocoupler if available
+                    validated_freq = self.analyzer.validate_frequency_reading(freq, pulse_count, 2.0)
+                    if validated_freq is None:
+                        self.logger.warning(f"Frequency reading failed validation: {freq:.2f}Hz")
+                        continue
+                    freq = validated_freq
                 
                 # Update buffers only with valid frequency readings
                 self.logger.debug("Updating buffers...")
@@ -625,11 +782,12 @@ class FrequencyMonitor:
 
                 # Analyze data only if we have enough samples
                 self.logger.debug("Analyzing data...")
+                confidence = 0.0
                 if freq is None:
                     # No frequency reading - classify as Unknown
                     self.logger.debug("No frequency reading - classifying as Unknown")
                     source = "Unknown"
-                    avar_10s, std_freq, kurtosis = None, None, None
+                    avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
                     
                     # Clear classification buffer when signal is lost to show "?" immediately
                     if len(self.classification_buffer) > 0:
@@ -637,12 +795,12 @@ class FrequencyMonitor:
                         self.classification_buffer.clear()
                 elif len(self.freq_buffer) >= 10:
                     self.logger.debug("Full analysis with 10+ samples")
-                    frac_freq = (np.array(self.freq_buffer) - 60.0) / 60.0
-                    avar_10s, std_freq, kurtosis = self.analyzer.analyze_stability(frac_freq)
-                    source = self.analyzer.classify_power_source(avar_10s, std_freq, kurtosis)
+                    # Use enhanced signal quality analysis
+                    avar_10s, std_freq, kurtosis, quality_score = self.analyzer.analyze_signal_quality(list(self.freq_buffer))
+                    source, confidence = self.analyzer.classify_power_source_with_confidence(avar_10s, std_freq, kurtosis, quality_score)
                     
-                    # Debug logging for classification
-                    self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, kurtosis={kurtosis}, source={source}")
+                    # Debug logging for classification with confidence
+                    self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, kurtosis={kurtosis}, quality={quality_score}, source={source}, confidence={confidence:.2f}")
                     if len(self.freq_buffer) >= 5:
                         recent_freqs = list(self.freq_buffer)[-5:]
                         freq_range = max(recent_freqs) - min(recent_freqs)
@@ -656,23 +814,27 @@ class FrequencyMonitor:
 
                     if variation < 0.1 and 59.9 <= avg_freq <= 60.1:
                         source = "Utility Grid"  # Quick stable detection
+                        confidence = 0.9
                     elif variation > 2.0:  # Increased threshold for utility power (was 0.5)
                         source = "Generac Generator"  # Quick unstable detection
+                        confidence = 0.8
                     else:
                         source = "Unknown"  # Default to Unknown for moderate variation
-                    avar_10s, std_freq, kurtosis = None, None, None
+                        confidence = 0.3
+                    avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
                 else:
                     self.logger.debug("Not enough samples for analysis")
                     # Not enough data for analysis yet
-                    avar_10s, std_freq, kurtosis = None, None, None
+                    avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
                     source = "Unknown"
+                    confidence = 0.0
 
                 # Update classification buffer immediately after analysis
                 self.classification_buffer.append(source)
                 
-                # Update state machine with current conditions
+                # Update state machine with current conditions using confidence-based logic
                 self.logger.debug("Updating state machine...")
-                current_state = self.state_machine.update_state(freq, source, self.zero_voltage_duration)
+                current_state = self.state_machine.update_state_with_confidence(freq, source, confidence, self.zero_voltage_duration)
                 
                 # Collect tuning data if enabled
                 self.logger.debug("Collecting tuning data...")
@@ -690,12 +852,17 @@ class FrequencyMonitor:
                 analysis_results = {
                     'allan_variance': avar_10s,
                     'std_deviation': std_freq,
-                    'kurtosis': kurtosis
+                    'kurtosis': kurtosis,
+                    'quality_score': quality_score,
+                    'confidence': confidence
                 }
                 self.data_logger.log_detailed_frequency_data(
                     freq, analysis_results, source, self.sample_count, 
                     len(self.freq_buffer), self.start_time
                 )
+                
+                # Log accuracy metrics for debugging
+                self.log_accuracy_metrics(freq, source, confidence, analysis_results)
                 
                 # Update display and LEDs once per second
                 self.logger.debug("Checking display update...")
@@ -796,6 +963,19 @@ class FrequencyMonitor:
             self.logger.debug(f"Recent classifications: {recent_classifications}")
         
         return indicator
+
+    def log_accuracy_metrics(self, freq: Optional[float], source: str, confidence: float, analysis_results: Dict[str, Any]):
+        """Log detailed accuracy metrics for debugging."""
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"Accuracy Metrics: freq={freq:.3f}Hz, source={source}, "
+                             f"confidence={confidence:.2f}, avar={analysis_results.get('allan_variance', 'N/A')}, "
+                             f"std={analysis_results.get('std_deviation', 'N/A')}, "
+                             f"quality={analysis_results.get('quality_score', 'N/A')}")
+            
+            # Log confidence history if available
+            if hasattr(self.state_machine, 'confidence_history') and len(self.state_machine.confidence_history) > 0:
+                avg_confidence = sum(self.state_machine.confidence_history) / len(self.state_machine.confidence_history)
+                self.logger.debug(f"Confidence History: avg={avg_confidence:.2f}, recent={list(self.state_machine.confidence_history)[-3:]}")
 
     def _handle_reset(self):
         """Handle reset button press - restart the application."""
