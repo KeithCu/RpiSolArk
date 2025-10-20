@@ -19,13 +19,8 @@ except ImportError:
     GPIO_AVAILABLE = False
     print("Warning: RPi.GPIO not available. Running in simulation mode.")
 
-# GIL-safe counter imports
-try:
-    from gil_safe_counter import create_counter
-    COUNTER_AVAILABLE = True
-except ImportError:
-    COUNTER_AVAILABLE = False
-    print("Warning: GIL-safe counter not available. Using fallback implementation.")
+# GIL-safe counter imports (required)
+from gil_safe_counter import create_counter
 
 
 class SingleOptocoupler:
@@ -46,15 +41,9 @@ class SingleOptocoupler:
         self.pulse_count_lock = threading.Lock()
         self.initialized = False
         
-        # Initialize GIL-safe counter if available
-        self.counter = None
-        if COUNTER_AVAILABLE:
-            try:
-                self.counter = create_counter(self.logger)
-                self.logger.info(f"GIL-safe counter initialized for {self.name}")
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize GIL-safe counter: {e}")
-                self.counter = None
+        # Initialize GIL-safe counter (required)
+        self.counter = create_counter(self.logger)
+        self.logger.info(f"GIL-safe counter initialized for {self.name}")
         
         if self.gpio_available:
             self._setup_optocoupler()
@@ -87,20 +76,14 @@ class SingleOptocoupler:
             initial_state = GPIO.input(self.pin)
             self.logger.info(f"{self.name} optocoupler pin {self.pin} initial state: {initial_state}")
             
-            # Set up interrupt-based pulse detection
+            # Set up GIL-free interrupt detection using C extension
             try:
-                if self.counter and self.counter.gpio_available:
-                    # Use GIL-safe counter for interrupt detection
-                    if self.counter.setup_gpio_interrupt(self.pin):
-                        self.logger.info(f"{self.name} optocoupler GIL-safe interrupt detection configured")
-                    else:
-                        raise Exception("GIL-safe counter setup failed")
+                if self.counter.setup_gpio_interrupt(self.pin):
+                    self.logger.info(f"{self.name} optocoupler GIL-free interrupt detection configured")
                 else:
-                    # Fallback to Python callback (has GIL issues but works)
-                    GPIO.add_event_detect(self.pin, GPIO.FALLING, callback=self._optocoupler_callback)
-                    self.logger.info(f"{self.name} optocoupler Python interrupt detection configured")
+                    raise Exception("GIL-free counter setup failed")
             except Exception as e:
-                self.logger.warning(f"Could not set up interrupt detection for {self.name}: {e}")
+                self.logger.warning(f"Could not set up GIL-free interrupt detection for {self.name}: {e}")
                 self.logger.info(f"Will use polling method for {self.name} pulse detection")
             
             self.initialized = True
@@ -118,9 +101,8 @@ class SingleOptocoupler:
     
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> int:
         """
-        Count optocoupler pulses over specified duration using high-precision polling.
-        Uses high-priority threading for maximum accuracy.
-        NO AVERAGING - measures actual frequency changes.
+        Count optocoupler pulses over specified duration using GIL-free C extension.
+        Uses interrupt-based counting for maximum accuracy and performance.
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
@@ -136,27 +118,23 @@ class SingleOptocoupler:
         if duration is None:
             duration = self.measurement_duration
         
-        # Use high-precision timing for better accuracy
-        pulse_count = 0
+        # Reset counter before measurement
+        self.counter.reset_count(self.pin)
+        
+        # Use GIL-free interrupt counting
         start_time = time.perf_counter()
-        last_state = GPIO.input(self.pin)
-        last_change_time = start_time
         
         while time.perf_counter() - start_time < duration:
-            current_state = GPIO.input(self.pin)
-            current_time = time.perf_counter()
-            
-            # Detect only falling edges (1 -> 0) for optocoupler with debouncing
-            if current_state != last_state:
-                if current_time - last_change_time > debounce_time:
-                    if last_state == 1 and current_state == 0:
-                        pulse_count += 1
-                    last_change_time = current_time
-                    last_state = current_state
-            # No sleep for maximum accuracy - let the system scheduler handle timing
+            # Check for interrupts and update counters (GIL-free)
+            self.counter.check_interrupts()
+            # Small sleep to prevent busy waiting
+            time.sleep(0.001)  # 1ms sleep for reasonable CPU usage
         
+        # Get final count from C extension
+        pulse_count = self.counter.get_count(self.pin)
         elapsed = time.perf_counter() - start_time
-        self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds")
+        
+        self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds (GIL-free)")
         return pulse_count
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:
