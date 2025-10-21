@@ -12,6 +12,8 @@ from typing import List, Dict, Tuple
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import Config
+
 def load_frequency_data(filepath: str) -> List[float]:
     """Load frequency data from CSV file."""
     frequencies = []
@@ -35,11 +37,12 @@ def load_frequency_data(filepath: str) -> List[float]:
 def analyze_threshold_margins():
     """Analyze how close current thresholds are to their limits."""
     
-    # Current thresholds from config.yaml
+    # Load actual thresholds from config.yaml
+    config = Config()
     current_thresholds = {
-        'allan_variance': 1e-4,    # 0.0001
-        'std_dev': 0.08,           # 0.08 Hz
-        'kurtosis': 0.4            # 0.4
+        'allan_variance': config.get('analysis.generator_thresholds.allan_variance'),
+        'std_dev': config.get('analysis.generator_thresholds.std_dev'),
+        'kurtosis': config.get('analysis.generator_thresholds.kurtosis')
     }
     
     print("THRESHOLD MARGIN ANALYSIS")

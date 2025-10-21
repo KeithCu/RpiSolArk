@@ -1,17 +1,37 @@
 #!/usr/bin/env python3
 import time
-import smbus
 import subprocess
+
+# Hardware imports with graceful degradation
+try:
+    import smbus
+    SMBUS_AVAILABLE = True
+except ImportError:
+    SMBUS_AVAILABLE = False
+    print("Warning: smbus not available. Running in simulation mode.")
 
 class CharLCD1602(object):
     def __init__(self):
-        # Note you need to change the bus number to 0 if running on a revision 1 Raspberry Pi.
-        self.bus = smbus.SMBus(1)
+        self.smbus_available = SMBUS_AVAILABLE
         self.BLEN = 1  # turn on/off background light
         self.PCF8574_address = 0x27  # I2C address of the PCF8574 chip.
         self.PCF8574A_address = 0x3f  # I2C address of the PCF8574A chip.
-        self.LCD_ADDR =self.PCF8574_address  
+        self.LCD_ADDR = self.PCF8574_address
+        
+        # Initialize bus only if smbus is available
+        if self.smbus_available:
+            try:
+                # Note you need to change the bus number to 0 if running on a revision 1 Raspberry Pi.
+                self.bus = smbus.SMBus(1)
+            except Exception as e:
+                print(f"Warning: Could not initialize SMBus: {e}")
+                self.smbus_available = False
+                self.bus = None
+        else:
+            self.bus = None  
     def write_word(self,addr, data):
+        if not self.smbus_available or self.bus is None:
+            return  # Skip hardware operations if not available
         temp = data
         if self.BLEN == 1:
             temp |= 0x08
@@ -52,13 +72,25 @@ class CharLCD1602(object):
         self.write_word(self.LCD_ADDR ,buf)
 
     def i2c_scan(self):
-        cmd = "i2cdetect -y 1 |awk \'NR>1 {$1=\"\";print}\'"
-        result = subprocess.check_output(cmd, shell=True).decode()
-        result = result.replace("\n", "").replace(" --", "")
-        i2c_list = result.split(' ')
-        return i2c_list
+        if not self.smbus_available:
+            # Return empty list in simulation mode
+            return []
+        try:
+            cmd = "i2cdetect -y 1 |awk \'NR>1 {$1=\"\";print}\'"
+            result = subprocess.check_output(cmd, shell=True).decode()
+            result = result.replace("\n", "").replace(" --", "")
+            i2c_list = result.split(' ')
+            return i2c_list
+        except Exception as e:
+            print(f"Warning: I2C scan failed: {e}")
+            return []
 
     def init_lcd(self,addr=None, bl=1):
+        if not self.smbus_available:
+            # Return True in simulation mode to indicate "successful" initialization
+            print("LCD simulation mode: Hardware not available, but initialization successful")
+            return True
+            
         i2c_list = self.i2c_scan()
 #         print(f"i2c_list: {i2c_list}")
         if addr is None:
@@ -90,13 +122,19 @@ class CharLCD1602(object):
             return True
 
     def clear(self):
+        if not self.smbus_available:
+            return  # Skip in simulation mode
         self.send_command(0x01) # Clear Screen
 
     def openlight(self):  # Enable the backlight
+        if not self.smbus_available or self.bus is None:
+            return  # Skip in simulation mode
         self.bus.write_byte(0x27,0x08)
         self.bus.close()
 
     def write(self,x, y, str):
+        if not self.smbus_available:
+            return  # Skip in simulation mode
         if x < 0:
             x = 0
         if x > 15:
@@ -111,6 +149,8 @@ class CharLCD1602(object):
         for chr in str:
             self.send_data(ord(chr))
     def display_num(self,x, y, num):
+        if not self.smbus_available:
+            return  # Skip in simulation mode
         addr = 0x80 + 0x40 * y + x
         self.send_command(addr)
         self.send_data(num)

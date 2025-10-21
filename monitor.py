@@ -270,12 +270,13 @@ class FrequencyAnalyzer:
             self.logger.warning(f"Frequency {freq:.2f}Hz outside valid range {min_freq}-{max_freq}Hz")
             return False
         
-        # Check 2: Pulse count reasonableness
-        expected_min = int(duration * 50 * 2)  # 50Hz * 2 pulses/cycle
-        expected_max = int(duration * 70 * 2)  # 70Hz * 2 pulses/cycle
-        if not (expected_min <= pulse_count <= expected_max):
-            self.logger.warning(f"Pulse count {pulse_count} unreasonable for {duration:.1f}s (expected {expected_min}-{expected_max})")
-            return False
+        # Check 2: Pulse count reasonableness (skip in simulator mode)
+        if pulse_count > 0:  # Only validate pulse count if we have actual pulses (not simulator mode)
+            expected_min = int(duration * 50 * 2)  # 50Hz * 2 pulses/cycle
+            expected_max = int(duration * 70 * 2)  # 70Hz * 2 pulses/cycle
+            if not (expected_min <= pulse_count <= expected_max):
+                self.logger.warning(f"Pulse count {pulse_count} unreasonable for {duration:.1f}s (expected {expected_min}-{expected_max})")
+                return False
         
         # Check 3: Signal stability (if we have recent history)
         if hasattr(self, 'freq_buffer') and len(self.freq_buffer) >= 3:
@@ -988,7 +989,7 @@ class FrequencyMonitor:
         elif generator_count > utility_count:
             indicator = "Gen"   # Generator
         else:
-            indicator = "??"    # Unknown/Equal
+            indicator = ""    # Unknown/Equal
         
         # Log classification details for debugging (only occasionally to avoid spam)
         if total_count % 5 == 0:  # Log every 5th update for more frequent debugging

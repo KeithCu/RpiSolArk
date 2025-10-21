@@ -52,6 +52,14 @@ class Config:
         """Get configuration value as int."""
         value = self.get(key_path, default)
         return int(value)
+    
+    def __getitem__(self, key):
+        """Support subscripting for backward compatibility."""
+        return self.config[key]
+    
+    def __setitem__(self, key, value):
+        """Support item assignment."""
+        self.config[key] = value
 
 
 class Logger:

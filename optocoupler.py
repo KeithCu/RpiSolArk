@@ -15,9 +15,9 @@ from typing import Optional, Tuple, List
 try:
     import RPi.GPIO as GPIO
     GPIO_AVAILABLE = True
-except ImportError:
+except (ImportError, RuntimeError) as e:
     GPIO_AVAILABLE = False
-    print("Warning: RPi.GPIO not available. Running in simulation mode.")
+    print(f"Warning: RPi.GPIO not available ({e}). Running in simulation mode.")
 
 # GIL-safe counter imports (required)
 from gil_safe_counter import create_counter

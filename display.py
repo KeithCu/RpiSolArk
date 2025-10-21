@@ -103,20 +103,10 @@ class DisplayManager:
     
     def update_display(self, line1: str, line2: str):
         """Update LCD display."""
-        # Always show simulation if configured to do so
-        try:
-            simulate_display = self.config['app']['simulate_display']
-        except KeyError as e:
-            raise KeyError(f"Missing required app configuration key: {e}")
+        self.logger.debug(f"update_display called: lcd_available={self.lcd_available}, lcd={self.lcd is not None}")
         
-        self.logger.debug(f"update_display called: simulate_display={simulate_display}, lcd_available={self.lcd_available}, lcd={self.lcd is not None}")
-        
-        if not self.lcd_available or not self.lcd or simulate_display:
-            self.logger.debug("Using simulated display")
-            self._simulate_display(line1, line2)
-        
-        # Also update real LCD if available and not forcing simulation
-        if self.lcd_available and self.lcd and not simulate_display:
+        # Try to use real LCD if available
+        if self.lcd_available and self.lcd:
             self.logger.debug("Updating real LCD display")
             try:
                 self.lcd.clear()
@@ -124,9 +114,16 @@ class DisplayManager:
                 self.lcd.write(0, 1, line2)  # Write to line 2, column 0
                 self.logger.debug(f"LCD updated successfully: '{line1}' | '{line2}'")
             except Exception as e:
-                self.logger.error(f"Failed to update display: {e}")
+                self.logger.error(f"Failed to update LCD display: {e}")
                 import traceback
                 self.logger.error(f"Display update traceback: {traceback.format_exc()}")
+                # Fallback to console display
+                self.logger.info("Falling back to console display")
+                self._simulate_display(line1, line2)
+        else:
+            # No LCD available, use console display
+            self.logger.debug("No LCD available, using console display")
+            self._simulate_display(line1, line2)
     
     def _simulate_display(self, line1: str, line2: str):
         """Simulate LCD display output."""

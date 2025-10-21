@@ -12,6 +12,7 @@ from typing import Optional, Dict
 # Import the C extension - fail if not available
 try:
     import pulse_counter
+    C_EXTENSION_AVAILABLE = True
 except ImportError:
     raise ImportError("pulse_counter C extension is required but not available. Please compile the C extension first.")
 
@@ -19,8 +20,9 @@ except ImportError:
 try:
     import RPi.GPIO as GPIO
     GPIO_AVAILABLE = True
-except ImportError:
+except (ImportError, RuntimeError) as e:
     GPIO_AVAILABLE = False
+    print(f"Warning: RPi.GPIO not available ({e}). Running in simulation mode.")
 
 class GILSafeCounter:
     """GIL-safe pulse counter using C extension for maximum performance."""
@@ -35,7 +37,7 @@ class GILSafeCounter:
     def register_pin(self, pin: int) -> bool:
         """Register a GPIO pin for GIL-safe counting."""
         if not self.gpio_available:
-            self.logger.warning(f"GPIO not available, cannot register pin {pin}")
+            self.logger.warning(f"GPIO not available (not on Raspberry Pi), cannot register pin {pin}")
             return False
         
         try:
@@ -82,7 +84,7 @@ class GILSafeCounter:
     def setup_gpio_interrupt(self, pin: int) -> bool:
         """Setup GPIO interrupt for a pin using direct C GPIO handling (truly GIL-free)."""
         if not self.gpio_available:
-            self.logger.warning(f"GPIO not available, cannot setup interrupt for pin {pin}")
+            self.logger.warning(f"GPIO not available (not on Raspberry Pi), cannot setup interrupt for pin {pin}")
             return False
         
         try:
