@@ -11,9 +11,8 @@ import sys
 pulse_counter_extension = Extension(
     'pulse_counter',
     sources=['pulse_counter.c'],
-    libraries=['pthread'],
+    libraries=['gpiod', 'pthread'],
     extra_compile_args=['-fPIC', '-O2'],
-    extra_link_args=['-shared']
 )
 
 setup(
@@ -21,7 +20,7 @@ setup(
     version='1.0.0',
     description='GIL-safe pulse counter for GPIO interrupts',
     ext_modules=[pulse_counter_extension],
-    python_requires='>=3.7',
+    python_requires='>=3.11',
     install_requires=[
         'setuptools>=65.0.0',
     ],

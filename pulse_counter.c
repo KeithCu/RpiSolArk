@@ -1,262 +1,202 @@
 /*
- * High-performance pulse counter for RPi4 GPIO interrupts.
- * Avoids Python GIL issues by using C-level counting.
- * 
- * Compile with: gcc -shared -fPIC -o pulse_counter.so pulse_counter.c
+ * GIL-free GPIO pulse counter using libgpiod v2 on 64-bit Linux.
+ * Supports up to 2 concurrent pins with a background epoll thread.
  */
 
 #include <Python.h>
 #include <stdint.h>
-#include <time.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/eventfd.h>
-#include <unistd.h>
+#include <stdatomic.h>
 #include <errno.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/epoll.h>
+#include <gpiod.h>
 
-// GPIO memory mapping for direct hardware access
-#define BCM2835_PERI_BASE 0x3F000000
-#define GPIO_BASE (BCM2835_PERI_BASE + 0x200000)
-#define BLOCK_SIZE (4*1024)
+#define MAX_PINS 2
 
-// GPIO registers (only the ones we actually use)
-#define GPFSEL0 0x00
-#define GPFEN0 0x58
-#define GPFEN1 0x5C
-#define GPEDS0 0x40
-#define GPEDS1 0x44
+static atomic_uint_fast64_t pulse_counts[MAX_PINS];
+static int pin_offsets[MAX_PINS] = {-1, -1};
+static int num_registered = 0;
 
-static volatile uint32_t *gpio_map = NULL;
-static int mem_fd = -1;
+static struct gpiod_chip *chip = NULL;
+static struct gpiod_request *request = NULL;
+static int request_fd = -1;
+static int epoll_fd = -1;
+static pthread_t event_thread;
+static int thread_running = 0;
 
-// Global counters for each GPIO pin (max 4 pins)
-static volatile uint64_t pulse_counts[4] = {0};
-static volatile int pin_mapping[4] = {-1, -1, -1, -1};
-static int counter_initialized = 0;
-
-// Operation mode: 0=hardware GPIO, 1=eventfd simulation
-static int operation_mode = 0;
-
-// Eventfd descriptors for simulation mode (one per pin slot)
-static int event_fds[4] = {-1, -1, -1, -1};
-
-// Initialize GPIO memory mapping
-static int init_gpio() {
-    if (gpio_map != NULL) return 1;
-    
-    // Open /dev/mem
-    mem_fd = open("/dev/mem", O_RDWR | O_SYNC);
-    if (mem_fd < 0) {
-        return 0;
+// Internal: find slot index for a pin offset
+static int find_slot(int pin) {
+    for (int i = 0; i < MAX_PINS; i++) {
+        if (pin_offsets[i] == pin) return i;
     }
-    
-    // Map GPIO memory
-    gpio_map = (volatile uint32_t *)mmap(NULL, BLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, GPIO_BASE);
-    if (gpio_map == MAP_FAILED) {
-        close(mem_fd);
-        mem_fd = -1;
-        return 0;
-    }
-    
-    return 1;
+    return -1;
 }
 
-// Cleanup GPIO memory mapping
-static void cleanup_gpio() {
-    if (operation_mode == 0) {
-        // Hardware mode: cleanup GPIO memory mapping
-        if (gpio_map != NULL) {
-            munmap((void*)gpio_map, BLOCK_SIZE);
-            gpio_map = NULL;
-        }
-        if (mem_fd >= 0) {
-            close(mem_fd);
-            mem_fd = -1;
-        }
-    } else {
-        // Simulation mode: cleanup eventfd descriptors
-        for (int i = 0; i < 4; i++) {
-            if (event_fds[i] != -1) {
-                close(event_fds[i]);
-                event_fds[i] = -1;
-            }
-        }
+// Thread loop: wait for edge events and increment counters
+static void *event_loop(void *arg) {
+    (void)arg;
+    struct gpiod_edge_event_buffer *buffer = gpiod_edge_event_buffer_new(32);
+    if (!buffer) {
+        thread_running = 0;
+        return NULL;
     }
-}
 
-// Initialize the counter system
-static int init_counters() {
-    if (counter_initialized) return 1;
-    
-    if (operation_mode == 0) {
-        // Hardware mode: Initialize GPIO first
-        if (!init_gpio()) {
-            return 0;
+    struct epoll_event ev;
+    while (thread_running) {
+        int n = epoll_wait(epoll_fd, &ev, 1, 500);
+        if (!thread_running) break;
+        if (n <= 0) {
+            continue;
         }
-    }
-    // Simulation mode: No GPIO initialization needed
-    
-    // Initialize all counters to zero
-    for (int i = 0; i < 4; i++) {
-        pulse_counts[i] = 0;
-        pin_mapping[i] = -1;
-    }
-    
-    counter_initialized = 1;
-    return 1;
-}
-
-// Setup GPIO pin for input with pull-up and falling edge detection
-static int setup_gpio_pin(int pin) {
-    if (gpio_map == NULL) return 0;
-    
-    // Set pin as input (GPFSEL register)
-    int fsel_reg = pin / 10;
-    int fsel_shift = (pin % 10) * 3;
-    gpio_map[GPFSEL0/4 + fsel_reg] &= ~(7 << fsel_shift);  // Clear bits
-    gpio_map[GPFSEL0/4 + fsel_reg] |= (0 << fsel_shift);   // Set as input
-    
-    // Enable pull-up resistor (simplified - would need proper sequence)
-    // For now, assume external pull-up is used
-    
-    // Enable falling edge detection
-    if (pin < 32) {
-        gpio_map[GPFEN0/4] |= (1 << pin);  // Enable falling edge detection
-    } else {
-        gpio_map[GPFEN1/4] |= (1 << (pin - 32));
-    }
-    
-    return 1;
-}
-
-// Register a GPIO pin for counting with direct interrupt setup
-static int register_pin(int pin) {
-    if (!init_counters()) return 0;
-    
-    // Find available slot
-    for (int i = 0; i < 4; i++) {
-        if (pin_mapping[i] == -1) {
-            pin_mapping[i] = pin;
-            pulse_counts[i] = 0;
-            
-            if (operation_mode == 0) {
-                // Hardware mode: Setup GPIO pin for interrupt detection
-                if (!setup_gpio_pin(pin)) {
-                    pin_mapping[i] = -1;  // Rollback on failure
-                    return -1;
+        if (ev.data.fd == request_fd) {
+            int readn;
+            do {
+                readn = gpiod_request_read_edge_events(request, buffer, 32);
+                if (readn <= 0) break;
+                for (int i = 0; i < readn; i++) {
+                    const struct gpiod_edge_event *e = gpiod_edge_event_buffer_get_event(buffer, i);
+                    if (!e) continue;
+                    unsigned int off = gpiod_edge_event_get_line_offset(e);
+                    int slot = find_slot((int)off);
+                    if (slot >= 0) {
+                        atomic_fetch_add_explicit(&pulse_counts[slot], 1, memory_order_relaxed);
+                    }
                 }
-            } else {
-                // Simulation mode: Create eventfd for this pin slot
-                event_fds[i] = eventfd(0, EFD_NONBLOCK);
-                if (event_fds[i] == -1) {
-                    pin_mapping[i] = -1;  // Rollback on failure
-                    return -1;
-                }
-            }
-            
-            return i;
+            } while (readn > 0);
         }
     }
-    
-    return -1; // No available slots
+
+    gpiod_edge_event_buffer_free(buffer);
+    return NULL;
 }
 
-// Get current count for a pin
-static uint64_t get_count(int pin) {
-    if (!counter_initialized) return 0;
-    
-    for (int i = 0; i < 4; i++) {
-        if (pin_mapping[i] == pin) {
-            return pulse_counts[i];
-        }
+// Build a gpiod request for currently registered pins
+static int build_request(void) {
+    if (num_registered <= 0) {
+        errno = EINVAL;
+        return -1;
     }
-    
+
+    chip = gpiod_chip_open_by_name("gpiochip0");
+    if (!chip) return -1;
+
+    struct gpiod_line_settings *settings = gpiod_line_settings_new();
+    if (!settings) return -1;
+    gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_INPUT);
+    gpiod_line_settings_set_edge_detection(settings, GPIOD_LINE_EDGE_FALLING);
+    // Optional: enable pull-up if desired (depends on board wiring)
+    // gpiod_line_settings_set_bias(settings, GPIOD_LINE_BIAS_PULL_UP);
+
+    struct gpiod_line_config *lcfg = gpiod_line_config_new();
+    if (!lcfg) { gpiod_line_settings_free(settings); return -1; }
+    if (gpiod_line_config_add_line_settings(lcfg, (const unsigned int *)pin_offsets, num_registered, settings) < 0) {
+        gpiod_line_settings_free(settings);
+        gpiod_line_config_free(lcfg);
+        return -1;
+    }
+
+    struct gpiod_request_config *rcfg = gpiod_request_config_new();
+    if (!rcfg) {
+        gpiod_line_settings_free(settings);
+        gpiod_line_config_free(lcfg);
+        return -1;
+    }
+    gpiod_request_config_set_consumer(rcfg, "pulse_counter");
+
+    request = gpiod_chip_request_lines(chip, rcfg, lcfg);
+    gpiod_request_config_free(rcfg);
+    gpiod_line_config_free(lcfg);
+    gpiod_line_settings_free(settings);
+    if (!request) return -1;
+
+    request_fd = gpiod_request_get_fd(request);
+    if (request_fd < 0) return -1;
+
+    epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd < 0) return -1;
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.fd = request_fd;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, request_fd, &ev) < 0) return -1;
+
     return 0;
 }
 
-// Reset count for a pin
-static void reset_count(int pin) {
-    if (!counter_initialized) return;
-    
-    for (int i = 0; i < 4; i++) {
-        if (pin_mapping[i] == pin) {
-            pulse_counts[i] = 0;
-            break;
-        }
-    }
+static void release_request(void) {
+    if (epoll_fd >= 0) { close(epoll_fd); epoll_fd = -1; }
+    request_fd = -1;
+    if (request) { gpiod_request_release(request); request = NULL; }
+    if (chip) { gpiod_chip_close(chip); chip = NULL; }
 }
 
-// Check for GPIO interrupts and increment counters (GIL-free)
-static void check_interrupts() {
-    if (!counter_initialized) return;
-    
-    if (operation_mode == 0) {
-        // Hardware mode: Check GPIO registers
-        if (gpio_map == NULL) return;
-        
-        // Batch memory reads for both event registers in one operation
-        volatile uint32_t events0 = gpio_map[GPEDS0/4];
-        volatile uint32_t events1 = gpio_map[GPEDS1/4];
-        
-        // Process all events in one pass if any are detected
-        if (events0 || events1) {
-            // Clear events immediately after reading
-            gpio_map[GPEDS0/4] = events0;
-            gpio_map[GPEDS1/4] = events1;
-            
-            // Process all pins in one loop for better cache efficiency
-            for (int i = 0; i < 4; i++) {
-                if (pin_mapping[i] != -1) {
-                    int pin = pin_mapping[i];
-                    if (pin < 32 && (events0 & (1 << pin))) {
-                        pulse_counts[i]++;
-                    } else if (pin >= 32 && (events1 & (1 << (pin - 32)))) {
-                        pulse_counts[i]++;
-                    }
-                }
-            }
-        }
-    } else {
-        // Simulation mode: Check eventfd descriptors
-        for (int i = 0; i < 4; i++) {
-            if (pin_mapping[i] != -1 && event_fds[i] != -1) {
-                uint64_t value;
-                ssize_t bytes_read = read(event_fds[i], &value, sizeof(value));
-                if (bytes_read > 0) {
-                    pulse_counts[i] += value;
-                }
-            }
+// API: register pin, returns slot index (0..1) or -1
+static int register_pin_internal(int pin) {
+    if (num_registered >= MAX_PINS) return -1;
+    if (find_slot(pin) >= 0) return find_slot(pin);
+    for (int i = 0; i < MAX_PINS; i++) {
+        if (pin_offsets[i] == -1) {
+            pin_offsets[i] = pin;
+            atomic_store_explicit(&pulse_counts[i], 0, memory_order_relaxed);
+            num_registered++;
+            return i;
         }
     }
+    return -1;
 }
 
-// Increment count for a pin (called from interrupt)
-static void increment_count(int pin) {
-    if (!counter_initialized) return;
-    
-    // Fast path - no mutex needed for increment
-    for (int i = 0; i < 4; i++) {
-        if (pin_mapping[i] == pin) {
-            pulse_counts[i]++;
-            return;
-        }
-    }
-}
-
-// Python interface functions
+// Python wrappers
 static PyObject* py_register_pin(PyObject* self, PyObject* args) {
     int pin;
     if (!PyArg_ParseTuple(args, "i", &pin)) {
         return NULL;
     }
-    
-    int slot = register_pin(pin);
-    if (slot == -1) {
-        PyErr_SetString(PyExc_RuntimeError, "No available counter slots");
+    if (thread_running) {
+        PyErr_SetString(PyExc_RuntimeError, "Cannot register pin after start()");
         return NULL;
     }
-    
+    int slot = register_pin_internal(pin);
+    if (slot < 0) {
+        PyErr_SetString(PyExc_RuntimeError, "No available slots or duplicate pin");
+        return NULL;
+    }
     return PyLong_FromLong(slot);
+}
+
+static PyObject* py_start(PyObject* self, PyObject* args) {
+    if (thread_running) Py_RETURN_NONE;
+    if (num_registered <= 0) {
+        PyErr_SetString(PyExc_RuntimeError, "No pins registered");
+        return NULL;
+    }
+    int rc;
+    Py_BEGIN_ALLOW_THREADS
+    rc = build_request();
+    if (rc == 0) {
+        thread_running = 1;
+        if (pthread_create(&event_thread, NULL, event_loop, NULL) != 0) {
+            thread_running = 0;
+            release_request();
+            rc = -1;
+        }
+    }
+    Py_END_ALLOW_THREADS
+    if (rc != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to start event thread");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject* py_stop(PyObject* self, PyObject* args) {
+    if (!thread_running) Py_RETURN_NONE;
+    thread_running = 0;
+    // Nudge epoll with a short sleep to unblock
+    Py_BEGIN_ALLOW_THREADS
+    pthread_join(event_thread, NULL);
+    release_request();
+    Py_END_ALLOW_THREADS
+    Py_RETURN_NONE;
 }
 
 static PyObject* py_get_count(PyObject* self, PyObject* args) {
@@ -264,9 +204,12 @@ static PyObject* py_get_count(PyObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "i", &pin)) {
         return NULL;
     }
-    
-    uint64_t count = get_count(pin);
-    return PyLong_FromUnsignedLongLong(count);
+    int slot = find_slot(pin);
+    if (slot < 0) {
+        return PyLong_FromUnsignedLongLong(0);
+    }
+    uint64_t val = atomic_load_explicit(&pulse_counts[slot], memory_order_relaxed);
+    return PyLong_FromUnsignedLongLong(val);
 }
 
 static PyObject* py_reset_count(PyObject* self, PyObject* args) {
@@ -274,86 +217,61 @@ static PyObject* py_reset_count(PyObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "i", &pin)) {
         return NULL;
     }
-    
-    reset_count(pin);
+    int slot = find_slot(pin);
+    if (slot >= 0) {
+        atomic_store_explicit(&pulse_counts[slot], 0, memory_order_relaxed);
+    }
     Py_RETURN_NONE;
 }
 
-static PyObject* py_increment_count(PyObject* self, PyObject* args) {
-    int pin;
-    if (!PyArg_ParseTuple(args, "i", &pin)) {
-        return NULL;
-    }
-    
-    increment_count(pin);
-    Py_RETURN_NONE;
-}
-
-static PyObject* py_check_interrupts(PyObject* self, PyObject* args) {
-    check_interrupts();
-    Py_RETURN_NONE;
-}
-
-static PyObject* py_set_mode(PyObject* self, PyObject* args) {
-    int mode;
-    if (!PyArg_ParseTuple(args, "i", &mode)) {
-        return NULL;
-    }
-    
-    if (mode != 0 && mode != 1) {
-        PyErr_SetString(PyExc_ValueError, "Mode must be 0 (hardware) or 1 (simulation)");
-        return NULL;
-    }
-    
-    operation_mode = mode;
-    return PyLong_FromLong(operation_mode);
-}
-
+// Test helper: bump counter directly (not an emulator of hardware)
 static PyObject* py_trigger_interrupt(PyObject* self, PyObject* args) {
     int pin, count;
     if (!PyArg_ParseTuple(args, "ii", &pin, &count)) {
         return NULL;
     }
-    
-    if (operation_mode != 1) {
-        PyErr_SetString(PyExc_RuntimeError, "trigger_interrupt only works in simulation mode");
+    int slot = find_slot(pin);
+    if (slot < 0) {
+        PyErr_SetString(PyExc_ValueError, "Pin not registered");
         return NULL;
     }
-    
-    // Find the slot for this pin
-    for (int i = 0; i < 4; i++) {
-        if (pin_mapping[i] == pin && event_fds[i] != -1) {
-            uint64_t value = count;
-            ssize_t bytes_written = write(event_fds[i], &value, sizeof(value));
-            if (bytes_written == sizeof(value)) {
-                return PyLong_FromLong(count);
-            } else {
-                PyErr_SetString(PyExc_RuntimeError, "Failed to write to eventfd");
-                return NULL;
-            }
-        }
+    if (count > 0) {
+        atomic_fetch_add_explicit(&pulse_counts[slot], (uint64_t)count, memory_order_relaxed);
     }
-    
-    PyErr_SetString(PyExc_ValueError, "Pin not found or not in simulation mode");
-    return NULL;
+    return PyLong_FromLong(count);
+}
+
+static PyObject* py_check_interrupts(PyObject* self, PyObject* args) {
+    // No-op for compatibility; events are handled in background thread
+    Py_RETURN_NONE;
 }
 
 static PyObject* py_cleanup(PyObject* self, PyObject* args) {
-    cleanup_gpio();
-    counter_initialized = 0;
+    if (thread_running) {
+        thread_running = 0;
+        Py_BEGIN_ALLOW_THREADS
+        pthread_join(event_thread, NULL);
+        Py_END_ALLOW_THREADS
+    }
+    release_request();
+    for (int i = 0; i < MAX_PINS; i++) {
+        pin_offsets[i] = -1;
+        atomic_store_explicit(&pulse_counts[i], 0, memory_order_relaxed);
+    }
+    num_registered = 0;
     Py_RETURN_NONE;
 }
 
 // Method definitions
 static PyMethodDef PulseCounterMethods[] = {
-    {"register_pin", py_register_pin, METH_VARARGS, "Register a GPIO pin for counting"},
+    {"register_pin", py_register_pin, METH_VARARGS, "Register a GPIO pin (BCM offset)"},
+    {"start", py_start, METH_VARARGS, "Start background edge handling"},
+    {"stop", py_stop, METH_VARARGS, "Stop background edge handling"},
     {"get_count", py_get_count, METH_VARARGS, "Get current pulse count for a pin"},
     {"reset_count", py_reset_count, METH_VARARGS, "Reset pulse count for a pin"},
-    {"increment_count", py_increment_count, METH_VARARGS, "Increment pulse count for a pin"},
-    {"check_interrupts", py_check_interrupts, METH_VARARGS, "Check for GPIO interrupts and update counters"},
-    {"set_mode", py_set_mode, METH_VARARGS, "Set operation mode: 0=hardware, 1=simulation"},
-    {"trigger_interrupt", py_trigger_interrupt, METH_VARARGS, "Trigger simulated interrupt (simulation mode only)"},
-    {"cleanup", py_cleanup, METH_VARARGS, "Cleanup GPIO resources"},
+    {"trigger_interrupt", py_trigger_interrupt, METH_VARARGS, "Test helper: bump counter (not hardware)"},
+    {"check_interrupts", py_check_interrupts, METH_VARARGS, "No-op; kept for compatibility"},
+    {"cleanup", py_cleanup, METH_VARARGS, "Cleanup resources"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -361,11 +279,15 @@ static PyMethodDef PulseCounterMethods[] = {
 static struct PyModuleDef pulse_counter_module = {
     PyModuleDef_HEAD_INIT,
     "pulse_counter",
-    "High-performance pulse counter for GPIO interrupts",
+    "GIL-free GPIO pulse counter using libgpiod v2",
     -1,
     PulseCounterMethods
 };
 
 PyMODINIT_FUNC PyInit_pulse_counter(void) {
+    for (int i = 0; i < MAX_PINS; i++) {
+        pin_offsets[i] = -1;
+        atomic_store_explicit(&pulse_counts[i], 0, memory_order_relaxed);
+    }
     return PyModule_Create(&pulse_counter_module);
 }

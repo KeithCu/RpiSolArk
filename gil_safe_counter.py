@@ -16,13 +16,7 @@ try:
 except ImportError:
     raise ImportError("pulse_counter C extension is required but not available. Please compile the C extension first.")
 
-# Hardware imports with graceful degradation
-try:
-    import RPi.GPIO as GPIO
-    GPIO_AVAILABLE = True
-except (ImportError, RuntimeError) as e:
-    GPIO_AVAILABLE = False
-    print(f"Warning: RPi.GPIO not available ({e}). Running in simulation mode.")
+GPIO_AVAILABLE = True  # Managed by C extension backend; no direct RPi.GPIO dependency
 
 class GILSafeCounter:
     """GIL-safe pulse counter using C extension for maximum performance."""
@@ -82,34 +76,32 @@ class GILSafeCounter:
             return False
     
     def setup_gpio_interrupt(self, pin: int) -> bool:
-        """Setup GPIO interrupt for a pin using direct C GPIO handling (truly GIL-free)."""
-        if not self.gpio_available:
-            self.logger.warning(f"GPIO not available (not on Raspberry Pi), cannot setup interrupt for pin {pin}")
-            return False
-        
+        """Register pin for C-side edge handling (libgpiod v2)."""
         try:
-            # Register pin with C counter (this now sets up GPIO directly in C)
-            if not self.register_pin(pin):
-                return False
-            
-            self.logger.info(f"GPIO interrupt setup for pin {pin} with direct C handling (GIL-free)")
-            return True
-            
+            return self.register_pin(pin)
         except Exception as e:
             self.logger.error(f"Failed to setup GPIO interrupt for pin {pin}: {e}")
             return False
     
-    def check_interrupts(self):
-        """Check for GPIO interrupts and update counters (GIL-free)."""
+    def start(self) -> bool:
+        """Start background event handling in C."""
         try:
-            pulse_counter.check_interrupts()
+            pulse_counter.start()
+            return True
         except Exception as e:
-            self.logger.error(f"Failed to check interrupts: {e}")
+            self.logger.error(f"Failed to start C event thread: {e}")
+            return False
+
+    def stop(self):
+        """Stop background event handling in C."""
+        try:
+            pulse_counter.stop()
+        except Exception as e:
+            self.logger.error(f"Failed to stop C event thread: {e}")
     
     def cleanup(self):
         """Cleanup counter resources."""
         try:
-            # Cleanup C extension resources
             pulse_counter.cleanup()
             self.registered_pins.clear()
             self.logger.debug("Cleaned up C extension resources")
