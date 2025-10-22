@@ -10,6 +10,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -32,6 +33,12 @@ static int mem_fd = -1;
 static volatile uint64_t pulse_counts[4] = {0};
 static volatile int pin_mapping[4] = {-1, -1, -1, -1};
 static int counter_initialized = 0;
+
+// Operation mode: 0=hardware GPIO, 1=eventfd simulation
+static int operation_mode = 0;
+
+// Eventfd descriptors for simulation mode (one per pin slot)
+static int event_fds[4] = {-1, -1, -1, -1};
 
 // Initialize GPIO memory mapping
 static int init_gpio() {
@@ -56,13 +63,24 @@ static int init_gpio() {
 
 // Cleanup GPIO memory mapping
 static void cleanup_gpio() {
-    if (gpio_map != NULL) {
-        munmap((void*)gpio_map, BLOCK_SIZE);
-        gpio_map = NULL;
-    }
-    if (mem_fd >= 0) {
-        close(mem_fd);
-        mem_fd = -1;
+    if (operation_mode == 0) {
+        // Hardware mode: cleanup GPIO memory mapping
+        if (gpio_map != NULL) {
+            munmap((void*)gpio_map, BLOCK_SIZE);
+            gpio_map = NULL;
+        }
+        if (mem_fd >= 0) {
+            close(mem_fd);
+            mem_fd = -1;
+        }
+    } else {
+        // Simulation mode: cleanup eventfd descriptors
+        for (int i = 0; i < 4; i++) {
+            if (event_fds[i] != -1) {
+                close(event_fds[i]);
+                event_fds[i] = -1;
+            }
+        }
     }
 }
 
@@ -70,10 +88,13 @@ static void cleanup_gpio() {
 static int init_counters() {
     if (counter_initialized) return 1;
     
-    // Initialize GPIO first
-    if (!init_gpio()) {
-        return 0;
+    if (operation_mode == 0) {
+        // Hardware mode: Initialize GPIO first
+        if (!init_gpio()) {
+            return 0;
+        }
     }
+    // Simulation mode: No GPIO initialization needed
     
     // Initialize all counters to zero
     for (int i = 0; i < 4; i++) {
@@ -118,10 +139,19 @@ static int register_pin(int pin) {
             pin_mapping[i] = pin;
             pulse_counts[i] = 0;
             
-            // Setup GPIO pin for interrupt detection
-            if (!setup_gpio_pin(pin)) {
-                pin_mapping[i] = -1;  // Rollback on failure
-                return -1;
+            if (operation_mode == 0) {
+                // Hardware mode: Setup GPIO pin for interrupt detection
+                if (!setup_gpio_pin(pin)) {
+                    pin_mapping[i] = -1;  // Rollback on failure
+                    return -1;
+                }
+            } else {
+                // Simulation mode: Create eventfd for this pin slot
+                event_fds[i] = eventfd(0, EFD_NONBLOCK);
+                if (event_fds[i] == -1) {
+                    pin_mapping[i] = -1;  // Rollback on failure
+                    return -1;
+                }
             }
             
             return i;
@@ -158,26 +188,42 @@ static void reset_count(int pin) {
 
 // Check for GPIO interrupts and increment counters (GIL-free)
 static void check_interrupts() {
-    if (!counter_initialized || gpio_map == NULL) return;
+    if (!counter_initialized) return;
     
-    // Batch memory reads for both event registers in one operation
-    volatile uint32_t events0 = gpio_map[GPEDS0/4];
-    volatile uint32_t events1 = gpio_map[GPEDS1/4];
-    
-    // Process all events in one pass if any are detected
-    if (events0 || events1) {
-        // Clear events immediately after reading
-        gpio_map[GPEDS0/4] = events0;
-        gpio_map[GPEDS1/4] = events1;
+    if (operation_mode == 0) {
+        // Hardware mode: Check GPIO registers
+        if (gpio_map == NULL) return;
         
-        // Process all pins in one loop for better cache efficiency
+        // Batch memory reads for both event registers in one operation
+        volatile uint32_t events0 = gpio_map[GPEDS0/4];
+        volatile uint32_t events1 = gpio_map[GPEDS1/4];
+        
+        // Process all events in one pass if any are detected
+        if (events0 || events1) {
+            // Clear events immediately after reading
+            gpio_map[GPEDS0/4] = events0;
+            gpio_map[GPEDS1/4] = events1;
+            
+            // Process all pins in one loop for better cache efficiency
+            for (int i = 0; i < 4; i++) {
+                if (pin_mapping[i] != -1) {
+                    int pin = pin_mapping[i];
+                    if (pin < 32 && (events0 & (1 << pin))) {
+                        pulse_counts[i]++;
+                    } else if (pin >= 32 && (events1 & (1 << (pin - 32)))) {
+                        pulse_counts[i]++;
+                    }
+                }
+            }
+        }
+    } else {
+        // Simulation mode: Check eventfd descriptors
         for (int i = 0; i < 4; i++) {
-            if (pin_mapping[i] != -1) {
-                int pin = pin_mapping[i];
-                if (pin < 32 && (events0 & (1 << pin))) {
-                    pulse_counts[i]++;
-                } else if (pin >= 32 && (events1 & (1 << (pin - 32)))) {
-                    pulse_counts[i]++;
+            if (pin_mapping[i] != -1 && event_fds[i] != -1) {
+                uint64_t value;
+                ssize_t bytes_read = read(event_fds[i], &value, sizeof(value));
+                if (bytes_read > 0) {
+                    pulse_counts[i] += value;
                 }
             }
         }
@@ -248,6 +294,50 @@ static PyObject* py_check_interrupts(PyObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+static PyObject* py_set_mode(PyObject* self, PyObject* args) {
+    int mode;
+    if (!PyArg_ParseTuple(args, "i", &mode)) {
+        return NULL;
+    }
+    
+    if (mode != 0 && mode != 1) {
+        PyErr_SetString(PyExc_ValueError, "Mode must be 0 (hardware) or 1 (simulation)");
+        return NULL;
+    }
+    
+    operation_mode = mode;
+    return PyLong_FromLong(operation_mode);
+}
+
+static PyObject* py_trigger_interrupt(PyObject* self, PyObject* args) {
+    int pin, count;
+    if (!PyArg_ParseTuple(args, "ii", &pin, &count)) {
+        return NULL;
+    }
+    
+    if (operation_mode != 1) {
+        PyErr_SetString(PyExc_RuntimeError, "trigger_interrupt only works in simulation mode");
+        return NULL;
+    }
+    
+    // Find the slot for this pin
+    for (int i = 0; i < 4; i++) {
+        if (pin_mapping[i] == pin && event_fds[i] != -1) {
+            uint64_t value = count;
+            ssize_t bytes_written = write(event_fds[i], &value, sizeof(value));
+            if (bytes_written == sizeof(value)) {
+                return PyLong_FromLong(count);
+            } else {
+                PyErr_SetString(PyExc_RuntimeError, "Failed to write to eventfd");
+                return NULL;
+            }
+        }
+    }
+    
+    PyErr_SetString(PyExc_ValueError, "Pin not found or not in simulation mode");
+    return NULL;
+}
+
 static PyObject* py_cleanup(PyObject* self, PyObject* args) {
     cleanup_gpio();
     counter_initialized = 0;
@@ -261,6 +351,8 @@ static PyMethodDef PulseCounterMethods[] = {
     {"reset_count", py_reset_count, METH_VARARGS, "Reset pulse count for a pin"},
     {"increment_count", py_increment_count, METH_VARARGS, "Increment pulse count for a pin"},
     {"check_interrupts", py_check_interrupts, METH_VARARGS, "Check for GPIO interrupts and update counters"},
+    {"set_mode", py_set_mode, METH_VARARGS, "Set operation mode: 0=hardware, 1=simulation"},
+    {"trigger_interrupt", py_trigger_interrupt, METH_VARARGS, "Trigger simulated interrupt (simulation mode only)"},
     {"cleanup", py_cleanup, METH_VARARGS, "Cleanup GPIO resources"},
     {NULL, NULL, 0, NULL}
 };

@@ -21,6 +21,50 @@ else:
     LCD_AVAILABLE = True
 
 
+def format_duration(seconds: float) -> str:
+    """Format seconds into a readable days:hours:minutes:seconds format.
+    
+    Args:
+        seconds: Duration in seconds
+        
+    Returns:
+        Formatted string like "1d:2h:3m" (no seconds if days) or "2h:30m:15s" or "45s"
+    """
+    if seconds < 0:
+        return "0s"
+    
+    # Convert to integer seconds for cleaner display
+    total_seconds = int(seconds)
+    
+    # Calculate each time unit
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    
+    # Build the formatted string, only showing non-zero components
+    parts = []
+    
+    if days > 0:
+        parts.append(f"{days}d")
+        # When we have days, show hours and minutes but skip seconds to save space
+        if hours > 0 or days > 0:  # Show hours if we have days or hours
+            parts.append(f"{hours:02d}h")
+        if minutes > 0 or hours > 0 or days > 0:  # Show minutes if we have any larger unit
+            parts.append(f"{minutes:02d}m")
+        # Skip seconds when we have days to save display space
+    else:
+        # No days - show hours, minutes, and seconds
+        if hours > 0:
+            parts.append(f"{hours:02d}h")
+        if minutes > 0 or hours > 0:  # Show minutes if we have hours or minutes
+            parts.append(f"{minutes:02d}m")
+        if secs > 0 or not parts:  # Always show seconds if no other units, or if we have seconds
+            parts.append(f"{secs:02d}s")
+    
+    return ":".join(parts)
+
+
 class DisplayManager:
     """Manages LCD display, LED controls, and display logic with graceful degradation."""
     
@@ -176,7 +220,8 @@ class DisplayManager:
             if freq is not None:
                 line2 = f"{freq:.2f} Hz {ug_indicator}"
             else:
-                line2 = f"0V ({zero_voltage_duration:.0f}s) {ug_indicator}"
+                formatted_duration = format_duration(zero_voltage_duration)
+                line2 = f"0V {formatted_duration} {ug_indicator}"
             
             # Update display
             self.update_display(line1, line2)
