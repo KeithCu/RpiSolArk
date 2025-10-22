@@ -20,7 +20,7 @@ except (ImportError, RuntimeError) as e:
     print(f"Warning: RPi.GPIO not available ({e}). Running in simulation mode.")
 
 # GIL-safe counter imports (required)
-from gil_safe_counter import create_counter
+from gpio_event_counter import create_counter
 
 
 class SingleOptocoupler:
