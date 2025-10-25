@@ -269,8 +269,8 @@ else:
 
 | 🎯 **Core Monitoring** | 🔧 **Smart Integration** | 📱 **User Interface** |
 |:---:|:---:|:---:|
-| Real-time frequency analysis | Sol-Ark cloud integration | LCD display with status |
-| Power source classification | Automatic parameter updates | LED status indicators |
+| Real-time frequency analysis | Sol-Ark cloud integration (WIP) | LCD display with status |
+| Power source classification | Automatic parameter updates (WIP) | LED status indicators |
 | Allan variance analysis | Web automation (Playwright) | Web dashboard |
 | Health monitoring | Graceful degradation | Comprehensive logging |
 
@@ -289,7 +289,7 @@ else:
 - 📝 **Comprehensive logging** with hourly status reports
 - ⚙️ **Configurable parameters** via YAML configuration
 - 🧪 **Unit tests** for reliability assurance
-- ☁️ **Sol-Ark cloud integration** with automatic parameter updates
+- ☁️ **Sol-Ark cloud integration** (available but needs integration work)
 - 🤖 **Web automation** using Playwright for cloud platform interaction
 
 ## 📸 Screenshots
@@ -327,7 +327,7 @@ Press Ctrl+C to stop
 ### 📊 Web Dashboard
 ![Web Dashboard](https://via.placeholder.com/600x300/34495e/ffffff?text=Web+Dashboard+with+Frequency+Charts+and+System+Health)
 
-*Comprehensive web interface showing frequency analysis and system health*
+*Separate Flask-based web dashboard for system health monitoring (run with `python dashboard.py`)*
 
 ### 🔧 Hardware Setup
 ![Hardware Setup](https://via.placeholder.com/500x300/27ae60/ffffff?text=Raspberry+Pi+with+Optocoupler+and+LCD+Display)
@@ -383,7 +383,7 @@ cd RpiSolarkMonitor
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install Playwright browsers (for Sol-Ark cloud integration)
+# Install Playwright browsers (for Sol-Ark cloud integration - WIP)
 playwright install chromium
 
 # Enable I2C interface (if not already enabled)
@@ -435,6 +435,8 @@ Raspberry Pi GPIO 22 ──┬─── Button ─── GND
 - **Function**: Restarts entire application when pressed
 
 ### ☁️ Sol-Ark Cloud Setup
+
+**Note**: Sol-Ark integration is available but needs additional work to be fully integrated with the main monitoring loop.
 
 1. **Edit configuration**:
    ```yaml

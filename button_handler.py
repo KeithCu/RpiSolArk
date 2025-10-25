@@ -67,9 +67,10 @@ class ButtonHandler:
     def _handle_button_press(self):
         """Handle button press - turn display on for 5 minutes."""
         if self.display_manager:
-            self.logger.info("Turning display on for 5 minutes")
+            self.logger.info("Button pressed - turning display on for 5 minutes")
             self.display_manager.force_display_on()
             self.display_manager.set_display_timeout(5)  # 5 minutes
+            self.logger.info("Display timeout set to 5 minutes")
         else:
             self.logger.warning("No display manager connected")
     

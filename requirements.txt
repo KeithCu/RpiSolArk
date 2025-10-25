@@ -12,6 +12,7 @@ gpiod>=2.0.0
 # Web automation dependencies
 playwright>=1.40.0
 requests>=2.28.0
+flask>=2.0.0
 
 # Development dependencies (optional)
 pytest>=6.0.0

@@ -43,9 +43,10 @@ class PowerState(Enum):
 class PowerStateMachine:
     """State machine for power system management."""
 
-    def __init__(self, config, logger: logging.Logger):
+    def __init__(self, config, logger: logging.Logger, display_manager=None):
         self.config = config
         self.logger = logger
+        self.display_manager = display_manager  # Reference to display manager for backlight control
         self.current_state = PowerState.TRANSITIONING  # Start in transitioning to allow detection
         self.previous_state = PowerState.TRANSITIONING
         self.state_entry_time = time.time()
@@ -213,18 +214,30 @@ class PowerStateMachine:
         self.logger.info("POWER OUTAGE: System is now OFF-GRID")
         # Prevent automatic system upgrades when off-grid
         self._create_upgrade_lock()
+        # Turn on display backlight for power outage visibility
+        if self.display_manager:
+            self.display_manager.force_display_on()
+            self.logger.info("Display backlight turned on for power outage")
 
     def _on_enter_grid(self):
         """Called when entering GRID state."""
         self.logger.info("GRID POWER: Stable utility power detected")
         # Allow automatic system upgrades when on grid power
         self._remove_upgrade_lock()
+        # Turn on display backlight for grid power confirmation
+        if self.display_manager:
+            self.display_manager.force_display_on()
+            self.logger.info("Display backlight turned on for grid power")
 
     def _on_enter_generator(self):
         """Called when entering GENERATOR state."""
         self.logger.info("GENERATOR: Backup generator power detected")
         # Prevent automatic system upgrades when on generator (unstable power)
         self._create_upgrade_lock()
+        # Turn on display backlight for generator operation visibility
+        if self.display_manager:
+            self.display_manager.force_display_on()
+            self.logger.info("Display backlight turned on for generator operation")
 
 
 class FrequencyAnalyzer:
@@ -652,7 +665,7 @@ class FrequencyMonitor:
             self.logger.info("Real mode: Using real hardware for frequency data")
         
         self.analyzer = FrequencyAnalyzer(self.config, self.logger)
-        self.state_machine = PowerStateMachine(self.config, self.logger)
+        self.state_machine = PowerStateMachine(self.config, self.logger, self.hardware.display)
         self.health_monitor = HealthMonitor(self.config, self.logger)
         self.memory_monitor = MemoryMonitor(self.config, self.logger)
         self.data_logger = DataLogger(self.config, self.logger)

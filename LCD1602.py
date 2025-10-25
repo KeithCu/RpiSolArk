@@ -129,8 +129,23 @@ class CharLCD1602(object):
     def openlight(self):  # Enable the backlight
         if not self.smbus_available or self.bus is None:
             return  # Skip in simulation mode
-        self.bus.write_byte(0x27,0x08)
-        self.bus.close()
+        self.BLEN = 1
+        self.bus.write_byte(self.LCD_ADDR, 0x08)
+
+    def closelight(self):  # Disable the backlight
+        if not self.smbus_available or self.bus is None:
+            return  # Skip in simulation mode
+        self.BLEN = 0
+        self.bus.write_byte(self.LCD_ADDR, 0x00)
+
+    def set_backlight(self, on: bool):
+        """Set backlight on or off."""
+        if not self.smbus_available or self.bus is None:
+            return  # Skip in simulation mode
+        if on:
+            self.openlight()
+        else:
+            self.closelight()
 
     def write(self,x, y, str):
         if not self.smbus_available:

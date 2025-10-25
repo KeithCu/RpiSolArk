@@ -155,6 +155,10 @@ class DisplayManager:
                         return
                 
                 self.logger.info("LCD hardware initialized successfully")
+                # Ensure backlight is on at startup
+                if self.lcd:
+                    self.lcd.set_backlight(True)
+                    self.logger.info("Display backlight turned on at startup")
             except Exception as e:
                 self.logger.error(f"Failed to initialize LCD: {e}")
                 import traceback
@@ -391,10 +395,11 @@ class DisplayManager:
             self.logger.info("Turning display off due to timeout")
             self.display_on = False
             try:
-                self.lcd.clear()
-                # Try to turn off backlight
-                if hasattr(self.lcd, 'bus') and self.lcd.bus:
-                    self.lcd.bus.write_byte(self.lcd.LCD_ADDR, 0x00)
+                if self.lcd_available and self.lcd:
+                    # Clear the display and turn off backlight
+                    self.lcd.clear()
+                    self.lcd.set_backlight(False)
+                    self.logger.debug("Display turned off - backlight disabled")
             except Exception as e:
                 self.logger.debug(f"Error turning off display: {e}")
                 
@@ -404,16 +409,11 @@ class DisplayManager:
             self.logger.info("Turning display back on")
             self.display_on = True
             try:
-                # Reinitialize the LCD
-                if not USE_RPLCD:
-                    # For original LCD1602, reinitialize
-                    lcd_address = self.config.get('hardware', {}).get('lcd_address', 0x27)
-                    self.lcd.init_lcd(addr=lcd_address, bl=1)
-                else:
-                    # For RPLCD, just clear and turn on backlight
+                if self.lcd_available and self.lcd:
+                    # Turn on backlight and clear display
+                    self.lcd.set_backlight(True)
                     self.lcd.clear()
-                    if hasattr(self.lcd, 'backlight_enabled'):
-                        self.lcd.backlight_enabled = True
+                    self.logger.debug("Display turned on - backlight enabled")
             except Exception as e:
                 self.logger.error(f"Error turning on display: {e}")
                 
@@ -463,7 +463,7 @@ class DisplayManager:
             
     def set_display_timeout(self, minutes: int):
         """Set the display timeout in minutes."""
-        self.display_timeout_minutes = minutes
+        self.display_timeout_seconds = minutes * 60
         self.logger.info(f"Display timeout set to {minutes} minutes")
         
     def enable_display_timeout(self, enabled: bool):
