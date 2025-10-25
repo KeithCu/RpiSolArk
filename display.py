@@ -278,10 +278,10 @@ class DisplayManager:
         self.update_leds_for_state(current_state)
         
         # Check for power events that should keep display on
-        # self._check_power_events()  # COMMENTED OUT FOR TESTING
+        self._check_power_events()
         
         # Check if we're in an emergency state that should keep display on
-        # self._check_emergency_state(current_state)  # COMMENTED OUT FOR TESTING
+        self._check_emergency_state(current_state)
     
     def _cycle_dual_display(self, primary_freq: Optional[float], secondary_freq: Optional[float], 
                            ug_indicator: str, zero_voltage_duration: float, current_time: str):
