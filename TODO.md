@@ -56,3 +56,11 @@
 - [ ] **Backup system**: Secondary Pi or failover mechanism for critical monitoring
 
 
+- [ ] SD wear reduction (moderate):
+  - [ ] Journald volatile (RAM) and disable rsyslog
+  - [ ] Disable APT periodic timers and cron
+  - [ ] Add noatime to / and /boot
+  - [ ] Put /tmp on tmpfs
+  - [ ] Optional: disable fake-hwclock.timer (with NTP)
+
+

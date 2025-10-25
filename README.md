@@ -1371,6 +1371,69 @@ The system provides comprehensive monitoring capabilities:
 - **Power Source**: Utility vs Generator classification
 - **Network Status**: Cloud connectivity monitoring
 
+## MicroSD wear reduction (moderate)
+
+Goal: keep root writable; retain your app’s hourly write; curb OS background writes.
+
+### 1) Put systemd journal in RAM (volatile)
+```bash
+sudo cp /etc/systemd/journald.conf /etc/systemd/journald.conf.bak
+sudo sed -i 's/^#\?Storage=.*/Storage=volatile/' /etc/systemd/journald.conf
+sudo systemctl restart systemd-journald
+# Optional: disable rsyslog if installed
+sudo systemctl disable --now rsyslog || true
+```
+
+Revert: restore the backup or set `Storage=auto` and re‑enable rsyslog.
+
+### 2) Disable APT periodic background jobs
+```bash
+cat | sudo tee /etc/apt/apt.conf.d/02periodic-disable >/dev/null <<'EOF'
+APT::Periodic::Enable "0";
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+EOF
+sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
+```
+
+Revert: remove that file and re‑enable the timers.
+
+### 3) Reduce filesystem metadata writes (noatime)
+```bash
+sudo cp /etc/fstab /etc/fstab.bak
+# Edit the / and /boot lines to include noatime (example):
+# PARTUUID=xxxx  /      ext4  defaults,noatime  0  1
+# PARTUUID=yyyy  /boot  vfat  defaults,noatime  0  2
+# Then reboot to apply:
+sudo reboot
+```
+
+Optional: also add `commit=600` to the ext4 options to flush journal less often (higher data loss risk on power loss).
+
+### 4) Use RAM for /tmp
+```bash
+grep -qE '^tmpfs\s+/tmp\s+tmpfs' /etc/fstab || echo 'tmpfs /tmp tmpfs defaults,nosuid,nodev 0 0' | sudo tee -a /etc/fstab
+sudo mount -a
+```
+
+### 5) Optional: fake-hwclock timer (if NTP is available)
+```bash
+# Only if you use NTP (systemd-timesyncd or chrony)
+sudo systemctl disable --now fake-hwclock.timer || true
+sudo systemctl enable --now systemd-timesyncd || true
+```
+
+### Verify
+```bash
+findmnt -no OPTIONS / | grep -q noatime && echo OK:noatime || echo MISSING:noatime
+systemctl show -p Storage systemd-journald | grep volatile || echo 'journald not volatile'
+findmnt /tmp
+```
+
+### Expected endurance
+- Your hourly write dominates. 100 KB/hour ≈ 0.9 GB/year; 1 MB/hour ≈ 8.8 GB/year. Both are safe for quality microSD over 10 years. The steps above largely remove incidental OS writes.
+
 ## 🔧 Troubleshooting
 
 ### 🚨 Common Issues

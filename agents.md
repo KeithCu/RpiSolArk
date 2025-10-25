@@ -485,6 +485,16 @@ sudo systemctl status rpisolkark-monitor
 - Prevents memory leaks and system degradation
 - Graceful shutdown with cleanup
 
+### MicroSD wear reduction (moderate)
+- Keep app’s hourly write; curb OS writes.
+- Apply:
+  - `Storage=volatile` in /etc/systemd/journald.conf; restart journald
+  - Disable rsyslog (optional)
+  - Disable APT timers; add /etc/apt/apt.conf.d/02periodic-disable
+  - Add `noatime` to / and /boot in /etc/fstab
+  - Ensure `/tmp` is tmpfs
+- Verify with `findmnt` and `systemctl show systemd-journald -p Storage`.
+
 ## File Organization
 
 ```
