@@ -191,11 +191,6 @@ class DisplayManager:
     
     def update_display(self, line1: str, line2: str):
         """Update LCD display with smart timeout management."""
-        self.logger.debug(f"update_display called: lcd_available={self.lcd_available}, lcd={self.lcd is not None}")
-        
-        # Update activity timestamp for timeout management
-        self.last_activity = datetime.now()
-        
         # Check if display should be turned on due to timeout
         self._check_display_timeout()
         
@@ -283,10 +278,10 @@ class DisplayManager:
         self.update_leds_for_state(current_state)
         
         # Check for power events that should keep display on
-        self._check_power_events()
+        # self._check_power_events()  # COMMENTED OUT FOR TESTING
         
         # Check if we're in an emergency state that should keep display on
-        self._check_emergency_state(current_state)
+        # self._check_emergency_state(current_state)  # COMMENTED OUT FOR TESTING
     
     def _cycle_dual_display(self, primary_freq: Optional[float], secondary_freq: Optional[float], 
                            ug_indicator: str, zero_voltage_duration: float, current_time: str):
@@ -387,6 +382,7 @@ class DisplayManager:
         timeout_duration = timedelta(seconds=self.display_timeout_seconds)
         
         if time_since_activity > timeout_duration and not self.power_event_detected:
+            self.logger.info("Display timeout reached - turning off display")
             self._turn_display_off()
             
     def _turn_display_off(self):

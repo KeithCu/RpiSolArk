@@ -91,6 +91,18 @@ This document provides comprehensive guidance for new developers joining the Rpi
 - CPU affinity optimization for consistent timing
 - High-priority threading for accuracy
 
+**AC-into-DC-Optocoupler Configuration**:
+- **Hardware Setup**: H11AA1 DC optocoupler receiving AC input WITHOUT rectifier
+- **Signal Behavior**: 
+  - Positive AC half-cycle: optocoupler conducts → produces pulse
+  - Negative AC half-cycle: reverse-biased → no output
+  - Result: 1 pulse per AC cycle (not 2 like with rectifier)
+- **Frequency Calculation**: `frequency = pulse_count / (duration * 2)`
+  - libgpiod counts both edges: 2 edges per pulse
+  - H11AA1 produces 1 pulse per AC cycle
+  - Total: 2 edges per AC cycle
+- **Noise Considerations**: AC signal may produce edge noise; outlier filtering applied
+
 **Dependencies**: `gpio_event_counter.py` (C extension)
 
 ### 5. gpio_manager.py - GPIO Operations

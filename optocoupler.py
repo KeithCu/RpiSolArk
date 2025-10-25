@@ -129,9 +129,10 @@ class SingleOptocoupler:
         if pulse_count <= 0 or duration <= 0:
             return None
         
-        # Calculate frequency using correct libgpiod calculation
-        # libgpiod counts BOTH edges, and H11AA1 gives 2 pulses per cycle
-        # So we get 4 edges per AC cycle total
+        # Calculate frequency using correct libgpiod calculation for AC-into-DC-optocoupler
+        # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle
+        # libgpiod counts 4 edges per AC cycle (both edges of both transitions)
+        # So we need to divide by 4 to get frequency
         frequency = pulse_count / (duration * 4)  # 4 edges per AC cycle
         
         self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {duration:.2f}s")

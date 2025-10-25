@@ -9,8 +9,8 @@ import logging
 import sys
 import os
 
-# Add the current directory to the path so we can import our modules
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add the parent directory to the path so we can import our modules
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from LCD1602 import CharLCD1602
 from display import DisplayManager
@@ -155,7 +155,13 @@ def test_display_manager_timeout():
     time.sleep(1)
     
     print("   Waiting for timeout...")
-    time.sleep(4)  # Wait longer than timeout
+    # Manually check timeout during the wait period
+    start_wait = time.time()
+    while time.time() - start_wait < 4:  # Wait up to 4 seconds
+        display_manager._check_display_timeout()  # Manually trigger timeout check
+        if not display_manager.display_on:
+            break
+        time.sleep(0.1)  # Check every 100ms
     
     print("   Checking if display is off...")
     if not display_manager.display_on:
@@ -262,7 +268,14 @@ def test_integrated_backlight_control():
         # Test timeout
         print("   Setting short timeout...")
         display_manager.set_display_timeout(0.05)  # 3 seconds
-        time.sleep(4)  # Wait for timeout
+        
+        # Manually check timeout during the wait period
+        start_wait = time.time()
+        while time.time() - start_wait < 4:  # Wait up to 4 seconds
+            display_manager._check_display_timeout()  # Manually trigger timeout check
+            if not display_manager.display_on:
+                break
+            time.sleep(0.1)  # Check every 100ms
         
         if not display_manager.display_on:
             print("   ✓ Display timeout working - backlight should be off")

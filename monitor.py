@@ -776,7 +776,9 @@ class FrequencyMonitor:
                         self.logger.debug(f"Dual optocoupler readings: Primary={freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
                     else:
                         # Single optocoupler mode
-                        freq = self.analyzer.count_zero_crossings(duration=2.0)  # Optimized 2-second measurement with no averaging
+                        # Use measurement duration from config
+                        measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration', 2.0)
+                        freq = self.analyzer.count_zero_crossings(duration=measurement_duration)
                         secondary_freq = None
 
                 # Track zero voltage duration
@@ -809,6 +811,7 @@ class FrequencyMonitor:
                     if validated_freq is None:
                         self.logger.warning(f"Frequency reading failed validation: {freq:.2f}Hz")
                         continue
+                    
                     freq = validated_freq
                 
                 # Update buffers only with valid frequency readings

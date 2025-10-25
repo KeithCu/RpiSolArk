@@ -7,7 +7,7 @@ hardware:
   led_red: 27           # Red LED for Generator
   reset_button: 22      # Reset button input (active LOW with pull-up)
   button_pin: 18        # GPIO pin for display control button
-  display_timeout_seconds: 3  # Display timeout (5 seconds for testing, 300 for production)
+  display_timeout_seconds: 300  # Display timeout (5 minutes for production)
   lcd_address: 0x27     # I2C address for LCD
   lcd_port: 1           # I2C port
   lcd_cols: 16          # LCD columns
@@ -19,8 +19,8 @@ hardware:
     measurement_method: "interrupt"  # Method for dual optocoupler measurement: "interrupt" (recommended) or "alternating" (fallback)
     primary:
       gpio_pin: 26      # GPIO pin for primary optocoupler input (H11AA1)
-      pulses_per_cycle: 1 # GPIO event counter detects FALLING edges only = 1 pulse per AC cycle
-      measurement_duration: 1.0  # Duration in seconds for frequency measurement
+      pulses_per_cycle: 1 # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
+      measurement_duration: 5.0  # Duration in seconds for frequency measurement (longer = more stable)
       name: "Mechanical"   # Display name for primary optocoupler
     secondary:
       gpio_pin: -1      # GPIO pin for secondary optocoupler input (H11AA1), set to -1 for single optocoupler mode

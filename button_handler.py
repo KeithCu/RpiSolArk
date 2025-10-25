@@ -65,12 +65,15 @@ class ButtonHandler:
         self._handle_button_press()
     
     def _handle_button_press(self):
-        """Handle button press - turn display on for 5 minutes."""
+        """Handle button press - turn display on for configured timeout duration."""
         if self.display_manager:
-            self.logger.info("Button pressed - turning display on for 5 minutes")
-            self.display_manager.force_display_on()
-            self.display_manager.set_display_timeout(5)  # 5 minutes
-            self.logger.info("Display timeout set to 5 minutes")
+            # Get the configured timeout from the display manager
+            timeout_seconds = self.display_manager.display_timeout_seconds
+            timeout_minutes = timeout_seconds / 60  # Convert to minutes for the method
+            
+            self.logger.info(f"Button pressed - turning display on for {timeout_minutes:.1f} minutes")
+            self.display_manager.reset_display_timeout()  # Reset activity timer and turn on display
+            self.logger.info(f"Display timeout reset to {timeout_minutes:.1f} minutes")
         else:
             self.logger.warning("No display manager connected")
     
