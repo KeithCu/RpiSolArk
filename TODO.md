@@ -57,10 +57,10 @@
 
 
 - [ ] SD wear reduction (moderate):
-  - [ ] Journald volatile (RAM) and disable rsyslog
-  - [ ] Disable APT periodic timers and cron
-  - [ ] Add noatime to / and /boot
-  - [ ] Put /tmp on tmpfs
-  - [ ] Optional: disable fake-hwclock.timer (with NTP)
+  - [x] Journald volatile (RAM) and disable rsyslog
+  - [x] Disable APT periodic timers and cron
+  - [x] Add noatime to / and /boot
+  - [x] Put /tmp on tmpfs
+  - [x] Optional: disable fake-hwclock.timer (with NTP)
 
 
