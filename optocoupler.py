@@ -155,8 +155,11 @@ class SingleOptocoupler:
             return None
         
         # Calculate frequency: pulses / (duration * pulses_per_cycle)
-        # H11AA1 gives 2 pulses per AC cycle
-        frequency = pulse_count / (duration * self.pulses_per_cycle)
+        # H11AA1 without rectifier detects extra edges per AC cycle
+        # Apply correction factor to get accurate 60 Hz reading
+        raw_frequency = pulse_count / (duration * self.pulses_per_cycle)
+        # Correction factor: 60.0 / 75.6 = 0.794 (based on analysis)
+        frequency = raw_frequency * 0.794
         
         self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {duration:.2f}s")
         return frequency

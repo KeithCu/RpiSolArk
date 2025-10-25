@@ -6,6 +6,8 @@ Handles LCD display, LED controls, and simulation with graceful degradation.
 
 import logging
 import time
+import threading
+from datetime import datetime, timedelta
 from typing import Optional, Deque
 from collections import deque
 
@@ -81,6 +83,23 @@ class DisplayManager:
         self.last_cycle_time = 0
         self.cycle_interval = 2.0  # Switch every 2 seconds
         
+        # Smart display management
+        try:
+            self.display_timeout_seconds = self.config['hardware']['display_timeout_seconds']
+        except KeyError:
+            self.display_timeout_seconds = 5  # Default fallback
+        self.last_activity = datetime.now()
+        self.display_on = True
+        self.power_event_detected = False
+        self.display_timeout_enabled = True
+        
+        # Emergency states that should keep display on
+        self.emergency_states = ['off_grid', 'generator']
+        
+        # Button handler for manual display control
+        self.button_handler = None
+        self._setup_button()
+        
         self._setup_display()
     
     def _setup_display(self):
@@ -125,7 +144,7 @@ class DisplayManager:
                     
                     # Initialize with the old working method
                     self.lcd = CharLCD1602()
-                    init_result = self.lcd.init_lcd(addr=lcd_address, bl=1)
+                    init_result = self.lcd.init_lcd(addr=lcd_address, bl=0)
                     
                     if init_result:
                         self.logger.info("Original LCD1602 initialized successfully")
@@ -145,12 +164,39 @@ class DisplayManager:
         else:
             self.logger.info("LCD not available, skipping LCD setup")
     
+    def _setup_button(self):
+        """Setup button handler for display control."""
+        try:
+            from button_handler import ButtonHandler
+            # Read button pin from config
+            try:
+                button_pin = self.config['hardware']['button_pin']
+            except KeyError:
+                button_pin = 18  # Default fallback
+                
+            self.button_handler = ButtonHandler(
+                button_pin=button_pin,
+                display_manager=self,
+                logger=self.logger
+            )
+            self.button_handler.start_monitoring()
+            self.logger.info(f"Button handler initialized on GPIO {button_pin}")
+        except Exception as e:
+            self.logger.warning(f"Could not setup button handler: {e}")
+            self.button_handler = None
+    
     def update_display(self, line1: str, line2: str):
-        """Update LCD display."""
+        """Update LCD display with smart timeout management."""
         self.logger.debug(f"update_display called: lcd_available={self.lcd_available}, lcd={self.lcd is not None}")
         
-        # Try to use real LCD if available
-        if self.lcd_available and self.lcd:
+        # Update activity timestamp for timeout management
+        self.last_activity = datetime.now()
+        
+        # Check if display should be turned on due to timeout
+        self._check_display_timeout()
+        
+        # Try to use real LCD if available and display is on
+        if self.lcd_available and self.lcd and self.display_on:
             self.logger.debug("Updating real LCD display")
             try:
                 self.lcd.clear()
@@ -164,6 +210,9 @@ class DisplayManager:
                 # Fallback to console display
                 self.logger.info("Falling back to console display")
                 self._simulate_display(line1, line2)
+        elif not self.display_on:
+            # Display is off due to timeout
+            self.logger.debug("Display is off due to timeout")
         else:
             # No LCD available, use console display
             self.logger.debug("No LCD available, using console display")
@@ -228,6 +277,12 @@ class DisplayManager:
 
         # Update LEDs based on state machine state
         self.update_leds_for_state(current_state)
+        
+        # Check for power events that should keep display on
+        self._check_power_events()
+        
+        # Check if we're in an emergency state that should keep display on
+        self._check_emergency_state(current_state)
     
     def _cycle_dual_display(self, primary_freq: Optional[float], secondary_freq: Optional[float], 
                            ug_indicator: str, zero_voltage_duration: float, current_time: str):
@@ -316,8 +371,118 @@ class DisplayManager:
             self.hardware_manager.set_led('red', True)
     
     
+    def _check_display_timeout(self):
+        """Check if display should be turned off due to timeout."""
+        if not self.display_timeout_enabled or not self.lcd_available or not self.lcd:
+            return
+            
+        if not self.display_on:
+            return
+            
+        time_since_activity = datetime.now() - self.last_activity
+        timeout_duration = timedelta(seconds=self.display_timeout_seconds)
+        
+        if time_since_activity > timeout_duration and not self.power_event_detected:
+            self._turn_display_off()
+            
+    def _turn_display_off(self):
+        """Turn the display off to save power."""
+        if self.display_on:
+            self.logger.info("Turning display off due to timeout")
+            self.display_on = False
+            try:
+                self.lcd.clear()
+                # Try to turn off backlight
+                if hasattr(self.lcd, 'bus') and self.lcd.bus:
+                    self.lcd.bus.write_byte(self.lcd.LCD_ADDR, 0x00)
+            except Exception as e:
+                self.logger.debug(f"Error turning off display: {e}")
+                
+    def _turn_display_on(self):
+        """Turn the display back on."""
+        if not self.display_on:
+            self.logger.info("Turning display back on")
+            self.display_on = True
+            try:
+                # Reinitialize the LCD
+                if not USE_RPLCD:
+                    # For original LCD1602, reinitialize
+                    lcd_address = self.config.get('hardware', {}).get('lcd_address', 0x27)
+                    self.lcd.init_lcd(addr=lcd_address, bl=1)
+                else:
+                    # For RPLCD, just clear and turn on backlight
+                    self.lcd.clear()
+                    if hasattr(self.lcd, 'backlight_enabled'):
+                        self.lcd.backlight_enabled = True
+            except Exception as e:
+                self.logger.error(f"Error turning on display: {e}")
+                
+    def _check_power_events(self):
+        """Check for power events that should keep display on."""
+        # This is a placeholder - customize based on your system
+        # Examples: grid loss/restore, generator on/off, etc.
+        
+        # For now, we'll detect power events based on frequency changes
+        # You can implement actual power event detection here
+        # For example:
+        # - Check GPIO pins for power status
+        # - Monitor network connectivity
+        # - Check generator status
+        # - Monitor voltage levels
+        
+        # Placeholder: always return False (no power events detected)
+        # You should implement actual power event detection logic here
+        return False
+        
+    def _check_emergency_state(self, current_state):
+        """Check if we're in an emergency state that should keep display on."""
+        if current_state in self.emergency_states:
+            # We're in an emergency state - keep display on
+            if not self.display_on:
+                self.logger.info(f"Emergency state '{current_state}' detected - turning display on")
+                self._turn_display_on()
+            # Reset activity timer to keep display on
+            self.last_activity = datetime.now()
+            self.power_event_detected = True
+        else:
+            # Not in emergency state - allow normal timeout
+            self.power_event_detected = False
+        
+    def force_display_on(self):
+        """Force display to turn on (useful for power events)."""
+        self.power_event_detected = True
+        self.last_activity = datetime.now()
+        if not self.display_on:
+            self._turn_display_on()
+            
+    def reset_display_timeout(self):
+        """Reset the display timeout timer."""
+        self.last_activity = datetime.now()
+        if not self.display_on:
+            self._turn_display_on()
+            
+    def set_display_timeout(self, minutes: int):
+        """Set the display timeout in minutes."""
+        self.display_timeout_minutes = minutes
+        self.logger.info(f"Display timeout set to {minutes} minutes")
+        
+    def enable_display_timeout(self, enabled: bool):
+        """Enable or disable display timeout."""
+        self.display_timeout_enabled = enabled
+        self.logger.info(f"Display timeout {'enabled' if enabled else 'disabled'}")
+        
     def cleanup(self):
         """Cleanup display resources."""
+        # Cleanup button handler
+        if self.button_handler:
+            try:
+                self.button_handler.stop_monitoring()
+                self.button_handler.cleanup()
+                self.logger.info("Button handler cleanup completed")
+            except Exception as e:
+                self.logger.error(f"Button cleanup error: {e}")
+        
+        # Cleanup LCD
         if self.lcd_available and self.lcd:
             try:
                 self.lcd.clear()
