@@ -1,10 +1,10 @@
 ## RpiSolArk To-Do
 
-### 1) Ways to dim screen
+### 1) Screen backlight management for longevity
 - [ ] Identify screen model and backlight control interface on device
-- [ ] Prototype brightness control via sysfs/PWM or LCD driver
-- [ ] Add brightness control to dashboard UI with min/max limits
-- [ ] Persist brightness setting in config and apply on boot
+- [ ] **Turn off backlight completely** - unnecessary for monitoring device
+- [ ] Remove any backlight control code to simplify system
+- [ ] Focus on data logging/remote monitoring instead of local display
 
 ### 2) Multiple H1AA1 modules working concurrently
 - [ ] Add multi-H1AA1 input support to GPIO and pulse counter
@@ -26,7 +26,7 @@
 - [ ] Project case/enclosure for sensor + transformer
 - [ ] Other parts (TBD)
 
-## Long-running Raspberry Pi system to-do
+## Long-running Raspberry Pi system to-do (5-10 year target)
 - [ ] Enable hardware watchdog and service (`/dev/watchdog`, `watchdog` service)
 - [ ] Configure log rotation and limit writes; consider overlay/RO root if feasible
 - [ ] Auto-restart core services via `systemd` (`Restart=always`, health checks)
@@ -39,5 +39,11 @@
 - [ ] Backups/restore plan for config and data snapshots
 - [ ] Monitoring/alerting pipeline for failures and anomalies
 - [ ] Burn-in test plan (e.g., 72h continuous run with fault injections)
+- [ ] **Backlight strategy**: Keep backlight OFF - unnecessary for monitoring device
+- [ ] **Component selection**: Use industrial-grade components where possible
+- [ ] **Environmental**: Proper enclosure, dust protection, temperature range validation
+- [ ] **Power supply**: High-quality, regulated supply with surge protection
+- [ ] **SD card**: Industrial/endurance grade or migrate to external SSD
+- [ ] **Backup system**: Secondary Pi or failover mechanism for critical monitoring
 
 
