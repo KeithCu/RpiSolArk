@@ -30,7 +30,7 @@
 - [ ] Create tests simulating loss/restore to verify settings are applied
 
 ## Shopping List
-- [ ] H11AA1 optocoupler (add one more) - **Priority: Medium** (system working well with single optocoupler)
+- [x] H11AA1 optocoupler (add one more) - **Priority: Medium** (system working well with single optocoupler)
 - [ ] Small isolation/step-down transformer sized appropriately (order 1–2)
 - [ ] Project case/enclosure for sensor + transformer  
 - [ ] Other parts (TBD)
@@ -56,7 +56,7 @@
 - [ ] **Backup system**: Secondary Pi or failover mechanism for critical monitoring
 
 
-- [ ] SD wear reduction (moderate):
+- [x] SD wear reduction (moderate):
   - [x] Journald volatile (RAM) and disable rsyslog
   - [x] Disable APT periodic timers and cron
   - [x] Add noatime to / and /boot
