@@ -59,7 +59,9 @@ def test_libgpiod_system():
         
         if pulse_count > 0:
             # Calculate frequency
-            frequency = pulse_count / (elapsed * 2)  # 2 pulses per cycle
+            # Since we're counting BOTH edges and H11AA1 gives 2 pulses per cycle,
+            # we get 4 edges per AC cycle total
+            frequency = pulse_count / (elapsed * 4)  # 4 edges per AC cycle
             print(f"Frequency: {frequency:.2f} Hz")
             
             if 55 <= frequency <= 65:

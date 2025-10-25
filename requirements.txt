@@ -13,16 +13,9 @@ gpiod>=2.0.0
 playwright>=1.40.0
 requests>=2.28.0
 
-# Build dependencies for C extensions
-setuptools>=65.0.0
-wheel>=0.38.0
-
 # Development dependencies (optional)
 pytest>=6.0.0
 pytest-cov>=2.12.0
 
 # Note: Auto-updates are handled by system-level services
 # See setup_zero_code_updates.sh for auto-update setup
-# 
-# For building C extensions, you also need:
-# sudo apt-get install gcc python3-dev

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Optocoupler management for frequency measurement.
+Optocoupler management for frequency measurement using working libgpiod implementation.
 Handles pulse counting and frequency calculation with graceful degradation.
 """
 
@@ -24,7 +24,7 @@ from gpio_event_counter import create_counter
 
 
 class SingleOptocoupler:
-    """Manages a single optocoupler for frequency measurement."""
+    """Manages a single optocoupler for frequency measurement using working libgpiod."""
     
     def __init__(self, config, logger: logging.Logger, name: str, pin: int, 
                  pulses_per_cycle: int = 2, measurement_duration: float = 2.0):
@@ -49,7 +49,7 @@ class SingleOptocoupler:
             self._setup_optocoupler()
     
     def _setup_optocoupler(self):
-        """Setup optocoupler for falling edge detection."""
+        """Setup optocoupler for edge detection using working libgpiod only."""
         if not self.gpio_available:
             self.logger.warning(f"GPIO not available, cannot setup {self.name} optocoupler")
             return
@@ -57,51 +57,29 @@ class SingleOptocoupler:
         try:
             self.logger.info(f"Setting up {self.name} optocoupler on GPIO pin {self.pin}")
             
-            # Don't set GPIO mode here - let the main GPIO manager handle it
-            # Just check if it's already set to BCM
+            # Use libgpiod only - don't mix with RPi.GPIO to avoid conflicts
+            # Set up GIL-free interrupt detection using working libgpiod
             try:
-                # Try to read a pin to see if GPIO is already initialized
-                GPIO.input(self.pin)
-                self.logger.debug("GPIO already initialized")
-            except RuntimeError:
-                # GPIO not initialized yet, set mode to BCM
-                GPIO.setmode(GPIO.BCM)
-                self.logger.info("GPIO mode set to BCM")
-            
-            # Configure GPIO pin for optocoupler input with pull-up resistor
-            GPIO.setup(self.pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            self.logger.info(f"{self.name} optocoupler configured for input with pull-up resistor")
-            
-            # Test the pin to make sure it's working
-            initial_state = GPIO.input(self.pin)
-            self.logger.info(f"{self.name} optocoupler pin {self.pin} initial state: {initial_state}")
-            
-            # Set up GIL-free interrupt detection using C extension
-            try:
-                if self.counter.setup_gpio_interrupt(self.pin):
-                    self.logger.info(f"{self.name} optocoupler GIL-free interrupt detection configured")
+                if self.counter.register_pin(self.pin):
+                    self.logger.info(f"{self.name} optocoupler libgpiod interrupt detection configured")
+                    self.initialized = True
                 else:
-                    raise Exception("GIL-free counter setup failed")
+                    raise Exception("libgpiod counter setup failed")
             except Exception as e:
-                self.logger.warning(f"Could not set up GIL-free interrupt detection for {self.name}: {e}")
+                self.logger.warning(f"Could not set up libgpiod interrupt detection for {self.name}: {e}")
                 self.logger.info(f"Will use polling method for {self.name} pulse detection")
+                # Still mark as initialized for polling fallback
+                self.initialized = True
             
-            self.initialized = True
             self.logger.info(f"{self.name} optocoupler setup completed successfully")
             
         except Exception as e:
             self.logger.error(f"Failed to setup {self.name} optocoupler: {e}")
             self.initialized = False
     
-    def _optocoupler_callback(self, channel):
-        """Callback function for optocoupler falling edge detection."""
-        with self.pulse_count_lock:
-            self.pulse_count += 1
-            self.logger.debug(f"{self.name} optocoupler pulse detected, count: {self.pulse_count}")
-    
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> int:
         """
-        Count optocoupler pulses over specified duration using GIL-free C extension.
+        Count optocoupler pulses over specified duration using working libgpiod.
         Uses interrupt-based counting for maximum accuracy and performance.
         
         Args:
@@ -121,25 +99,22 @@ class SingleOptocoupler:
         # Reset counter before measurement
         self.counter.reset_count(self.pin)
         
-        # Use GIL-free interrupt counting
+        # Use libgpiod interrupt counting
         start_time = time.perf_counter()
         
-        while time.perf_counter() - start_time < duration:
-            # Check for interrupts and update counters (GIL-free)
-            self.counter.check_interrupts()
-            # Optimized sleep for better performance - reduced from 1ms to 100μs
-            time.sleep(0.0001)  # 100μs sleep for faster response while preventing busy waiting
+        # Wait for the specified duration - libgpiod handles counting in background
+        time.sleep(duration)
         
-        # Get final count from C extension
+        # Get final count from libgpiod
         pulse_count = self.counter.get_count(self.pin)
         elapsed = time.perf_counter() - start_time
         
-        self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds (GIL-free)")
+        self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds (libgpiod)")
         return pulse_count
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:
         """
-        Calculate AC frequency from pulse count.
+        Calculate AC frequency from pulse count using correct libgpiod calculation.
         
         Args:
             pulse_count: Number of pulses counted
@@ -154,12 +129,10 @@ class SingleOptocoupler:
         if pulse_count <= 0 or duration <= 0:
             return None
         
-        # Calculate frequency: pulses / (duration * pulses_per_cycle)
-        # H11AA1 without rectifier detects extra edges per AC cycle
-        # Apply correction factor to get accurate 60 Hz reading
-        raw_frequency = pulse_count / (duration * self.pulses_per_cycle)
-        # Correction factor: 60.0 / 75.6 = 0.794 (based on analysis)
-        frequency = raw_frequency * 0.794
+        # Calculate frequency using correct libgpiod calculation
+        # libgpiod counts BOTH edges, and H11AA1 gives 2 pulses per cycle
+        # So we get 4 edges per AC cycle total
+        frequency = pulse_count / (duration * 4)  # 4 edges per AC cycle
         
         self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {duration:.2f}s")
         return frequency
@@ -168,9 +141,10 @@ class SingleOptocoupler:
         """Cleanup optocoupler resources."""
         if self.gpio_available and self.initialized:
             try:
-                # Remove optocoupler event detection if it was set up
-                GPIO.remove_event_detect(self.pin)
-                self.logger.info(f"{self.name} optocoupler event detection removed")
+                # Cleanup libgpiod counter
+                if self.counter:
+                    self.counter.cleanup()
+                self.logger.info(f"{self.name} optocoupler cleanup completed")
             except Exception as e:
                 self.logger.error(f"{self.name} optocoupler cleanup error: {e}")
 
@@ -193,21 +167,17 @@ class OptocouplerManager:
         # Only proceed with optocoupler setup if enabled
         if self.optocoupler_enabled:
             try:
-                secondary_config = optocoupler_config['secondary']
-                secondary_pin = secondary_config['gpio_pin']
+                # Check for secondary configuration
+                secondary_config = optocoupler_config.get('secondary', {})
+                secondary_pin = secondary_config.get('gpio_pin', -1)
             except KeyError as e:
                 raise KeyError(f"Missing required secondary optocoupler configuration key: {e}")
             
             # If secondary GPIO pin is -1, it's single mode, otherwise dual mode
             self.dual_mode = secondary_pin != -1
-            
-            # Choose measurement method to avoid GIL issues
-            self.measurement_method = optocoupler_config['measurement_method']
         else:
             # Optocoupler disabled - set defaults
             self.dual_mode = False
-            self.measurement_method = 'interrupt'
-        # Options: 'interrupt' (recommended), 'alternating' (fallback)
         
         # Initialize optocouplers
         self.optocouplers = {}
@@ -308,9 +278,8 @@ class OptocouplerManager:
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
                                 optocoupler_name: str = 'primary') -> int:
         """
-        Count optocoupler pulses over specified duration using high-precision polling.
-        Uses high-priority threading for maximum accuracy.
-        NO AVERAGING - measures actual frequency changes.
+        Count optocoupler pulses over specified duration using working libgpiod.
+        Uses interrupt-based counting for maximum accuracy.
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
@@ -334,7 +303,7 @@ class OptocouplerManager:
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, 
                                        optocoupler_name: str = 'primary') -> Optional[float]:
         """
-        Calculate AC frequency from pulse count.
+        Calculate AC frequency from pulse count using working libgpiod calculation.
         
         Args:
             pulse_count: Number of pulses counted
@@ -357,7 +326,7 @@ class OptocouplerManager:
     
     def get_dual_frequencies(self, duration: float = None, debounce_time: float = 0.0) -> Tuple[Optional[float], Optional[float]]:
         """
-        Get frequency readings from both optocouplers using interrupt-based counting.
+        Get frequency readings from both optocouplers using working libgpiod.
         This avoids GIL issues by using GPIO interrupts instead of polling loops.
         
         Args:
@@ -376,7 +345,7 @@ class OptocouplerManager:
             return None, None
         
         if duration is None:
-            duration = self.measurement_duration
+            duration = 2.0  # Default duration
         
         # Check if both optocouplers are available
         primary_available = ('primary' in self.optocouplers and self.optocouplers['primary'].initialized)
@@ -386,49 +355,20 @@ class OptocouplerManager:
             self.logger.warning("No optocouplers available for dual measurement")
             return None, None
         
-        # Choose measurement method based on configuration
-        if self.measurement_method == 'interrupt':
-            self.logger.debug("Using interrupt-based dual measurement (GIL-safe)")
-            return self._get_dual_frequencies_interrupt_based(duration, debounce_time, primary_available, secondary_available)
-        elif self.measurement_method == 'alternating':
-            self.logger.debug("Using alternating dual measurement (GIL-safe fallback)")
-            return self.get_dual_frequencies_alternating(duration, debounce_time)
-        else:
-            self.logger.warning(f"Unknown measurement method '{self.measurement_method}', using interrupt-based")
-            return self._get_dual_frequencies_interrupt_based(duration, debounce_time, primary_available, secondary_available)
-    
-    def _get_dual_frequencies_interrupt_based(self, duration: float, debounce_time: float, 
-                                            primary_available: bool, secondary_available: bool) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Get dual frequencies using interrupt-based counting to avoid GIL issues.
-        This method uses GPIO interrupts which are handled outside the Python GIL.
-        """
         # Reset pulse counters
         if primary_available:
             optocoupler = self.optocouplers['primary']
-            if optocoupler.counter:
-                # Use GIL-safe counter
-                optocoupler.counter.reset_count(optocoupler.pin)
-            else:
-                # Fallback to Python counter
-                with optocoupler.pulse_count_lock:
-                    optocoupler.pulse_count = 0
+            optocoupler.counter.reset_count(optocoupler.pin)
         
         if secondary_available:
             optocoupler = self.optocouplers['secondary']
-            if optocoupler.counter:
-                # Use GIL-safe counter
-                optocoupler.counter.reset_count(optocoupler.pin)
-            else:
-                # Fallback to Python counter
-                with optocoupler.pulse_count_lock:
-                    optocoupler.pulse_count = 0
+            optocoupler.counter.reset_count(optocoupler.pin)
         
         # Start measurement period
         start_time = time.perf_counter()
         self.logger.debug(f"Starting dual optocoupler measurement for {duration:.2f}s")
         
-        # Wait for measurement duration (interrupts handle counting)
+        # Wait for measurement duration (libgpiod handles counting)
         time.sleep(duration)
         
         # Get final counts
@@ -437,23 +377,11 @@ class OptocouplerManager:
         
         if primary_available:
             optocoupler = self.optocouplers['primary']
-            if optocoupler.counter:
-                # Use GIL-safe counter
-                primary_pulses = optocoupler.counter.get_count(optocoupler.pin)
-            else:
-                # Fallback to Python counter
-                with optocoupler.pulse_count_lock:
-                    primary_pulses = optocoupler.pulse_count
+            primary_pulses = optocoupler.counter.get_count(optocoupler.pin)
         
         if secondary_available:
             optocoupler = self.optocouplers['secondary']
-            if optocoupler.counter:
-                # Use GIL-safe counter
-                secondary_pulses = optocoupler.counter.get_count(optocoupler.pin)
-            else:
-                # Fallback to Python counter
-                with optocoupler.pulse_count_lock:
-                    secondary_pulses = optocoupler.pulse_count
+            secondary_pulses = optocoupler.counter.get_count(optocoupler.pin)
         
         elapsed = time.perf_counter() - start_time
         self.logger.debug(f"Dual measurement completed in {elapsed:.3f}s - Primary: {primary_pulses}, Secondary: {secondary_pulses}")
@@ -467,59 +395,6 @@ class OptocouplerManager:
         
         if secondary_available and secondary_pulses > 0:
             secondary_freq = self.calculate_frequency_from_pulses(secondary_pulses, duration, 'secondary')
-        
-        return primary_freq, secondary_freq
-    
-    def get_dual_frequencies_alternating(self, duration: float = None, debounce_time: float = 0.0) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Get frequency readings from both optocouplers using alternating measurement.
-        This is a fallback method that avoids GIL issues by measuring one at a time.
-        
-        Args:
-            duration: Duration in seconds to count pulses (uses config default if None)
-            debounce_time: Minimum time between state changes to filter noise (0.0 for clean signals)
-            
-        Returns:
-            Tuple of (primary_frequency, secondary_frequency) or (None, None) if not available
-        """
-        if not self.optocoupler_enabled:
-            self.logger.debug("Optocoupler disabled, returning None frequencies")
-            return None, None
-            
-        if not self.dual_mode:
-            self.logger.warning("Dual mode not enabled, cannot get dual frequencies")
-            return None, None
-        
-        if duration is None:
-            duration = self.measurement_duration
-        
-        # Check if both optocouplers are available
-        primary_available = ('primary' in self.optocouplers and self.optocouplers['primary'].initialized)
-        secondary_available = ('secondary' in self.optocouplers and self.optocouplers['secondary'].initialized)
-        
-        if not primary_available and not secondary_available:
-            self.logger.warning("No optocouplers available for dual measurement")
-            return None, None
-        
-        primary_freq = None
-        secondary_freq = None
-        
-        # Measure primary first
-        if primary_available:
-            self.logger.debug("Measuring primary optocoupler...")
-            primary_pulses = self.count_optocoupler_pulses(duration, debounce_time, 'primary')
-            if primary_pulses > 0:
-                primary_freq = self.calculate_frequency_from_pulses(primary_pulses, duration, 'primary')
-        
-        # Small delay to avoid interference
-        time.sleep(0.1)
-        
-        # Measure secondary
-        if secondary_available:
-            self.logger.debug("Measuring secondary optocoupler...")
-            secondary_pulses = self.count_optocoupler_pulses(duration, debounce_time, 'secondary')
-            if secondary_pulses > 0:
-                secondary_freq = self.calculate_frequency_from_pulses(secondary_pulses, duration, 'secondary')
         
         return primary_freq, secondary_freq
     

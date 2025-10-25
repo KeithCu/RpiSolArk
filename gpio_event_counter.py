@@ -20,7 +20,7 @@ except ImportError as e:
 class GPIOEventCounter:
 	"""Pure-Python counter backend using libgpiod v2 edge events."""
 
-	def __init__(self, logger: logging.Logger, chip_name: str = "gpiochip0"):
+	def __init__(self, logger: logging.Logger, chip_name: str = "/dev/gpiochip0"):
 		self.logger = logger
 		self.chip_name = chip_name
 		self.registered_pins: Dict[int, int] = {}  # pin -> index (0..1)
@@ -38,13 +38,14 @@ class GPIOEventCounter:
 			raise RuntimeError("No pins registered")
 		self._chip = gpiod.Chip(self.chip_name)
 		settings = gpiod.LineSettings()
-		settings.direction = gpiod.LineDirection.INPUT
-		settings.edge = gpiod.LineEdge.FALLING
+		settings.direction = gpiod.line.Direction.INPUT
+		settings.edge_detection = gpiod.line.Edge.BOTH  # Count both rising and falling edges
 		# Optional: internal pull-up
-		# settings.bias = gpiod.LineBias.PULL_UP
-		lcfg = gpiod.LineConfig()
-		lcfg.add_line_settings(offsets, settings)
-		self._request = self._chip.request_lines(consumer="pulse_counter_py", config=lcfg)
+		# settings.bias = gpiod.line.Bias.PULL_UP
+		
+		# Create config dictionary mapping offsets to settings
+		config = {offset: settings for offset in offsets}
+		self._request = self._chip.request_lines(consumer="pulse_counter_py", config=config)
 
 	def _start_thread(self):
 		self._running = True
