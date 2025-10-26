@@ -98,9 +98,9 @@ The system uses **three complementary analysis methods** to detect power sources
 | 🎯 **Core Monitoring** | 🔧 **Smart Integration** | 📱 **User Interface** |
 |:---:|:---:|:---:|
 | Real-time frequency analysis | Sol-Ark cloud integration (WIP) | LCD display with status |
-| Power source classification | Automatic parameter updates (WIP) | LED status indicators |
-| Allan variance analysis | Web automation (Playwright) | Web dashboard |
-| Health monitoring | Graceful degradation | Comprehensive logging |
+| Power source classification | Automatic parameter updates (WIP) | Web dashboard |
+| Allan variance analysis | Web automation (Playwright) | Comprehensive logging |
+| Health monitoring | Graceful degradation | Real-time status updates |
 
 </div>
 
@@ -113,8 +113,6 @@ The system uses **three complementary analysis methods** to detect power sources
 - 📈 **Allan variance analysis** for frequency stability assessment
 
 - 📺 **LCD display** with real-time status updates and U/G indicator
-
-- 💡 **LED indicators** for instant power source identification
 
 - 🎯 **U/G indicator** showing majority classification over recent data window
 
@@ -184,7 +182,6 @@ Press Ctrl+C to stop
 | 🍓 **Raspberry Pi** | Any model (3B+, 4B recommended) | Main processing unit |
 | 🔌 **H11AA1 Optocoupler** | AC line isolation | Safe frequency detection |
 | 📺 **16x2 I2C LCD** | Address 0x27 | Real-time status display |
-| 💡 **LEDs** | Green + Red | Power source indicators |
 | 🔘 **Reset Button** | Momentary push button | Manual system reset/restart |
 | 🔗 **Resistors** | Various values | Circuit protection |
 
@@ -195,10 +192,7 @@ Press Ctrl+C to stop
 - [ ] Raspberry Pi 4B (4GB recommended)
 - [ ] H11AA1 optocoupler
 - [ ] 16x2 I2C LCD display (0x27 address)
-- [ ] Green LED (5mm)
-- [ ] Red LED (5mm)
 - [ ] Momentary push button (reset button)
-- [ ] 220Ω resistors (2x)
 - [ ] 1kΩ resistor
 - [ ] 10kΩ resistor
 - [ ] Breadboard and jumper wires
@@ -245,8 +239,6 @@ python monitor.py --verbose
 | Component | GPIO Pin | Connection |
 |:---:|:---:|:---:|
 | 🔌 Optocoupler Input | GPIO 17 | AC line via optocoupler |
-| 💚 Green LED | GPIO 18 | Utility Grid indicator |
-| ❤️ Red LED | GPIO 27 | Generator indicator |
 | 🔘 Reset Button | GPIO 22 | Active LOW with pull-up |
 | 📺 I2C LCD | SDA/SCL | Address 0x27 |
 
@@ -411,8 +403,6 @@ The system uses a comprehensive YAML configuration file `config.yaml`. Here's wh
 # config.yaml - Optimized for real-world generator detection
 hardware:
   gpio_pin: 17          # Optocoupler input (H11AA1)
-  led_green: 18         # Green LED for Utility
-  led_red: 27           # Red LED for Generator
   lcd_address: 0x27     # I2C address for LCD
 
 sampling:
@@ -522,7 +512,6 @@ graph TB
     
     B --> G[GPIO Interface]
     B --> H[LCD Display]
-    B --> I[LED Indicators]
     
     C --> J[Allan Variance]
     C --> K[Power Classification]
@@ -560,7 +549,7 @@ graph TB
 
 1. **Input**: AC line frequency via optocoupler
 2. **Processing**: Real-time frequency analysis and classification
-3. **Output**: LCD display, LED indicators, logging
+3. **Output**: LCD display, logging
 4. **Integration**: Sol-Ark cloud parameter updates
 5. **Monitoring**: System health and performance tracking
 
@@ -872,7 +861,6 @@ The system provides comprehensive monitoring capabilities:
 | Monitoring Type | Description | Output |
 |:---:|:---:|:---:|
 | 📺 **Real-time Display** | LCD status updates | Visual indicators |
-| 💡 **LED Indicators** | Power source status | Green/Red LEDs |
 | 🏥 **System Health** | CPU, memory, watchdog | Resource monitoring |
 | 📝 **Hourly Logging** | Status reports | CSV files |
 | 📋 **Application Logs** | Detailed logging | Rotating log files |
@@ -963,7 +951,6 @@ findmnt /tmp
 |:---:|:---:|:---:|
 | 🔌 **GPIO Access Denied** | Permission errors | `sudo usermod -a -G gpio pi` |
 | 📺 **LCD Not Displaying** | Blank screen | Check I2C address and connections |
-| 💡 **LEDs Not Working** | No status indicators | Verify GPIO pin assignments |
 | ☁️ **Cloud Connection Failed** | Sol-Ark sync errors | Check credentials and network |
 | 📊 **Frequency Reading Errors** | Invalid data | Verify optocoupler connections |
 
