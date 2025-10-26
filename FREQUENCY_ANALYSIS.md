@@ -600,6 +600,118 @@ head -20 tuning_data.csv
 head -20 tuning_analysis.csv
 ```
 
+### 🎛️ Configuration Tuning Guide
+
+The system uses optimized default values based on real-world generator data analysis. Here's how to tune them for your specific environment:
+
+#### 🔧 **Critical Tuning Parameters**
+
+<div align="center">
+
+| Parameter | Default | Purpose | Tuning Guide |
+|:---:|:---:|:---:|:---:|
+| **`allan_variance`** | `1e-4` | Detects frequency hunting | Decrease for more sensitivity |
+| **`std_dev`** | `0.08` | Overall frequency spread | Increase if false positives |
+| **`kurtosis`** | `0.4` | Hunting pattern detection | Lower for subtle hunting |
+| **`sample_rate`** | `2.0` | Data collection rate | Higher = more CPU usage |
+| **`buffer_duration`** | `300` | Analysis window | Longer = better detection |
+
+</div>
+
+#### 🎯 **Environment-Specific Tuning**
+
+**🏠 Residential (Typical Setup)**
+```yaml
+analysis:
+  generator_thresholds:
+    allan_variance: 1e-4    # Default - good for most generators
+    std_dev: 0.08           # Default - accounts for typical variation
+    kurtosis: 0.4           # Default - detects common hunting
+```
+
+**🏭 Industrial (Noisy Environment)**
+```yaml
+analysis:
+  generator_thresholds:
+    allan_variance: 1e-9    # Less sensitive - avoid electrical noise
+    std_dev: 0.12           # Wider tolerance - account for noise
+    kurtosis: 0.6           # Higher threshold - reduce false positives
+```
+
+**🔬 Laboratory (Precision Required)**
+```yaml
+analysis:
+  generator_thresholds:
+    allan_variance: 2e-10   # More sensitive - catch subtle issues
+    std_dev: 0.05           # Tighter tolerance - precise detection
+    kurtosis: 0.3           # Lower threshold - detect minor hunting
+```
+
+#### 📊 **Generator-Specific Tuning**
+
+**🔧 Generac Guardian Series (20kW, 16kW)**
+```yaml
+# These generators show significant hunting patterns
+analysis:
+  generator_thresholds:
+    allan_variance: 3e-10   # Very sensitive - catches hunting
+    std_dev: 0.10           # Wide tolerance - 59-64 Hz range
+    kurtosis: 0.3           # Low threshold - detects cycling
+```
+
+**⚡ Generac V-Twin Series**
+```yaml
+# Load-dependent frequency issues
+analysis:
+  generator_thresholds:
+    allan_variance: 1e-4    # Standard sensitivity
+    std_dev: 0.08           # Standard tolerance
+    kurtosis: 0.4           # Standard hunting detection
+```
+
+**🔋 Portable Generators (XG7000E, etc.)**
+```yaml
+# Extreme hunting and instability
+analysis:
+  generator_thresholds:
+    allan_variance: 1e-9    # Less sensitive - avoid noise
+    std_dev: 0.15           # Very wide tolerance - 49-62 Hz range
+    kurtosis: 0.5           # Higher threshold - reduce false positives
+```
+
+#### 🛠️ **Tuning Process**
+
+1. **Start with defaults** - The optimized defaults work for most cases
+2. **Monitor for false positives** - If utility is classified as generator, increase thresholds
+3. **Check for missed detection** - If generator is classified as utility, decrease thresholds
+4. **Use verbose logging** - `python monitor.py --verbose` to see analysis details
+5. **Review hourly logs** - Check `hourly_status.csv` for classification accuracy
+
+#### 🔍 **Diagnostic Commands**
+
+```bash
+# Enable verbose logging to see analysis details
+python monitor.py --verbose
+
+# Check frequency analysis in real-time
+tail -f monitor.log | grep "frequency"
+
+# View classification history
+cat hourly_status.csv
+
+# Test with different thresholds
+python monitor.py --simulator --verbose
+```
+
+#### ⚠️ **Common Tuning Issues**
+
+| Issue | Symptoms | Solution |
+|:---:|:---:|:---:|
+| **False Generator Detection** | Utility classified as generator | Increase `allan_variance` to `1e-3` |
+| **Missed Generator Detection** | Generator classified as utility | Decrease `allan_variance` to `5e-5` |
+| **Inconsistent Classification** | Switching between classifications | Check for electrical noise, increase `std_dev` |
+| **Too Sensitive** | Frequent false alarms | Increase all thresholds by 50% |
+| **Not Sensitive Enough** | Missing generator issues | Decrease all thresholds by 50% |
 
 
 *For more information about using the system, configuration options, and troubleshooting, see the [main README](README.md).*
