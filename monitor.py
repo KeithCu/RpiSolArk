@@ -44,11 +44,12 @@ class PowerState(Enum):
 class PowerStateMachine:
     """State machine for power system management."""
 
-    def __init__(self, config, logger: logging.Logger, display_manager=None, solark_integration=None):
+    def __init__(self, config, logger: logging.Logger, display_manager=None, solark_integration=None, optocoupler_name=None):
         self.config = config
         self.logger = logger
         self.display_manager = display_manager  # Reference to display manager for backlight control
         self.solark_integration = solark_integration  # Reference to Sol-Ark integration
+        self.optocoupler_name = optocoupler_name  # Name of the optocoupler this state machine manages
         self.current_state = PowerState.TRANSITIONING  # Start in transitioning to allow detection
         self.previous_state = PowerState.TRANSITIONING
         self.state_entry_time = time.time()
@@ -221,8 +222,8 @@ class PowerStateMachine:
             self.display_manager.force_display_on()
             self.logger.info("Display backlight turned on for power outage")
         # Disable TOU when off-grid
-        if self.solark_integration:
-            self.solark_integration.on_power_source_change('off_grid', {})
+        if self.solark_integration and self.optocoupler_name:
+            self.solark_integration.on_power_source_change('off_grid', {}, self.optocoupler_name)
 
     def _on_enter_grid(self):
         """Called when entering GRID state."""
@@ -234,8 +235,8 @@ class PowerStateMachine:
             self.display_manager.force_display_on()
             self.logger.info("Display backlight turned on for grid power")
         # Enable TOU when on grid power
-        if self.solark_integration:
-            self.solark_integration.on_power_source_change('grid', {})
+        if self.solark_integration and self.optocoupler_name:
+            self.solark_integration.on_power_source_change('grid', {}, self.optocoupler_name)
 
     def _on_enter_generator(self):
         """Called when entering GENERATOR state."""
@@ -247,8 +248,8 @@ class PowerStateMachine:
             self.display_manager.force_display_on()
             self.logger.info("Display backlight turned on for generator operation")
         # Disable TOU when on generator
-        if self.solark_integration:
-            self.solark_integration.on_power_source_change('generator', {})
+        if self.solark_integration and self.optocoupler_name:
+            self.solark_integration.on_power_source_change('generator', {}, self.optocoupler_name)
 
 
 class FrequencyAnalyzer:
@@ -685,7 +686,8 @@ class FrequencyMonitor:
             self.logger.warning(f"Sol-Ark integration disabled: {e}")
             self.solark_integration = None
         
-        self.state_machine = PowerStateMachine(self.config, self.logger, self.hardware.display, self.solark_integration)
+        # Create separate state machines for each optocoupler
+        self.state_machines = self._create_optocoupler_state_machines()
         self.health_monitor = HealthMonitor(self.config, self.logger)
         self.memory_monitor = MemoryMonitor(self.config, self.logger)
         self.data_logger = DataLogger(self.config, self.logger)
@@ -746,6 +748,85 @@ class FrequencyMonitor:
         
         # Start restart manager (auto-updates handled by system services)
         self.restart_manager.start_update_monitor()
+    
+    def _create_optocoupler_state_machines(self) -> Dict[str, PowerStateMachine]:
+        """
+        Create separate state machines for each configured optocoupler
+        
+        Returns:
+            Dict mapping optocoupler name to PowerStateMachine instance
+        """
+        state_machines = {}
+        
+        try:
+            optocoupler_config = self.config['hardware']['optocoupler']
+            
+            # Create state machine for primary optocoupler
+            primary_config = optocoupler_config['primary']
+            primary_name = primary_config['name']
+            state_machines[primary_name] = PowerStateMachine(
+                self.config, self.logger, self.hardware.display, 
+                self.solark_integration, primary_name
+            )
+            self.logger.info(f"Created state machine for primary optocoupler: {primary_name}")
+            
+            # Create state machine for secondary optocoupler (if enabled)
+            secondary_config = optocoupler_config['secondary']
+            secondary_gpio = secondary_config.get('gpio_pin', -1)
+            
+            if secondary_gpio != -1:  # Secondary optocoupler is enabled
+                secondary_name = secondary_config['name']
+                state_machines[secondary_name] = PowerStateMachine(
+                    self.config, self.logger, self.hardware.display,
+                    self.solark_integration, secondary_name
+                )
+                self.logger.info(f"Created state machine for secondary optocoupler: {secondary_name}")
+            
+            self.logger.info(f"Created {len(state_machines)} optocoupler state machines")
+            return state_machines
+            
+        except KeyError as e:
+            raise KeyError(f"Missing required optocoupler configuration: {e}")
+    
+    def _analyze_frequency_for_optocoupler(self, freq: Optional[float], optocoupler_name: str) -> Tuple[str, float]:
+        """
+        Analyze frequency for a specific optocoupler
+        
+        Args:
+            freq: Frequency reading
+            optocoupler_name: Name of the optocoupler
+            
+        Returns:
+            Tuple of (power_source, confidence)
+        """
+        if freq is None:
+            return "Unknown", 0.0
+        
+        # Use the same analysis logic as the main loop
+        if len(self.freq_buffer) >= 10:
+            # Full analysis with 10+ samples
+            avar_10s, std_freq, kurtosis, quality_score = self.analyzer.analyze_signal_quality(list(self.freq_buffer))
+            source, confidence = self.analyzer.classify_power_source_with_confidence(avar_10s, std_freq, kurtosis, quality_score)
+        elif len(self.freq_buffer) >= 3:
+            # Quick detection with fewer samples
+            recent_freqs = list(self.freq_buffer)[-3:]
+            avg_freq = sum(recent_freqs) / len(recent_freqs)
+            variation = max(recent_freqs) - min(recent_freqs)
+            
+            if variation < 0.1 and 59.9 <= avg_freq <= 60.1:
+                source = "Utility Grid"
+                confidence = 0.9
+            elif variation > 2.0:
+                source = "Generac Generator"
+                confidence = 0.8
+            else:
+                source = "Unknown"
+                confidence = 0.3
+        else:
+            source = "Unknown"
+            confidence = 0.0
+        
+        return source, confidence
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -901,9 +982,27 @@ class FrequencyMonitor:
                 # Update classification buffer immediately after analysis
                 self.classification_buffer.append(source)
                 
-                # Update state machine with current conditions using confidence-based logic
-                self.logger.debug("Updating state machine...")
-                current_state = self.state_machine.update_state_with_confidence(freq, source, confidence, self.zero_voltage_duration)
+                # Update state machines for each optocoupler
+                self.logger.debug("Updating state machines...")
+                current_states = {}
+                
+                # Update primary optocoupler state machine
+                primary_name = self.config.get('hardware.optocoupler.primary.name', 'Mechanical')
+                if primary_name in self.state_machines:
+                    current_states[primary_name] = self.state_machines[primary_name].update_state_with_confidence(
+                        freq, source, confidence, self.zero_voltage_duration
+                    )
+                
+                # Update secondary optocoupler state machine (if enabled and has frequency data)
+                if self.dual_mode and secondary_freq is not None:
+                    secondary_name = self.config.get('hardware.optocoupler.secondary.name', 'Lights')
+                    if secondary_name in self.state_machines:
+                        # Analyze secondary frequency separately
+                        secondary_source, secondary_confidence = self._analyze_frequency_for_optocoupler(secondary_freq, secondary_name)
+                        secondary_zero_voltage_duration = 0.0 if secondary_freq is not None else self.zero_voltage_duration
+                        current_states[secondary_name] = self.state_machines[secondary_name].update_state_with_confidence(
+                            secondary_freq, secondary_source, secondary_confidence, secondary_zero_voltage_duration
+                        )
                 
                 # Collect tuning data if enabled
                 self.logger.debug("Collecting tuning data...")
@@ -942,7 +1041,17 @@ class FrequencyMonitor:
                     ug_indicator = self._get_current_power_source_indicator()
                     # Pass secondary frequency if in dual mode
                     secondary_freq = secondary_freq if self.dual_mode else None
-                    self.hardware.display.update_display_and_leds(freq, ug_indicator, self.state_machine, self.zero_voltage_duration, secondary_freq)
+                    # Pass both state machines for proper cycling display
+                    primary_name = self.config.get('hardware.optocoupler.primary.name', 'Mechanical')
+                    secondary_name = self.config.get('hardware.optocoupler.secondary.name', 'Lights')
+                    primary_state_machine = self.state_machines.get(primary_name)
+                    secondary_state_machine = self.state_machines.get(secondary_name) if self.dual_mode else None
+                    
+                    if primary_state_machine:
+                        self.hardware.display.update_display_and_leds_with_state_machines(
+                            freq, ug_indicator, primary_state_machine, secondary_state_machine, 
+                            self.zero_voltage_duration, secondary_freq
+                        )
                     self.last_display_time = current_time
                 
                 # Memory monitoring and cleanup
@@ -977,9 +1086,13 @@ class FrequencyMonitor:
                 # Log hourly status
                 if current_time - self.last_log_time >= 3600:  # 1 hour
                     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                    state_info = self.state_machine.get_state_info()
+                    # Log state info for all optocouplers
+                    all_state_info = {}
+                    for optocoupler_name, state_machine in self.state_machines.items():
+                        all_state_info[optocoupler_name] = state_machine.get_state_info()
+                    
                     self.data_logger.log_hourly_status(timestamp, freq, source, std_freq, kurtosis, self.sample_count,
-                                                     state_info=state_info)
+                                                     state_info=all_state_info)
 
                     # Log memory information to CSV
                     try:

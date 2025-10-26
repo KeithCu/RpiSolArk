@@ -51,6 +51,12 @@ class SolArkIntegration:
         self.sync_thread = None
         self.running = False
         
+        # Optocoupler to plant mapping
+        self.optocoupler_plants = self._build_optocoupler_plant_mapping()
+        
+        # Validate configuration
+        self.validate_configuration()
+        
         # Parameter mapping for different power sources
         self.power_source_parameters = {
             'grid': {
@@ -65,6 +71,81 @@ class SolArkIntegration:
         }
         
         self.logger.info(f"Sol-Ark integration initialized (enabled: {self.enabled})")
+    
+    def validate_configuration(self) -> bool:
+        """
+        Validate that optocoupler configuration is present
+        
+        Returns:
+            bool: True if configuration is valid
+            
+        Raises:
+            ValueError: If required optocoupler configuration is missing
+        """
+        try:
+            optocoupler_config = self.config['hardware']['optocoupler']
+            
+            # Check that primary optocoupler has required fields
+            primary_config = optocoupler_config['primary']
+            if 'name' not in primary_config:
+                raise ValueError("Primary optocoupler missing 'name' field")
+            
+            # Check secondary optocoupler if enabled
+            secondary_config = optocoupler_config['secondary']
+            secondary_gpio = secondary_config.get('gpio_pin', -1)
+            
+            if secondary_gpio != -1 and 'name' not in secondary_config:
+                raise ValueError("Secondary optocoupler missing 'name' field")
+            
+            self.logger.info("Configuration validation passed")
+            return True
+            
+        except KeyError as e:
+            raise ValueError(f"Missing required optocoupler configuration: {e}")
+    
+    def _build_optocoupler_plant_mapping(self) -> Dict[str, str]:
+        """
+        Build mapping from optocoupler names to Sol-Ark plant serial numbers
+        
+        Returns:
+            Dict mapping optocoupler name to plant serial number
+            
+        Raises:
+            ValueError: If optocoupler name doesn't match configured plant
+        """
+        mapping = {}
+        
+        try:
+            optocoupler_config = self.config['hardware']['optocoupler']
+            
+            # Process primary optocoupler
+            primary_config = optocoupler_config['primary']
+            primary_name = primary_config['name']
+            primary_serial = primary_config.get('solark_plant_serial', '')
+            
+            if primary_serial:
+                mapping[primary_name] = primary_serial
+                self.logger.info(f"Mapped optocoupler '{primary_name}' to plant serial '{primary_serial}'")
+            
+            # Process secondary optocoupler (if enabled)
+            secondary_config = optocoupler_config['secondary']
+            secondary_gpio = secondary_config.get('gpio_pin', -1)
+            
+            if secondary_gpio != -1:  # Secondary optocoupler is enabled
+                secondary_name = secondary_config['name']
+                secondary_serial = secondary_config.get('solark_plant_serial', '')
+                
+                if secondary_serial:
+                    mapping[secondary_name] = secondary_serial
+                    self.logger.info(f"Mapped optocoupler '{secondary_name}' to plant serial '{secondary_serial}'")
+            
+            if not mapping:
+                self.logger.warning("No optocoupler-to-plant mappings configured")
+            
+            return mapping
+            
+        except KeyError as e:
+            raise ValueError(f"Missing required optocoupler configuration: {e}")
     
     def start(self):
         """Start the Sol-Ark integration"""
@@ -131,21 +212,38 @@ class SolArkIntegration:
         except Exception as e:
             self.logger.error(f"Sol-Ark sync error: {e}")
     
-    def on_power_source_change(self, power_source: str, frequency_data: Dict[str, Any]):
+    def on_power_source_change(self, power_source: str, frequency_data: Dict[str, Any], optocoupler_name: str = None):
         """
         Handle power source change events
         
         Args:
             power_source: 'grid', 'generator', or 'off_grid'
             frequency_data: Dictionary containing frequency analysis data
+            optocoupler_name: Name of the optocoupler that detected the change
         """
         if not self.enabled or not self.parameter_changes_enabled:
             return
         
-        if power_source == self.last_power_source:
+        # If no optocoupler name provided, use the first configured one
+        if not optocoupler_name and self.optocoupler_plants:
+            optocoupler_name = list(self.optocoupler_plants.keys())[0]
+            self.logger.debug(f"No optocoupler name provided, using first configured: {optocoupler_name}")
+        
+        # Note: optocoupler_name validation is not needed since names come from the same config
+        # that builds the mapping, so they will always match
+        
+        # Skip if no plant mapping for this optocoupler
+        if optocoupler_name and not self.optocoupler_plants.get(optocoupler_name):
+            self.logger.debug(f"No plant mapping for optocoupler '{optocoupler_name}', skipping Sol-Ark changes")
+            return
+        
+        # Create state key that includes optocoupler name
+        state_key = f"{power_source}_{optocoupler_name}" if optocoupler_name else power_source
+        
+        if state_key == self.last_power_source:
             return  # No change
         
-        self.logger.info(f"Power source changed from {self.last_power_source} to {power_source}")
+        self.logger.info(f"Power source changed from {self.last_power_source} to {state_key}")
         
         # Get parameters for new power source
         new_parameters = self.power_source_parameters.get(power_source, {})
@@ -156,22 +254,23 @@ class SolArkIntegration:
         
         # Handle TOU toggle specifically
         if 'time_of_use_enabled' in new_parameters:
-            self._toggle_time_of_use(new_parameters['time_of_use_enabled'], power_source)
+            self._toggle_time_of_use(new_parameters['time_of_use_enabled'], power_source, optocoupler_name)
         
         # Apply other parameter changes if any
         other_parameters = {k: v for k, v in new_parameters.items() if k != 'time_of_use_enabled'}
         if other_parameters:
-            self._apply_parameter_changes(other_parameters, power_source)
+            self._apply_parameter_changes(other_parameters, power_source, optocoupler_name)
         
-        self.last_power_source = power_source
+        self.last_power_source = state_key
     
-    def _toggle_time_of_use(self, enable: bool, power_source: str):
+    def _toggle_time_of_use(self, enable: bool, power_source: str, optocoupler_name: str):
         """
         Toggle Time of Use setting asynchronously
         
         Args:
             enable: True to enable TOU, False to disable
             power_source: Current power source for logging
+            optocoupler_name: Name of the optocoupler
         """
         if not self.time_of_use_enabled:
             self.logger.debug("TOU automation disabled in configuration")
@@ -183,14 +282,22 @@ class SolArkIntegration:
                 asyncio.set_event_loop(loop)
                 
                 try:
+                    # Get plant serial for this optocoupler
+                    plant_serial = self.optocoupler_plants.get(optocoupler_name)
+                    if not plant_serial:
+                        self.logger.error(f"No plant serial configured for optocoupler '{optocoupler_name}'")
+                        return
+                    
                     result = loop.run_until_complete(
-                        self.solark_cloud.toggle_time_of_use(enable)
+                        self.solark_cloud.toggle_time_of_use(enable, plant_serial)
                     )
                     
                     if result:
-                        self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for {power_source}")
+                        self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for {power_source} "
+                                       f"(optocoupler: {optocoupler_name}, plant: {plant_serial})")
                     else:
-                        self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for {power_source}")
+                        self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for {power_source} "
+                                        f"(optocoupler: {optocoupler_name}, plant: {plant_serial})")
                         
                 finally:
                     loop.close()
@@ -202,13 +309,14 @@ class SolArkIntegration:
         thread = threading.Thread(target=do_toggle, daemon=True)
         thread.start()
     
-    def _apply_parameter_changes(self, parameters: Dict[str, Any], power_source: str):
+    def _apply_parameter_changes(self, parameters: Dict[str, Any], power_source: str, optocoupler_name: str):
         """
         Apply parameter changes asynchronously
         
         Args:
             parameters: Dictionary of parameters to change
             power_source: Current power source for logging
+            optocoupler_name: Name of the optocoupler
         """
         def apply_changes():
             try:

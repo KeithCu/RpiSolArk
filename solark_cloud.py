@@ -862,25 +862,34 @@ class SolArkCloud:
             self.logger.error(f"Sync failed: {e}")
             return {'status': 'error', 'message': str(e)}
     
-    async def toggle_time_of_use(self, enable: bool) -> bool:
+    async def toggle_time_of_use(self, enable: bool, plant_serial: str = None) -> bool:
         """
         Toggle Time of Use setting in inverter settings
         
         Args:
             enable: True to enable TOU, False to disable
+            plant_serial: Sol-Ark plant serial number (uses configured plant_id if None)
             
         Returns:
             bool: True if toggle successful
         """
         try:
-            self.logger.info(f"Toggling Time of Use to {'ON' if enable else 'OFF'}")
+            self.logger.info(f"Toggling Time of Use to {'ON' if enable else 'OFF'} "
+                           f"for plant {plant_serial or self.plant_id}")
             
             if not self.is_logged_in:
                 if not await self.login():
                     return False
             
-            if not self.current_plant_id:
-                if not await self.select_plant():
+            # Use provided plant_serial or fall back to configured plant_id
+            target_plant = plant_serial or self.plant_id
+            if not target_plant:
+                self.logger.error("No plant ID provided and no plant_serial configured")
+                return False
+            
+            # Select the specific plant if different from current
+            if target_plant != self.current_plant_id:
+                if not await self.select_plant(target_plant):
                     return False
             
             # TODO: Navigate to inverter settings submenu

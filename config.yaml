@@ -22,11 +22,13 @@ hardware:
       pulses_per_cycle: 1 # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
       measurement_duration: 5.0  # Duration in seconds for frequency measurement (longer = more stable)
       name: "Mechanical"   # Display name for primary optocoupler
+      solark_plant_serial: "SOLARK123456"  # Sol-Ark plant serial number for this optocoupler
     secondary:
       gpio_pin: -1      # GPIO pin for secondary optocoupler input (H11AA1), set to -1 for single optocoupler mode
       pulses_per_cycle: 1 # GPIO event counter detects FALLING edges only = 1 pulse per AC cycle
       measurement_duration: 1.0  # Duration in seconds for frequency measurement
       name: "Lights" # Display name for secondary optocoupler
+      solark_plant_serial: "SOLARK789012"  # Sol-Ark plant serial number for this optocoupler (set to "" to disable)
 
 # Sampling Configuration
 sampling:
