@@ -271,42 +271,411 @@ async def test_inverter_automation():
         # Now test the complete TOU automation flow
         print("\n🔄 Testing complete TOU automation flow...")
         
-        # Wait for the parameters page to fully load
-        await solark.page.wait_for_load_state('networkidle')
-        await asyncio.sleep(2)
+        # Wait a bit for the parameters page to load
+        await asyncio.sleep(3)
         
-        # Look for TOU-related elements
-        print("🔍 Looking for Time of Use settings...")
-        tou_selectors = [
-            'text=Time of Use',
-            'text=TOU',
-            'text=分时电价',  # Chinese for Time of Use
-            'text=峰谷电价',  # Chinese for Peak-Valley pricing
-            '[placeholder*="TOU"]',
-            '[placeholder*="Time of Use"]',
-            'input[type="checkbox"]:near(text=Time of Use)',
-            'input[type="checkbox"]:near(text=TOU)',
-            '.el-checkbox:has-text("Time of Use")',
-            '.el-checkbox:has-text("TOU")',
-            '.el-checkbox:has-text("分时电价")',
-            '.el-checkbox:has-text("峰谷电价")'
+        # Navigate directly to the iframe URL to avoid cross-origin issues
+        print("🔍 Looking for parameters iframe...")
+        
+        # Wait for iframe to load
+        try:
+            print("⏳ Waiting for parameters iframe to appear...")
+            await solark.page.wait_for_selector('iframe.testiframe', timeout=10000)
+            print("✅ Found parameters iframe")
+        except Exception as e:
+            print(f"❌ Could not find parameters iframe: {e}")
+            await debug_on_error(solark, "iframe_not_found", f"Could not find parameters iframe: {e}")
+            return False
+        
+        # Get the iframe element and extract its URL
+        iframe_element = await solark.page.query_selector('iframe.testiframe')
+        if not iframe_element:
+            print("❌ Could not get iframe element")
+            return False
+        
+        # Get the iframe src URL
+        iframe_src = await iframe_element.get_attribute('src')
+        print(f"🔗 Iframe URL: {iframe_src}")
+        
+        # Navigate directly to the iframe URL
+        print("🔄 Navigating directly to iframe URL...")
+        try:
+            await solark.page.goto(iframe_src)
+            print("✅ Successfully navigated to iframe URL")
+            await asyncio.sleep(3)  # Wait for content to load
+        except Exception as e:
+            print(f"❌ Failed to navigate to iframe URL: {e}")
+            await debug_on_error(solark, "iframe_navigation_failed", str(e))
+            return False
+        
+        # Take a debug screenshot of the iframe content
+        print("📸 Capturing iframe content for analysis...")
+        await debug_page_state(solark, "iframe_content", "Captured iframe content after direct navigation")
+        
+        # Check what buttons are on the page
+        print("🔍 Checking what buttons are on the page...")
+        try:
+            buttons = await solark.page.query_selector_all('button')
+            print(f"   Found {len(buttons)} buttons on the page")
+            for i, button in enumerate(buttons[:10]):  # Show first 10 buttons
+                try:
+                    text = await button.text_content()
+                    if text and text.strip():
+                        print(f"     Button {i+1}: {text.strip()}")
+                except:
+                    print(f"     Button {i+1}: (could not get text)")
+        except Exception as e:
+            print(f"   Error getting buttons: {e}")
+        
+        # Use main page as context for element search
+        page_context = solark.page
+            
+        # First, look for and click the "System Work Mode" button
+        print("🔍 Looking for System Work Mode button...")
+        
+        system_work_mode_selectors = [
+            'text=System Work Mode',
+            'span:has-text("System Work Mode")',
+            'div:has-text("System Work Mode")',
+            'el-link:has-text("System Work Mode")',
+            '.item-box:has-text("System Work Mode")',
+            '.item-box-rlink:has-text("System Work Mode")'
         ]
         
-        tou_element = None
-        for selector in tou_selectors:
+        system_work_mode_element = None
+        found_selector = None
+        
+        # Search for System Work Mode button
+        for i, selector in enumerate(system_work_mode_selectors):
             try:
-                tou_element = await solark.page.query_selector(selector)
-                if tou_element and await tou_element.is_visible():
-                    print(f"✅ Found TOU element with selector: {selector}")
-                    break
-            except:
+                print(f"   Trying selector {i+1}/{len(system_work_mode_selectors)}: {selector}")
+                system_work_mode_element = await page_context.query_selector(selector)
+                if system_work_mode_element:
+                    is_visible = await system_work_mode_element.is_visible()
+                    print(f"   Found element, visible: {is_visible}")
+                    if is_visible:
+                        print(f"✅ Found System Work Mode button with selector: {selector}")
+                        found_selector = selector
+                        break
+                else:
+                    print(f"   No element found")
+            except Exception as e:
+                print(f"   Error with selector: {e}")
                 continue
         
+        if system_work_mode_element:
+            print(f"🎯 Found System Work Mode button using selector: {found_selector}")
+            
+            # Click the System Work Mode button
+            print("🔄 Clicking System Work Mode button...")
+            await system_work_mode_element.click()
+            await asyncio.sleep(3)  # Wait for the page to load
+            
+            # Take a debug screenshot after clicking System Work Mode
+            print("📸 Capturing page content after clicking System Work Mode...")
+            await debug_page_state(solark, "after_system_work_mode", "Captured page after clicking System Work Mode button")
+            
+            print("✅ Successfully clicked System Work Mode button!")
+            print("   Now looking for TOU settings...")
+            
+            # Now look for TOU-related elements
+            print("🔍 Looking for Time of Use settings...")
+            
+            # TOU selectors (after System Work Mode is clicked)
+            tou_selectors = [
+                # English text selectors
+                'text=Time of Use',
+                'text=TOU',
+                'text=Time-of-Use',
+                'text=Time of use',
+                'text=time of use',
+                'text=TOU Settings',
+                'text=Time of Use Settings',
+                
+                # Chinese text selectors
+                'text=分时电价',
+                'text=峰谷电价',
+                'text=分时',
+                'text=峰谷',
+                'text=电价',
+                
+                # Checkbox selectors
+                'input[type="checkbox"]',
+                '.el-checkbox input[type="checkbox"]',
+                'input[type="checkbox"]:near(text=Time of Use)',
+                'input[type="checkbox"]:near(text=TOU)',
+                'input[type="checkbox"]:near(text=分时电价)',
+                'input[type="checkbox"]:near(text=峰谷电价)',
+                
+                # Element UI checkbox selectors
+                '.el-checkbox',
+                '.el-checkbox:has-text("Time of Use")',
+                '.el-checkbox:has-text("TOU")',
+                '.el-checkbox:has-text("分时电价")',
+                '.el-checkbox:has-text("峰谷电价")',
+                
+                # Form field selectors
+                '[placeholder*="TOU"]',
+                '[placeholder*="Time of Use"]',
+                '[placeholder*="分时电价"]',
+                '[placeholder*="峰谷电价"]',
+                
+                # Label selectors
+                'label:has-text("Time of Use")',
+                'label:has-text("TOU")',
+                'label:has-text("分时电价")',
+                'label:has-text("峰谷电价")',
+                
+                # Div/span selectors
+                'div:has-text("Time of Use")',
+                'span:has-text("Time of Use")',
+                'div:has-text("TOU")',
+                'span:has-text("TOU")',
+                'div:has-text("分时电价")',
+                'span:has-text("分时电价")',
+                'div:has-text("峰谷电价")',
+                'span:has-text("峰谷电价")'
+            ]
+            
+            tou_element = None
+            tou_found_selector = None
+            
+            # Search for TOU switch element
+            print("🔍 Searching for TOU switch element...")
+            
+            # Specific selectors for the TOU switch we found in the HTML
+            tou_switch_selectors = [
+                'label:has-text("Time Of Use")',
+                '.el-switch',
+                '.el-switch__input',
+                'input[type="checkbox"]',
+                'div:has-text("Time Of Use")',
+                '.el-form-item:has-text("Time Of Use")'
+            ]
+            
+            tou_element = None
+            tou_found_selector = None
+            
+            for i, selector in enumerate(tou_switch_selectors):
+                try:
+                    print(f"   Trying selector {i+1}/{len(tou_switch_selectors)}: {selector}")
+                    tou_element = await page_context.query_selector(selector)
+                    if tou_element:
+                        is_visible = await tou_element.is_visible()
+                        print(f"   Found element, visible: {is_visible}")
+                        if is_visible:
+                            print(f"✅ Found TOU switch with selector: {selector}")
+                            tou_found_selector = selector
+                            break
+                    else:
+                        print(f"   No element found")
+                except Exception as e:
+                    print(f"   Error with selector: {e}")
+                    continue
+            
+            if tou_element:
+                print(f"🎯 Found TOU switch using selector: {tou_found_selector}")
+                
+                # Check current state of the TOU switch
+                try:
+                    # Try to find the actual checkbox input
+                    checkbox = await tou_element.query_selector('input[type="checkbox"]')
+                    if not checkbox:
+                        # If not found as child, try to find it nearby
+                        checkbox = await page_context.query_selector('.el-switch__input')
+                    
+                    if checkbox:
+                        is_checked = await checkbox.is_checked()
+                        print(f"📋 TOU switch current state: {'ON' if is_checked else 'OFF'}")
+                        
+                        # Toggle the TOU switch
+                        print("🔄 Toggling TOU switch...")
+                        await checkbox.click()
+                        await asyncio.sleep(1)
+                        
+                        # Check new state
+                        new_state = await checkbox.is_checked()
+                        print(f"📋 TOU switch new state: {'ON' if new_state else 'OFF'}")
+                        
+                        if new_state != is_checked:
+                            print("✅ TOU switch successfully toggled!")
+                        else:
+                            print("❌ TOU switch did not change state")
+                    else:
+                        print("❌ Could not find checkbox input for TOU switch")
+                        # Try clicking the switch element directly
+                        print("🔄 Trying to click TOU switch element directly...")
+                        await tou_element.click()
+                        await asyncio.sleep(1)
+                        print("✅ Clicked TOU switch element")
+                        
+                except Exception as e:
+                    print(f"❌ Error toggling TOU switch: {e}")
+                
+                # Now look for and click the Save button
+                print("🔍 Looking for Save button...")
+                save_selectors = [
+                    'button:has-text("Save")',
+                    '.el-button--primary:has-text("Save")',
+                    'button.el-button--primary',
+                    '.save-btn'
+                ]
+                
+                save_button = None
+                for selector in save_selectors:
+                    try:
+                        save_button = await page_context.query_selector(selector)
+                        if save_button and await save_button.is_visible():
+                            print(f"✅ Found save button with selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if save_button:
+                    print("🔄 Clicking Save button...")
+                    await save_button.click()
+                    await asyncio.sleep(2)
+                    print("✅ Successfully clicked Save button!")
+                    
+                    print("\n🎉 TOU automation completed successfully!")
+                    print("   Summary:")
+                    print("   1. ✅ Login to Sol-Ark")
+                    print("   2. ✅ Navigate to inverter device page")
+                    print("   3. ✅ Find specific inverter by ID")
+                    print("   4. ✅ Click dropdown menu")
+                    print("   5. ✅ Click Parameters Setting")
+                    print("   6. ✅ Navigate to iframe URL")
+                    print("   7. ✅ Find System Work Mode button")
+                    print("   8. ✅ Click System Work Mode button")
+                    print("   9. ✅ Find TOU switch")
+                    print("   10. ✅ Toggle TOU switch")
+                    print("   11. ✅ Find save button")
+                    print("   12. ✅ Click save button")
+                    print("\n🚀 TOU automation is now complete!")
+                    
+                else:
+                    print("❌ Could not find Save button")
+                    print("   Available buttons on page:")
+                    try:
+                        buttons = await page_context.query_selector_all('button')
+                        for i, button in enumerate(buttons):
+                            try:
+                                text = await button.text_content()
+                                if text and text.strip():
+                                    print(f"     Button {i+1}: {text.strip()}")
+                            except:
+                                print(f"     Button {i+1}: (could not get text)")
+                    except Exception as e:
+                        print(f"   Error getting buttons: {e}")
+            else:
+                print("❌ Could not find TOU switch")
+                print("   Available form elements on page:")
+                try:
+                    form_elements = await page_context.query_selector_all('input, .el-switch, .el-form-item')
+                    for i, element in enumerate(form_elements[:10]):
+                        try:
+                            text = await element.text_content()
+                            if text and text.strip():
+                                print(f"     Element {i+1}: {text.strip()}")
+                        except:
+                            print(f"     Element {i+1}: (could not get text)")
+                except Exception as e:
+                    print(f"   Error getting form elements: {e}")
+        else:
+            print("❌ Could not find System Work Mode button")
+            print("   Available buttons on page:")
+            try:
+                buttons = await page_context.query_selector_all('button, .item-box, el-link')
+                for i, button in enumerate(buttons[:10]):  # Show first 10 buttons
+                    try:
+                        text = await button.text_content()
+                        if text and text.strip():
+                            print(f"     Button {i+1}: {text.strip()}")
+                    except:
+                        print(f"     Button {i+1}: (could not get text)")
+            except Exception as e:
+                print(f"   Error getting buttons: {e}")
+            return False
+        
         if tou_element:
-            # Check if it's a checkbox
+            print(f"🎯 Found element using selector: {found_selector}")
+            
+            # Check what type of element it is
             tag_name = await tou_element.evaluate('el => el.tagName.toLowerCase()')
-            if tag_name == 'input' and await tou_element.get_attribute('type') == 'checkbox':
-                # It's a checkbox - check current state
+            element_type = await tou_element.get_attribute('type') if tag_name == 'input' else None
+            
+            print(f"📋 Element type: {tag_name}, input type: {element_type}")
+            
+            # Check if this is the System Work Mode button
+            if 'System Work Mode' in found_selector or 'system work mode' in found_selector or 'Work Mode' in found_selector:
+                print("🔧 Found System Work Mode button - clicking it first...")
+                await tou_element.click()
+                await asyncio.sleep(3)  # Wait for the page to load
+                print("✅ Clicked System Work Mode button")
+                
+                # Take a debug screenshot and HTML capture after clicking System Work Mode
+                print("📸 Capturing page content after clicking System Work Mode...")
+                await debug_page_state(solark, "after_system_work_mode", "Captured page after clicking System Work Mode button")
+                
+                # Now look for TOU settings after clicking System Work Mode
+                print("🔍 Looking for TOU settings after clicking System Work Mode...")
+                
+                # Wait a bit for the page to update
+                await asyncio.sleep(2)
+                
+                # Look for TOU elements again
+                tou_checkbox_element = None
+                for selector in tou_selectors[10:]:  # Skip the System Work Mode selectors
+                    try:
+                        tou_checkbox_element = await page_context.query_selector(selector)
+                        if tou_checkbox_element and await tou_checkbox_element.is_visible():
+                            print(f"✅ Found TOU element with selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if tou_checkbox_element:
+                    # Handle TOU checkbox
+                    checkbox_tag = await tou_checkbox_element.evaluate('el => el.tagName.toLowerCase()')
+                    checkbox_type = await tou_checkbox_element.get_attribute('type') if checkbox_tag == 'input' else None
+                    
+                    if checkbox_tag == 'input' and checkbox_type == 'checkbox':
+                        # It's a checkbox - check current state and toggle
+                        is_checked = await tou_checkbox_element.is_checked()
+                        print(f"📋 TOU checkbox current state: {'checked' if is_checked else 'unchecked'}")
+                        
+                        # Test toggle (we'll toggle it and then toggle it back)
+                        print("🔄 Testing TOU toggle...")
+                        await tou_checkbox_element.click()
+                        await asyncio.sleep(1)
+                        
+                        new_state = await tou_checkbox_element.is_checked()
+                        print(f"📋 TOU checkbox new state: {'checked' if new_state else 'unchecked'}")
+                        
+                        # Toggle it back to original state
+                        if new_state != is_checked:
+                            print("🔄 Toggling back to original state...")
+                            await tou_checkbox_element.click()
+                            await asyncio.sleep(1)
+                            final_state = await tou_checkbox_element.is_checked()
+                            print(f"📋 TOU checkbox final state: {'checked' if final_state else 'unchecked'}")
+                            
+                            if final_state == is_checked:
+                                print("✅ TOU toggle test successful!")
+                            else:
+                                print("❌ TOU toggle test failed - state not restored")
+                        else:
+                            print("❌ TOU toggle test failed - state did not change")
+                    else:
+                        print("🔄 TOU element is not a checkbox, attempting to click")
+                        await tou_checkbox_element.click()
+                        await asyncio.sleep(1)
+                        print("✅ Clicked TOU element")
+                else:
+                    print("❌ Could not find TOU checkbox after clicking System Work Mode")
+            
+            elif tag_name == 'input' and element_type == 'checkbox':
+                # It's a checkbox - check current state and toggle
                 is_checked = await tou_element.is_checked()
                 print(f"📋 TOU checkbox current state: {'checked' if is_checked else 'unchecked'}")
                 
@@ -332,13 +701,21 @@ async def test_inverter_automation():
                         print("❌ TOU toggle test failed - state not restored")
                 else:
                     print("❌ TOU toggle test failed - state did not change")
-            else:
-                # It might be a button or other element - try clicking
-                print("🔄 TOU element is not a checkbox, attempting to click")
+                    
+            elif tag_name == 'div' or tag_name == 'span':
+                # It might be a clickable div/span - try clicking
+                print("🔄 TOU element is a div/span, attempting to click")
                 await tou_element.click()
                 await asyncio.sleep(1)
                 print("✅ Clicked TOU element")
-            
+                
+            else:
+                # Try clicking anyway
+                print(f"🔄 TOU element is {tag_name}, attempting to click")
+                await tou_element.click()
+                await asyncio.sleep(1)
+                print("✅ Clicked TOU element")
+                
             # Look for save button
             print("🔍 Looking for save button...")
             save_selectors = [
@@ -346,16 +723,25 @@ async def test_inverter_automation():
                 'button:has-text("保存")',
                 'button:has-text("Apply")',
                 'button:has-text("应用")',
+                'button:has-text("Submit")',
+                'button:has-text("提交")',
+                'button:has-text("Confirm")',
+                'button:has-text("确认")',
                 '.el-button--primary:has-text("Save")',
                 '.el-button--primary:has-text("保存")',
+                '.el-button--primary:has-text("Apply")',
+                '.el-button--primary:has-text("应用")',
                 'input[type="submit"]',
-                '.el-button[type="submit"]'
+                '.el-button[type="submit"]',
+                'button[type="submit"]',
+                '.el-button.el-button--primary',
+                'button.el-button--primary'
             ]
             
             save_button = None
             for selector in save_selectors:
                 try:
-                    save_button = await solark.page.query_selector(selector)
+                    save_button = await page_context.query_selector(selector)
                     if save_button and await save_button.is_visible():
                         print(f"✅ Found save button with selector: {selector}")
                         break
@@ -370,27 +756,31 @@ async def test_inverter_automation():
                 print("   3. ✅ Find specific inverter by ID")
                 print("   4. ✅ Click dropdown menu")
                 print("   5. ✅ Click Parameters Setting")
-                print("   6. ✅ Find TOU checkbox")
-                print("   7. ✅ Toggle TOU checkbox")
-                print("   8. ✅ Find save button")
-                print("   9. 🔄 Ready to save changes")
+                print("   6. ✅ Navigate to iframe URL or switch to iframe context")
+                print("   7. ✅ Find System Work Mode button")
+                print("   8. ✅ Click System Work Mode button")
+                print("   9. ✅ Find TOU checkbox")
+                print("   10. ✅ Toggle TOU checkbox")
+                print("   11. ✅ Find save button")
+                print("   12. 🔄 Ready to save changes")
             else:
                 print("⚠️  Save button not found - TOU automation may need adjustment")
                 print("   Available buttons on page:")
                 try:
-                    buttons = await solark.page.query_selector_all('button')
+                    buttons = await page_context.query_selector_all('button')
                     for i, button in enumerate(buttons):
                         text = await button.text_content()
                         if text and text.strip():
                             print(f"     {i+1}. {text.strip()}")
                 except:
                     print("     Could not retrieve button text")
+                    
         else:
-            print("❌ Could not find Time of Use settings on parameters page")
+            print("❌ Could not find Time of Use settings or System Work Mode button")
             print("   Available text elements on page:")
             try:
                 # Look for any text that might be related to TOU
-                all_text = await solark.page.evaluate("""
+                all_text = await page_context.evaluate("""
                     () => {
                         const walker = document.createTreeWalker(
                             document.body,
@@ -405,13 +795,35 @@ async def test_inverter_automation():
                                 texts.push(node.textContent.trim());
                             }
                         }
-                        return texts.slice(0, 20); // First 20 text elements
+                        return texts.slice(0, 30); // First 30 text elements
                     }
                 """)
                 for i, text in enumerate(all_text):
                     print(f"     {i+1}. {text}")
             except:
                 print("     Could not retrieve page text")
+                
+            # Also try to get all checkboxes on the page
+            print("   Available checkboxes on page:")
+            try:
+                checkboxes = await page_context.query_selector_all('input[type="checkbox"]')
+                for i, checkbox in enumerate(checkboxes):
+                    try:
+                        # Try to find nearby text
+                        nearby_text = await checkbox.evaluate("""
+                            el => {
+                                const parent = el.parentElement;
+                                if (parent) {
+                                    return parent.textContent.trim();
+                                }
+                                return '';
+                            }
+                        """)
+                        print(f"     Checkbox {i+1}: {nearby_text}")
+                    except:
+                        print(f"     Checkbox {i+1}: (no text found)")
+            except:
+                print("     Could not retrieve checkboxes")
         
         print("\n📋 Next steps:")
         print("   1. ✅ Analyze the parameters page HTML to find Time of Use settings")

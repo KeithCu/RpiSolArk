@@ -1145,109 +1145,210 @@ class SolArkCloud:
                 self.logger.error(f"Error clicking Parameters Setting: {e}")
                 return False
             
-            # Take a screenshot of the parameters page for analysis
-            screenshot_file = self.cache_dir / f"parameters_page_{inverter_id}.png"
-            await self.page.screenshot(path=str(screenshot_file))
-            self.logger.info(f"Screenshot saved: {screenshot_file}")
-            
-            # Download the parameters page HTML for analysis
-            html_content = await self.page.content()
-            html_file = self.cache_dir / f"parameters_page_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            self.logger.info(f"Parameters page HTML saved: {html_file}")
-            
             self.logger.info(f"Successfully navigated to parameters page for inverter {inverter_id}")
             
-            # Now look for Time of Use settings
-            self.logger.info("Looking for Time of Use settings...")
+            # Navigate directly to the iframe URL to avoid cross-origin issues
+            self.logger.info("Looking for parameters iframe...")
             
-            # Wait for the parameters page to fully load
-            await self.page.wait_for_load_state('networkidle')
-            await asyncio.sleep(2)
+            # Wait for iframe to load
+            try:
+                self.logger.info("Waiting for parameters iframe to appear...")
+                await self.page.wait_for_selector('iframe.testiframe', timeout=10000)
+                self.logger.info("Found parameters iframe")
+            except Exception as e:
+                self.logger.error(f"Could not find parameters iframe: {e}")
+                return False
             
-            # Look for TOU-related elements
-            tou_selectors = [
-                'text=Time of Use',
-                'text=TOU',
-                'text=分时电价',  # Chinese for Time of Use
-                'text=峰谷电价',  # Chinese for Peak-Valley pricing
-                '[placeholder*="TOU"]',
-                '[placeholder*="Time of Use"]',
-                'input[type="checkbox"]:near(text=Time of Use)',
-                'input[type="checkbox"]:near(text=TOU)',
-                '.el-checkbox:has-text("Time of Use")',
-                '.el-checkbox:has-text("TOU")',
-                '.el-checkbox:has-text("分时电价")',
-                '.el-checkbox:has-text("峰谷电价")'
+            # Get the iframe element and extract its URL
+            iframe_element = await self.page.query_selector('iframe.testiframe')
+            if not iframe_element:
+                self.logger.error("Could not get iframe element")
+                return False
+            
+            # Get the iframe src URL
+            iframe_src = await iframe_element.get_attribute('src')
+            self.logger.info(f"Iframe URL: {iframe_src}")
+            
+            # Navigate directly to the iframe URL
+            self.logger.info("Navigating directly to iframe URL...")
+            try:
+                await self.page.goto(iframe_src)
+                self.logger.info("Successfully navigated to iframe URL")
+                await asyncio.sleep(3)  # Wait for content to load
+            except Exception as e:
+                self.logger.error(f"Failed to navigate to iframe URL: {e}")
+                return False
+            
+            # First, look for and click the "System Work Mode" button
+            self.logger.info("Looking for System Work Mode button...")
+            
+            system_work_mode_selectors = [
+                'text=System Work Mode',
+                'span:has-text("System Work Mode")',
+                'div:has-text("System Work Mode")',
+                'el-link:has-text("System Work Mode")',
+                '.item-box:has-text("System Work Mode")',
+                '.item-box-rlink:has-text("System Work Mode")'
             ]
             
-            tou_element = None
-            for selector in tou_selectors:
+            system_work_mode_element = None
+            found_selector = None
+            
+            # Search for System Work Mode button
+            for i, selector in enumerate(system_work_mode_selectors):
                 try:
-                    tou_element = await self.page.query_selector(selector)
-                    if tou_element and await tou_element.is_visible():
-                        self.logger.info(f"Found TOU element with selector: {selector}")
-                        break
-                except:
+                    self.logger.debug(f"Trying selector {i+1}/{len(system_work_mode_selectors)}: {selector}")
+                    system_work_mode_element = await self.page.query_selector(selector)
+                    if system_work_mode_element:
+                        is_visible = await system_work_mode_element.is_visible()
+                        if is_visible:
+                            self.logger.info(f"Found System Work Mode button with selector: {selector}")
+                            found_selector = selector
+                            break
+                except Exception as e:
+                    self.logger.debug(f"Error with selector: {e}")
                     continue
             
-            if tou_element:
-                # Check if it's a checkbox
-                tag_name = await tou_element.evaluate('el => el.tagName.toLowerCase()')
-                if tag_name == 'input' and await tou_element.get_attribute('type') == 'checkbox':
-                    # It's a checkbox - check current state
-                    is_checked = await tou_element.is_checked()
-                    self.logger.info(f"TOU checkbox current state: {'checked' if is_checked else 'unchecked'}")
-                    
-                    # Toggle if needed
-                    if (enable and not is_checked) or (not enable and is_checked):
-                        await tou_element.click()
-                        self.logger.info(f"Toggled TOU checkbox to {'ON' if enable else 'OFF'}")
-                        await asyncio.sleep(1)
-                    else:
-                        self.logger.info(f"TOU checkbox already in desired state ({'ON' if enable else 'OFF'})")
-                else:
-                    # It might be a button or other element - try clicking
-                    self.logger.info("TOU element is not a checkbox, attempting to click")
-                    await tou_element.click()
-                    await asyncio.sleep(1)
+            if system_work_mode_element:
+                self.logger.info(f"Found System Work Mode button using selector: {found_selector}")
                 
-                # Look for save button
-                save_selectors = [
-                    'button:has-text("Save")',
-                    'button:has-text("保存")',
-                    'button:has-text("Apply")',
-                    'button:has-text("应用")',
-                    '.el-button--primary:has-text("Save")',
-                    '.el-button--primary:has-text("保存")',
-                    'input[type="submit"]',
-                    '.el-button[type="submit"]'
+                # Click the System Work Mode button
+                self.logger.info("Clicking System Work Mode button...")
+                await system_work_mode_element.click()
+                await asyncio.sleep(3)  # Wait for the page to load
+                
+                self.logger.info("Successfully clicked System Work Mode button!")
+                self.logger.info("Now looking for TOU settings...")
+                
+                # Now look for TOU switch element
+                self.logger.info("Looking for TOU switch element...")
+                
+                # Specific selectors for the TOU switch we found in the HTML
+                tou_switch_selectors = [
+                    'label:has-text("Time Of Use")',
+                    '.el-switch',
+                    '.el-switch__input',
+                    'input[type="checkbox"]',
+                    'div:has-text("Time Of Use")',
+                    '.el-form-item:has-text("Time Of Use")'
                 ]
                 
-                save_button = None
-                for selector in save_selectors:
+                tou_element = None
+                tou_found_selector = None
+                
+                for i, selector in enumerate(tou_switch_selectors):
                     try:
-                        save_button = await self.page.query_selector(selector)
-                        if save_button and await save_button.is_visible():
-                            self.logger.info(f"Found save button with selector: {selector}")
-                            break
-                    except:
+                        self.logger.debug(f"Trying selector {i+1}/{len(tou_switch_selectors)}: {selector}")
+                        tou_element = await self.page.query_selector(selector)
+                        if tou_element:
+                            is_visible = await tou_element.is_visible()
+                            if is_visible:
+                                self.logger.info(f"Found TOU switch with selector: {selector}")
+                                tou_found_selector = selector
+                                break
+                    except Exception as e:
+                        self.logger.debug(f"Error with selector: {e}")
                         continue
                 
-                if save_button:
-                    await save_button.click()
-                    self.logger.info("Clicked save button")
-                    await asyncio.sleep(2)
+                if tou_element:
+                    self.logger.info(f"Found TOU switch using selector: {tou_found_selector}")
                     
-                    # Verify the change was applied
-                    self.logger.info("TOU setting change applied successfully")
-                    return True
+                    # Check current state of the TOU switch
+                    try:
+                        # Try to find the actual checkbox input
+                        checkbox = await tou_element.query_selector('input[type="checkbox"]')
+                        if not checkbox:
+                            # If not found as child, try to find it nearby
+                            checkbox = await self.page.query_selector('.el-switch__input')
+                        
+                        if checkbox:
+                            is_checked = await checkbox.is_checked()
+                            self.logger.info(f"TOU switch current state: {'ON' if is_checked else 'OFF'}")
+                            
+                            # Toggle the TOU switch if needed
+                            if (enable and not is_checked) or (not enable and is_checked):
+                                self.logger.info("Toggling TOU switch...")
+                                await checkbox.click()
+                                await asyncio.sleep(1)
+                                
+                                # Check new state
+                                new_state = await checkbox.is_checked()
+                                self.logger.info(f"TOU switch new state: {'ON' if new_state else 'OFF'}")
+                                
+                                if new_state != is_checked:
+                                    self.logger.info("TOU switch successfully toggled!")
+                                else:
+                                    self.logger.error("TOU switch did not change state")
+                            else:
+                                self.logger.info(f"TOU switch already in desired state ({'ON' if enable else 'OFF'})")
+                        else:
+                            self.logger.error("Could not find checkbox input for TOU switch")
+                            # Try clicking the switch element directly
+                            self.logger.info("Trying to click TOU switch element directly...")
+                            await tou_element.click()
+                            await asyncio.sleep(1)
+                            self.logger.info("Clicked TOU switch element")
+                            
+                    except Exception as e:
+                        self.logger.error(f"Error toggling TOU switch: {e}")
+                    
+                    # Now look for and click the Save button
+                    self.logger.info("Looking for Save button...")
+                    save_selectors = [
+                        'button:has-text("Save")',
+                        '.el-button--primary:has-text("Save")',
+                        'button.el-button--primary',
+                        '.save-btn'
+                    ]
+                    
+                    save_button = None
+                    for selector in save_selectors:
+                        try:
+                            save_button = await self.page.query_selector(selector)
+                            if save_button and await save_button.is_visible():
+                                self.logger.info(f"Found save button with selector: {selector}")
+                                break
+                        except:
+                            continue
+                    
+                    if save_button:
+                        self.logger.info("Clicking Save button...")
+                        await save_button.click()
+                        await asyncio.sleep(2)
+                        self.logger.info("Successfully clicked Save button!")
+                        
+                        # Verify the change was actually applied by checking the TOU state again
+                        self.logger.info("Verifying TOU setting change...")
+                        await asyncio.sleep(1)  # Wait for page to update
+                        
+                        try:
+                            # Check TOU state again after save
+                            final_checkbox = await self.page.query_selector('.el-switch__input')
+                            if final_checkbox:
+                                final_state = await final_checkbox.is_checked()
+                                self.logger.info(f"Final TOU switch state after save: {'ON' if final_state else 'OFF'}")
+                                
+                                if final_state == enable:
+                                    self.logger.info("✅ TOU setting change verified successfully!")
+                                    return True
+                                else:
+                                    self.logger.error(f"❌ TOU setting change failed - expected {'ON' if enable else 'OFF'}, got {'ON' if final_state else 'OFF'}")
+                                    return False
+                            else:
+                                self.logger.warning("Could not verify TOU state after save")
+                                return True
+                        except Exception as e:
+                            self.logger.warning(f"Error verifying TOU state: {e}")
+                            return True
+                        
+                    else:
+                        self.logger.warning("Could not find Save button")
+                        return True  # Assume success if we can't find save button
                 else:
-                    self.logger.warning("Could not find save button - changes may not be saved")
-                    return True  # Assume success if we can't find save button
+                    self.logger.error("Could not find TOU switch")
+                    return False
             else:
-                self.logger.error("Could not find Time of Use settings on parameters page")
+                self.logger.error("Could not find System Work Mode button")
                 return False
             
         except Exception as e:
