@@ -1284,7 +1284,9 @@ The automation uses **Playwright web automation** to:
 
 ### 📊 **Test Results**
 
-Latest test run shows **100% success**:
+Test runs show **100% success in both directions**:
+
+**TOU ON Test:**
 - ✅ Login to Sol-Ark Cloud
 - ✅ Navigate to inverter device page  
 - ✅ Find specific inverter by ID
@@ -1294,10 +1296,18 @@ Latest test run shows **100% success**:
 - ✅ Find System Work Mode button
 - ✅ Click System Work Mode button
 - ✅ Find TOU switch
-- ✅ Toggle TOU switch
+- ✅ Toggle TOU switch from OFF to ON
 - ✅ Find save button
 - ✅ Click save button
 - ✅ Verify TOU state change
+
+**TOU OFF Test:**
+- ✅ Toggle TOU switch from ON to OFF
+- ✅ Find save button
+- ✅ Click save button
+- ✅ Verify TOU state change
+
+**✅ Complete automation works perfectly in BOTH directions!**
 
 ## 🔬 Advanced Frequency Analysis Engine
 
