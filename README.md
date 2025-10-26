@@ -265,47 +265,6 @@ Raspberry Pi GPIO 22 ──┬─── Button ─── GND
 - **Debounced**: Software handles button press/release detection
 - **Function**: Restarts entire application when pressed
 
-### ☁️ Sol-Ark Cloud Setup
-
-**✅ COMPLETED**: Sol-Ark TOU automation is fully working and production-ready!
-
-1. **Edit configuration**:
-   ```yaml
-   # config.yaml
-   solark_cloud:
-     enabled: true
-     username: "your_username"
-     password: "your_password"
-     inverter_id: "2207079903"  # Your inverter serial number
-   ```
-
-2. **Test TOU automation**:
-   ```bash
-   # Test complete automation flow
-   python test_inverter_automation.py
-   
-   # Test simple TOU toggle
-   python test_tou_verification.py
-   
-   # Test cloud connection
-   python test_solark_cloud.py
-   ```
-
-3. **Use in production**:
-   ```python
-   from solark_cloud import SolArkCloud
-   
-   solark = SolArkCloud()
-   await solark.initialize()
-   await solark.login()
-   
-   # Toggle TOU ON
-   result = await solark.toggle_time_of_use(True, "2207079903")
-   
-   # Toggle TOU OFF  
-   result = await solark.toggle_time_of_use(False, "2207079903")
-   ```
-
 ## 📖 Usage
 
 ### 🎮 Basic Commands
@@ -401,37 +360,6 @@ The system uses a comprehensive YAML configuration file `config.yaml`. Here's wh
 | ☁️ **Sol-Ark** | Credentials, sync intervals | Cloud integration settings |
 
 </div>
-
-### 📋 Configuration Example
-
-```yaml
-# config.yaml - Optimized for real-world generator detection
-hardware:
-  gpio_pin: 17          # Optocoupler input (H11AA1)
-  lcd_address: 0x27     # I2C address for LCD
-
-sampling:
-  sample_rate: 2.0      # Hz - Optimal for generator detection
-  buffer_duration: 300  # seconds - Captures generator hunting cycles
-  min_freq: 45.0        # Hz - Accounts for generator frequency drops
-  max_freq: 65.0        # Hz - Accounts for generator overspeed
-
-analysis:
-  allan_variance_tau: 10.0  # seconds - Matches generator hunting cycles
-  generator_thresholds:
-    allan_variance: 1e-4    # Adjusted for realistic utility vs generator detection
-    std_dev: 0.08           # Hz - Accounts for generator variation
-    kurtosis: 0.4           # Detects frequency hunting patterns
-
-display:
-  classification_window: 300  # seconds - Window for U/G indicator (default: 5 minutes)
-
-solark_cloud:
-  enabled: true
-  username: "your_username"
-  password: "your_password"
-  sync_interval: 300  # seconds
-```
 
 
 
@@ -606,26 +534,8 @@ The TOU automation system automatically:
 - **Saves changes** with verification
 - **Confirms success** with multiple validation methods
 
-### ✅ **100% Working Features**
-
-- **Complete Automation Flow**: Zero manual intervention required
-- **Robust Error Handling**: Multiple click methods, retries, and fallbacks
-- **Session Persistence**: Maintains login for 6 months
-- **Success Verification**: Confirms changes were applied
-- **Comprehensive Logging**: Full visibility into automation steps
-- **Production Ready**: Tested and verified working
 
 ### 🚀 **Quick Start**
-
-1. **Configure your inverter**:
-   ```yaml
-   # config.yaml
-   solark_cloud:
-     enabled: true
-     username: "your_username"
-     password: "your_password"
-     inverter_id: "2207079903"  # Your inverter serial number
-   ```
 
 2. **Test the automation**:
    ```bash
@@ -666,33 +576,6 @@ The automation uses **Playwright web automation** to:
 - **Success Verification**: Checks for success indicators
 - **Session Management**: Persistent login with localStorage
 - **Error Recovery**: Comprehensive error handling and logging
-
-### 📊 **Test Results**
-
-Test runs show **100% success in both directions**:
-
-**TOU ON Test:**
-- ✅ Login to Sol-Ark Cloud
-- ✅ Navigate to inverter device page  
-- ✅ Find specific inverter by ID
-- ✅ Click dropdown menu
-- ✅ Navigate to Parameters Setting
-- ✅ Navigate to iframe URL
-- ✅ Find System Work Mode button
-- ✅ Click System Work Mode button
-- ✅ Find TOU switch
-- ✅ Toggle TOU switch from OFF to ON
-- ✅ Find save button
-- ✅ Click save button
-- ✅ Verify TOU state change
-
-**TOU OFF Test:**
-- ✅ Toggle TOU switch from ON to OFF
-- ✅ Find save button
-- ✅ Click save button
-- ✅ Verify TOU state change
-
-**✅ Complete automation works perfectly in BOTH directions!**
 
 
 ## 📊 Monitoring
