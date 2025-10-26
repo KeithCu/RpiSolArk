@@ -9,13 +9,9 @@
 
 **A sophisticated frequency monitoring system for Raspberry Pi that detects power source (Utility Grid vs Generator) by analyzing AC line frequency stability.**
 
-[📖 Documentation](#documentation) • [🚀 Quick Start](#quick-start) • [🔧 Configuration](#configuration) • [📊 Features](#features)
-
 </div>
 
 ---
-
-
 
 ## 🔬 How It Works: Frequency Analysis & Power Source Detection
 
@@ -93,36 +89,17 @@ The system uses **three complementary analysis methods** to detect power sources
 
 ## 📊 Features
 
-<div align="center">
-
-| 🎯 **Core Monitoring** | 🔧 **Smart Integration** | 📱 **User Interface** |
-|:---:|:---:|:---:|
-| Real-time frequency analysis | Sol-Ark cloud integration (WIP) | LCD display with status |
-| Power source classification | Automatic parameter updates (WIP) | Web dashboard |
-| Allan variance analysis | Web automation (Playwright) | Comprehensive logging |
-| Health monitoring | Graceful degradation | Real-time status updates |
-
-</div>
-
-### 🌟 Key Capabilities
-
 - ⚡ **Real-time frequency monitoring** using optocoupler input
-
 - 🔍 **Power source classification** (Utility Grid vs Generac Generator)
-
 - 📈 **Allan variance analysis** for frequency stability assessment
-
 - 📺 **LCD display** with real-time status updates and U/G indicator
-
 - 🎯 **U/G indicator** showing majority classification over recent data window
-
 - 🏥 **Health monitoring** with system resource tracking
-
 - 🛡️ **Graceful degradation** when hardware is unavailable
-
 - 📝 **Comprehensive logging** with hourly status reports
-
 - ⚙️ **Configurable parameters** via YAML configuration
+- ☁️ **Sol-Ark cloud integration** with web automation (Playwright)
+- 🤖 **Automatic parameter updates** based on power source detection
 
 ## 📺 Display Interface
 
@@ -164,23 +141,9 @@ Status: GENERATOR
 Stability: POOR
 ```
 
-*Real-time frequency monitoring showing timestamp with U/G indicator, frequency reading, power source classification, and stability assessment. The [U] or [G] indicator shows the majority classification over the last 5 minutes of data.*
-
-### 📊 Web Dashboard
-
-*Separate Flask-based web dashboard for system health monitoring (run with `python dashboard.py`)*
-
-### 🔧 Hardware Setup
-
-*Clean hardware setup with optocoupler isolation and LCD display*
-
-### 📈 Frequency Analysis
-
-*Advanced frequency analysis showing Allan variance and stability metrics*
+*The [U] or [G] indicator shows the majority classification over the last 5 minutes of data.*
 
 ## 🔧 Hardware Requirements
-
-<div align="center">
 
 | Component | Specification | Purpose |
 |:---:|:---:|:---:|
@@ -188,9 +151,7 @@ Stability: POOR
 | 🔌 **H11AA1 Optocoupler** | AC line isolation | Safe frequency detection |
 | 📺 **16x2 I2C LCD** | Address 0x27 | Real-time status display |
 | 🔘 **Reset Button** | Momentary push button | Manual system reset/restart |
-| 🔗 **Resistors** | Various values | Circuit protection |
-
-</div>
+| 🔗 **Resistors** | 1kΩ, 10kΩ | Circuit protection |
 
 ### 📋 Shopping List
 
@@ -206,40 +167,26 @@ Stability: POOR
 
 ## 🚀 Quick Start
 
-### 📥 Installation
+### 📥 Installation & Setup
 
 ```bash
-# Clone the repository
+# Clone and install
 git clone https://github.com/yourusername/RpiSolarkMonitor.git
 cd RpiSolarkMonitor
-
-# Install Python dependencies
 pip install -r requirements.txt
-
-# Install Playwright browsers (for Sol-Ark cloud integration - WIP)
 playwright install chromium
 
-# Enable I2C interface (if not already enabled)
-sudo raspi-config
-# Navigate to: Interfacing Options → I2C → Enable
-```
+# Enable I2C interface
+sudo raspi-config  # Navigate to: Interfacing Options → I2C → Enable
 
-### ⚡ Quick Setup
-
-```bash
 # Run in simulator mode (no hardware required)
 python monitor.py --simulator
 
 # Run with real hardware
 python monitor.py --real
-
-# Enable verbose logging
-python monitor.py --verbose
 ```
 
 ### 🔧 Hardware Configuration
-
-<div align="center">
 
 | Component | GPIO Pin | Connection |
 |:---:|:---:|:---:|
@@ -247,11 +194,7 @@ python monitor.py --verbose
 | 🔘 Reset Button | GPIO 22 | Active LOW with pull-up |
 | 📺 I2C LCD | SDA/SCL | Address 0x27 |
 
-</div>
-
 #### 🔘 Reset Button Wiring
-The reset button provides manual system reset/restart functionality:
-
 ```
 Raspberry Pi GPIO 22 ──┬─── Button ─── GND
                        │
@@ -277,39 +220,9 @@ Raspberry Pi GPIO 22 ──┬─── Button ─── GND
 | `python monitor.py --real` | Real hardware mode | Production deployment |
 | `python monitor.py --verbose` | Verbose logging | Debugging issues |
 | `python monitor.py --detailed-logging` | Detailed frequency logging | Data collection for analysis |
-| `python monitor.py --analyze-offline` | Offline data analysis | Process logged data |
 | `python test_solark_cloud.py` | Test cloud integration | Verify Sol-Ark connection |
-| `python test_inverter_automation.py` | Test complete TOU automation | Full automation flow test |
-| `python test_tou_verification.py` | Test TOU toggle ON/OFF | Simple TOU verification |
-
-</div>
-
-### 🔧 Command Line Options
-
-```bash
-# Available command line options
-python monitor.py [OPTIONS]
-
-Options:
-  --simulator, -s    Force simulator mode (no hardware required)
-  --real, -r         Force real hardware mode
-  --verbose, -v      Enable verbose logging
-  --detailed-logging, -d    Enable detailed frequency logging mode
-  --log-interval FLOAT      Detailed logging interval in seconds (default: 1.0)
-  --log-file FILE           Detailed log file name (default: detailed_frequency_data.csv)
-  --analyze-offline         Analyze offline data from detailed log file
-  --input-file FILE         Input file for offline analysis (default: detailed_frequency_data.csv)
-  --output-file FILE        Output file for offline analysis results (default: offline_analysis_results.csv)
-  --tuning, -t              Enable tuning data collection mode
-  --tuning-duration INT     Tuning data collection duration in seconds (default: 3600)
-  --help, -h                Show help message
-```
 
 ### 📊 Detailed Logging Mode
-
-The system includes a comprehensive detailed logging mode for debugging and analysis. This mode captures every frequency reading with full analysis data, allowing you to analyze why your utility/generator classification might not be working correctly.
-
-#### 🔍 **Quick Start**
 
 ```bash
 # Enable detailed logging (1 second intervals)
@@ -319,36 +232,11 @@ python monitor.py --detailed-logging
 python monitor.py --analyze-offline
 ```
 
-#### 📋 **What You Get**
-
-- **Complete frequency data**: Every reading with Allan variance, std deviation, kurtosis
-- **Classification details**: Power source classification with confidence scores
-- **Offline analysis**: Statistical summaries and threshold recommendations
-- **Troubleshooting data**: Perfect for debugging classification issues
-
-*For complete detailed logging documentation, configuration options, and troubleshooting guides, see [FREQUENCY_ANALYSIS.md](FREQUENCY_ANALYSIS.md#-detailed-logging-mode).*
-
-### 🧪 Testing & Validation
-
-```bash
-# Test Sol-Ark cloud integration
-python test_solark_cloud.py
-
-# Download Sol-Ark pages for analysis
-python test_solark_cloud.py --download-only
-
-# Run unit tests
-python test_monitor.py
-
-# Test hardware components
-python hardware.py --test
-```
+*Captures every frequency reading with full analysis data for debugging classification issues. See [FREQUENCY_ANALYSIS.md](FREQUENCY_ANALYSIS.md) for complete documentation.*
 
 ## ⚙️ Configuration
 
-The system uses a comprehensive YAML configuration file `config.yaml`. Here's what you can customize:
-
-<div align="center">
+The system uses a comprehensive YAML configuration file `config.yaml` with settings for:
 
 | Category | Settings | Description |
 |:---:|:---:|:---:|
@@ -359,13 +247,7 @@ The system uses a comprehensive YAML configuration file `config.yaml`. Here's wh
 | 🏥 **Health** | Watchdog timeout, thresholds | System health monitoring |
 | ☁️ **Sol-Ark** | Credentials, sync intervals | Cloud integration settings |
 
-</div>
-
-
-
 ## 📁 Output Files
-
-<div align="center">
 
 | File | Description | Format |
 |:---:|:---:|:---:|
@@ -374,59 +256,17 @@ The system uses a comprehensive YAML configuration file `config.yaml`. Here's wh
 | ☁️ `solark_cache/` | Cached Sol-Ark cloud pages | HTML files for analysis |
 | 🔄 `solark_session.json` | Session data | JSON session storage |
 
-</div>
-
-### 📊 Data Logging
-
-The system generates comprehensive logs and data files:
-
-```bash
-# View recent logs
-tail -f monitor.log
-
-# Check hourly status
-cat hourly_status.csv
-
-# Analyze cached Sol-Ark data
-ls -la solark_cache/
-```
-
 ## 🧪 Testing
 
-### 🔬 Unit Tests
-
 ```bash
-# Run all unit tests
+# Run unit tests
 python test_monitor.py
 
-# Run specific test modules
-python -m pytest test_monitor.py -v
-```
-
-### ☁️ Cloud Integration Tests
-
-```bash
 # Test Sol-Ark cloud connection
 python test_solark_cloud.py
 
-# Download pages for offline analysis
-python test_solark_cloud.py --download-only
-
-# Test parameter synchronization
-python test_solark_cloud.py --test-sync
-```
-
-### 🔧 Hardware Tests
-
-```bash
 # Test hardware components
 python hardware.py --test
-
-# Test LCD display
-python hardware.py --test-lcd
-
-# Test LED indicators
-python hardware.py --test-leds
 ```
 
 ## 🏗️ Architecture
@@ -476,113 +316,62 @@ graph TB
 | ☁️ **SolArkIntegration** | Cloud integration layer | Parameter synchronization |
 | 🤖 **SolArkCloud** | Web automation | Playwright-based interaction |
 
-</div>
-
-### 🔄 Data Flow
-
-1. **Input**: AC line frequency via optocoupler
-2. **Processing**: Real-time frequency analysis and classification
-3. **Output**: LCD display, logging
-4. **Integration**: Sol-Ark cloud parameter updates
-5. **Monitoring**: System health and performance tracking
+**Data Flow**: AC line frequency → Real-time analysis → LCD display/logging → Sol-Ark cloud updates
 
 ## 🎯 U/G Indicator Feature
 
-The system includes a smart U/G indicator that shows the majority power source classification over a configurable time window. This provides a more stable and reliable indication of the current power source compared to instantaneous readings.
-
-### 🔍 How the U/G Indicator Works
-
-The U/G indicator analyzes the last 5 minutes (configurable) of power source classifications and displays:
+The U/G indicator shows the majority power source classification over a configurable time window (default: 5 minutes), providing stable indication:
 - **U** - Utility Grid (majority of recent classifications)
 - **G** - Generator (majority of recent classifications)  
 - **?** - Unknown/Equal (insufficient data or tied classifications)
 
-### ⚙️ Configuration
-
-```yaml
-display:
-  classification_window: 300  # seconds - Window for U/G indicator (default: 5 minutes)
-```
-
-### 📊 Benefits
-
-- **Stability**: Reduces flickering between U/G during transient conditions
-- **Reliability**: Based on majority vote over time window
-- **Configurable**: Adjustable window size for different use cases
-- **Debugging**: Logs classification counts for troubleshooting
-
-### 🎛️ Tuning the Classification Window
-
-| Window Duration | Use Case | Behavior |
-|:---:|:---:|:---:|
-| **60 seconds** | Fast response | Quick to show changes, may flicker |
-| **300 seconds** | Balanced (default) | Good stability, reasonable response time |
-| **600 seconds** | Very stable | Slow to change, very stable indication |
+**Configuration**: Set `display.classification_window` in `config.yaml` (default: 300 seconds)
 
 ## ☁️ Sol-Ark TOU Automation System
 
-The system includes a **complete, production-ready automation system** for controlling Sol-Ark inverter Time of Use (TOU) settings via web automation.
+**Complete automation system** for controlling Sol-Ark inverter Time of Use (TOU) settings via web automation.
 
 ### 🎯 **What It Does**
 
-The TOU automation system automatically:
+Automatically:
 - **Logs into Sol-Ark Cloud** using your credentials
 - **Finds your specific inverter** by serial number
 - **Navigates to Parameters Setting** via dropdown menu
-- **Accesses System Work Mode** settings
 - **Toggles TOU switch** ON or OFF as needed
 - **Saves changes** with verification
-- **Confirms success** with multiple validation methods
-
 
 ### 🚀 **Quick Start**
 
-2. **Test the automation**:
-   ```bash
-   # Test complete automation flow
-   python test_inverter_automation.py
-   
-   # Test simple TOU toggle
-   python test_tou_verification.py
-   ```
+```bash
+# Test complete automation flow
+python test_inverter_automation.py
 
-3. **Use in your code**:
-   ```python
-   from solark_cloud import SolArkCloud
-   
-   solark = SolArkCloud()
-   await solark.initialize()
-   await solark.login()
-   
-   # Toggle TOU ON
-   result = await solark.toggle_time_of_use(True, "2207079903")
-   
-   # Toggle TOU OFF  
-   result = await solark.toggle_time_of_use(False, "2207079903")
-   ```
+# Test simple TOU toggle
+python test_tou_verification.py
+```
 
-### 🔧 **Technical Details**
+### 🔧 **Usage in Code**
 
-The automation uses **Playwright web automation** to:
-- Navigate Sol-Ark's web interface
-- Handle iframe-based settings pages
-- Click dropdown menus and buttons
-- Toggle switches and save changes
-- Verify operations completed successfully
+```python
+from solark_cloud import SolArkCloud
 
-**Key Features:**
-- **Multiple Click Methods**: Regular → Force → JavaScript fallbacks
-- **Smart Navigation**: Direct iframe access for settings
-- **Success Verification**: Checks for success indicators
-- **Session Management**: Persistent login with localStorage
-- **Error Recovery**: Comprehensive error handling and logging
+solark = SolArkCloud()
+await solark.initialize()
+await solark.login()
+
+# Toggle TOU ON/OFF
+result = await solark.toggle_time_of_use(True, "2207079903")
+result = await solark.toggle_time_of_use(False, "2207079903")
+```
+
+**Key Features**: Multiple click methods, smart navigation, success verification, session management, error recovery
 
 
 ## 📊 Monitoring
 
-The system provides comprehensive monitoring capabilities:
+**Comprehensive monitoring** with real-time LCD display, system health tracking, hourly logging, and cloud sync capabilities.
 
-<div align="center">
+**Health Metrics**: CPU usage, memory consumption, watchdog timer, frequency stability, power source classification, network status
 
 | Monitoring Type | Description | Output |
 |:---:|:---:|:---:|
@@ -671,16 +460,12 @@ findmnt /tmp
 
 ### 🚨 Common Issues
 
-<div align="center">
-
 | Issue | Symptoms | Solution |
 |:---:|:---:|:---:|
 | 🔌 **GPIO Access Denied** | Permission errors | `sudo usermod -a -G gpio pi` |
 | 📺 **LCD Not Displaying** | Blank screen | Check I2C address and connections |
 | ☁️ **Cloud Connection Failed** | Sol-Ark sync errors | Check credentials and network |
 | 📊 **Frequency Reading Errors** | Invalid data | Verify optocoupler connections |
-
-</div>
 
 ### 🔍 Diagnostic Steps
 
@@ -690,44 +475,18 @@ findmnt /tmp
 4. **🔐 Check Permissions**: Ensure GPIO access permissions are correct
 5. **⚙️ Review Configuration**: Verify `config.yaml` settings
 6. **☁️ Test Sol-Ark Integration**: Run `python test_solark_cloud.py`
-7. **📁 Check Cached Pages**: Review `solark_cache/` directory
-8. **🔑 Verify Credentials**: Ensure Sol-Ark username/password are correct
-
-### 🆘 Getting Help
-
-- **📋 Check Issues**: Search existing GitHub issues
-- **💬 Create Issue**: Report bugs or request features
-- **📖 Documentation**: Review configuration examples
-- **🧪 Test Mode**: Use simulator mode for debugging
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how you can help:
+**We welcome contributions!** Fork the repository, create a feature branch, commit your changes, and open a Pull Request.
 
-### 🚀 Quick Start
-
-1. **Fork** the repository
-2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
-3. **Commit** your changes: `git commit -m 'Add amazing feature'`
-4. **Push** to the branch: `git push origin feature/amazing-feature`
-5. **Open** a Pull Request
-
-### 📋 Contribution Guidelines
-
-- **Code Style**: Follow PEP 8 Python style guidelines
-- **Testing**: Add tests for new features
-- **Documentation**: Update README and docstrings
-- **Commits**: Use clear, descriptive commit messages
+**Guidelines**: Follow PEP 8 Python style, add tests for new features, update documentation, use clear commit messages.
 
 ## 📄 License
 
-This project is licensed under the GNU Lesser General Public License v3.0 (LGPL-3.0) - see the [LICENSE](LICENSE) file for details.
+**GNU Lesser General Public License v3.0 (LGPL-3.0)**
 
-The LGPL allows you to:
-- ✅ Use this software in proprietary applications
-- ✅ Modify and distribute the software
-- ✅ Link this library with proprietary code
-- ✅ Distribute your application under any license
+**Allows**: Use in proprietary applications, modify and distribute, link with proprietary code, distribute under any license.
 
 **Note**: If you modify this library itself, you must make your changes available under the LGPL.
 
