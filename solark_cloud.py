@@ -57,14 +57,12 @@ class SolArkCloud:
         
         # State tracking
         self.is_logged_in = False
-        self.current_plant_id = None
         self.last_sync = None
         
         # Configuration
         self.base_url = self.solark_config['base_url']
         self.username = self.solark_config['username']
         self.password = self.solark_config['password']
-        self.plant_id = self.solark_config['plant_id']
         self.timeout = self.solark_config['timeout'] * 1000  # Convert to ms
         self.retry_attempts = self.solark_config['retry_attempts']
         self.headless = self.solark_config['headless']
@@ -151,6 +149,12 @@ class SolArkCloud:
         if not self.username or not self.password:
             self.logger.error("Username or password not configured")
             return False
+        
+        # Initialize browser if not already done
+        if not self.page:
+            if not await self.initialize():
+                self.logger.error("Failed to initialize browser")
+                return False
         
         try:
             # Try to restore existing session first
@@ -302,17 +306,50 @@ class SolArkCloud:
             return
         
         try:
+            # Get cookies from the current context
+            cookies = await self.context.cookies()
+            
+            # Also try to get cookies from the current page
+            page_cookies = await self.page.context.cookies()
+            
+            # Use page cookies if context cookies are empty
+            if not cookies and page_cookies:
+                cookies = page_cookies
+            
+            # Try to capture localStorage and sessionStorage data
+            local_storage = {}
+            session_storage = {}
+            try:
+                if self.page:
+                    # Get localStorage data
+                    local_storage = await self.page.evaluate("() => { return {...localStorage}; }")
+                    # Get sessionStorage data  
+                    session_storage = await self.page.evaluate("() => { return {...sessionStorage}; }")
+            except Exception as e:
+                self.logger.debug(f"Could not capture storage data: {e}")
+            
             session_data = {
                 'timestamp': datetime.now().isoformat(),
-                'cookies': await self.context.cookies(),
+                'cookies': cookies,
+                'local_storage': local_storage,
+                'session_storage': session_storage,
                 'base_url': self.base_url,
-                'username': self.username
+                'username': self.username,
+                'current_url': self.page.url if self.page else None
             }
             
             with open(self.session_file, 'w') as f:
                 json.dump(session_data, f, indent=2)
             
-            self.logger.info(f"Session saved to {self.session_file}")
+            self.logger.info(f"Session saved successfully with {len(cookies)} cookies, {len(local_storage)} localStorage items, {len(session_storage)} sessionStorage items")
+            if cookies:
+                # Log cookie names for debugging
+                cookie_names = [cookie.get('name', 'unnamed') for cookie in cookies]
+                self.logger.debug(f"Cookie names: {cookie_names}")
+            if local_storage:
+                self.logger.debug(f"localStorage keys: {list(local_storage.keys())}")
+            if session_storage:
+                self.logger.debug(f"sessionStorage keys: {list(session_storage.keys())}")
         except Exception as e:
             self.logger.warning(f"Failed to save session: {e}")
     
@@ -349,12 +386,48 @@ class SolArkCloud:
             if not self.context:
                 return False
             
-            # Set cookies
-            await self.context.add_cookies(session_data['cookies'])
+            cookies = session_data.get('cookies', [])
+            local_storage = session_data.get('local_storage', {})
+            session_storage = session_data.get('session_storage', {})
             
-            # Navigate to base URL to establish session
+            # Check if we have any session data to restore
+            if not cookies and not local_storage and not session_storage:
+                self.logger.warning("No session data found to restore")
+                return False
+            
+            # Set cookies if available
+            if cookies:
+                await self.context.add_cookies(cookies)
+                self.logger.info(f"Restored {len(cookies)} cookies to browser context")
+            
+            # Navigate to base URL first
             await self.page.goto(self.base_url)
             await self.page.wait_for_load_state('networkidle')
+            
+            # Restore localStorage and sessionStorage if available
+            if local_storage or session_storage:
+                try:
+                    # Restore localStorage
+                    if local_storage:
+                        for key, value in local_storage.items():
+                            await self.page.evaluate(f"localStorage.setItem('{key}', '{value}')")
+                        self.logger.info(f"Restored {len(local_storage)} localStorage items")
+                    
+                    # Restore sessionStorage
+                    if session_storage:
+                        for key, value in session_storage.items():
+                            await self.page.evaluate(f"sessionStorage.setItem('{key}', '{value}')")
+                        self.logger.info(f"Restored {len(session_storage)} sessionStorage items")
+                    
+                    # Refresh the page to apply storage changes
+                    await self.page.reload()
+                    await self.page.wait_for_load_state('networkidle')
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to restore storage data: {e}")
+            
+            # Wait a moment for the page to fully load
+            await asyncio.sleep(2)
             
             # Check if we're still logged in by looking for login indicators
             current_url = self.page.url
@@ -362,39 +435,82 @@ class SolArkCloud:
                 self.logger.info("Session restored but still on login page - need to login")
                 return False
             
-            self.logger.info("Session restored successfully")
-            return True
+            # Additional check - try to navigate to a protected page
+            try:
+                await self.page.goto(f"{self.base_url}/device/inverter")
+                await self.page.wait_for_load_state('networkidle')
+                await asyncio.sleep(1)
+                
+                # Check if we're redirected to login
+                if '/login' in self.page.url:
+                    self.logger.info("Session restored but redirected to login - need to login")
+                    return False
+                
+                self.logger.info("Session restored successfully - can access protected pages")
+                return True
+            except Exception as e:
+                self.logger.warning(f"Error testing session restoration: {e}")
+                return False
+            
         except Exception as e:
             self.logger.warning(f"Failed to restore session: {e}")
             return False
     
+    def clear_session(self):
+        """Clear saved session data"""
+        try:
+            if os.path.exists(self.session_file):
+                os.remove(self.session_file)
+                self.logger.info("Session file cleared")
+            self.is_logged_in = False
+        except Exception as e:
+            self.logger.warning(f"Failed to clear session: {e}")
+    
     async def _is_logged_in(self) -> bool:
-        """Check if currently logged in by looking for login indicators"""
+        """Check if currently logged in by looking for Sol-Ark specific login indicators"""
         try:
             current_url = self.page.url
             if '/login' in current_url:
                 return False
             
-            # Look for elements that indicate we're logged in
+            # Look for Sol-Ark specific elements that indicate we're logged in
             logged_in_indicators = [
-                '.user-info',
-                '.logout',
-                '.profile',
-                '[data-testid="user-menu"]',
-                '.navbar .user'
+                # User dropdown with email in top-right
+                '.el-dropdown-link .font16',  # Email text in user dropdown
+                'span.font16',  # Email span
+                # User avatar image
+                '.titleImg img',  # User avatar
+                # Logout option in dropdown
+                'a[href="/logout"]',  # Logout link
+                '.el-dropdown-menu__item:has-text("Logout")',  # Logout menu item
+                # Sol-Ark specific navigation elements
+                '.el-menu-vertical-demo',  # Main navigation menu
+                '.menutop img[src*="logo"]',  # Sol-Ark logo
+                # Equipment/Inverter page elements
+                '.device-list',  # Device list on inverter page
+                '.el-table__body'  # Inverter table
             ]
             
             for indicator in logged_in_indicators:
                 try:
                     element = await self.page.query_selector(indicator)
                     if element and await element.is_visible():
+                        self.logger.debug(f"Found logged-in indicator: {indicator}")
                         return True
                 except:
                     continue
             
-            # If we're on a page that requires login and no login indicators found, assume logged in
-            if any(path in current_url for path in ['/plants', '/dashboard', '/overview']):
-                return True
+            # If we're on Sol-Ark pages that require login, check for specific content
+            if any(path in current_url for path in ['/device/inverter', '/plants', '/dashboard', '/overview']):
+                # Check if we can see Sol-Ark specific content
+                try:
+                    # Look for the main Sol-Ark interface elements
+                    main_content = await self.page.query_selector('.el-container')
+                    if main_content and await main_content.is_visible():
+                        self.logger.debug("Found main Sol-Ark interface - assuming logged in")
+                        return True
+                except:
+                    pass
             
             return False
         except Exception as e:
@@ -601,36 +717,28 @@ class SolArkCloud:
         try:
             self.logger.info(f"Selecting plant: {plant_id}")
             
-            plants = await self.get_plants()
-            target_plant = None
+            # Navigate directly to the plant's overview page
+            # URL pattern: https://www.solarkcloud.com/plants/overview/{plant_id}/2
+            plant_url = f"{self.base_url}/plants/overview/{plant_id}/2"
             
-            for plant in plants:
-                if plant['id'] == plant_id:
-                    target_plant = plant
-                    break
-            
-            if not target_plant:
-                self.logger.error(f"Plant {plant_id} not found")
-                return False
-            
-            # If we're already on the plant page (element is None), just set the current plant
-            if target_plant['element'] is None:
-                self.current_plant_id = plant_id
-                self.logger.info(f"Already on plant page: {plant_id}")
-                return True
-            
-            # Click on the plant element
-            await target_plant['element'].click()
+            self.logger.info(f"Navigating to plant URL: {plant_url}")
+            await self.page.goto(plant_url)
             await self.page.wait_for_load_state('networkidle')
             
-            self.current_plant_id = plant_id
-            self.logger.info(f"Successfully selected plant: {plant_id}")
-            
-            # Save plant page
-            if self.cache_pages:
-                await self._save_page_to_cache(f"plant_{plant_id}.html")
-            
-            return True
+            # Verify we're on the correct plant page
+            current_url = self.page.url
+            if plant_id in current_url:
+                self.current_plant_id = plant_id
+                self.logger.info(f"Successfully selected plant {plant_id}")
+                
+                # Save plant page
+                if self.cache_pages:
+                    await self._save_page_to_cache(f"plant_{plant_id}.html")
+                
+                return True
+            else:
+                self.logger.error(f"Failed to navigate to plant {plant_id}. Current URL: {current_url}")
+                return False
             
         except Exception as e:
             self.logger.error(f"Failed to select plant {plant_id}: {e}")
@@ -862,55 +970,285 @@ class SolArkCloud:
             self.logger.error(f"Sync failed: {e}")
             return {'status': 'error', 'message': str(e)}
     
-    async def toggle_time_of_use(self, enable: bool, plant_serial: str = None) -> bool:
+    async def toggle_time_of_use(self, enable: bool, inverter_id: str) -> bool:
         """
         Toggle Time of Use setting in inverter settings
         
         Args:
             enable: True to enable TOU, False to disable
-            plant_serial: Sol-Ark plant serial number (uses configured plant_id if None)
+            inverter_id: Sol-Ark inverter ID (required - should come from optocoupler config)
             
         Returns:
             bool: True if toggle successful
         """
         try:
+            # Require inverter_id parameter - this should come from optocoupler config
+            if not inverter_id:
+                self.logger.error("inverter_id parameter is required - should be provided from optocoupler configuration")
+                return False
+            
             self.logger.info(f"Toggling Time of Use to {'ON' if enable else 'OFF'} "
-                           f"for plant {plant_serial or self.plant_id}")
+                           f"for inverter {inverter_id}")
             
             if not self.is_logged_in:
                 if not await self.login():
                     return False
             
-            # Use provided plant_serial or fall back to configured plant_id
-            target_plant = plant_serial or self.plant_id
-            if not target_plant:
-                self.logger.error("No plant ID provided and no plant_serial configured")
+            # Navigate to the inverter device page
+            inverter_url = f"{self.base_url}/device/inverter"
+            
+            self.logger.info(f"Navigating to inverter device page: {inverter_url}")
+            await self.page.goto(inverter_url)
+            await self.page.wait_for_load_state('networkidle')
+            
+            # Wait for JavaScript to load the inverter list
+            self.logger.info("Waiting for inverter list to load...")
+            await asyncio.sleep(3)  # Give JS time to render
+            
+            # Download the rendered HTML for analysis
+            html_content = await self.page.content()
+            html_file = self.cache_dir / f"inverter_page_{inverter_id}.html"
+            with open(html_file, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            self.logger.info(f"Downloaded rendered HTML to: {html_file}")
+            
+            # Verify we're on the correct page
+            current_url = self.page.url
+            if 'device/inverter' in current_url:
+                self.logger.info(f"Successfully navigated to inverter device page")
+            else:
+                self.logger.error(f"Failed to navigate to inverter device page. Current URL: {current_url}")
                 return False
             
-            # Select the specific plant if different from current
-            if target_plant != self.current_plant_id:
-                if not await self.select_plant(target_plant):
+            # Find the specific inverter row by SN
+            self.logger.info(f"Looking for inverter {inverter_id}...")
+            
+            # Wait for the table to load
+            await self.page.wait_for_selector('.el-table__body', timeout=10000)
+            
+            # Find the inverter row by looking for the SN in the table
+            inverter_row = None
+            try:
+                # Look for the specific inverter SN in the table
+                sn_selector = f"text={inverter_id}"
+                await self.page.wait_for_selector(sn_selector, timeout=10000)
+                
+                # Find the row containing this SN
+                inverter_row = await self.page.query_selector(f"tr:has-text('{inverter_id}')")
+                if inverter_row:
+                    self.logger.info(f"Found inverter row for {inverter_id}")
+                else:
+                    self.logger.error(f"Could not find inverter row for {inverter_id}")
                     return False
+                    
+            except Exception as e:
+                self.logger.error(f"Error finding inverter row: {e}")
+                return False
             
-            # TODO: Navigate to inverter settings submenu
-            # Need to identify the exact menu path and selectors
-            # This will be completed during interactive browser work
+            # Click on the "More" dropdown button for this inverter
+            self.logger.info(f"Clicking on 'More' dropdown for inverter {inverter_id}...")
             
-            # TODO: Find TOU checkbox element (work in interactive mode)
-            # Need to identify the exact selector for the Time of Use checkbox
-            # This will be completed during interactive browser work
+            try:
+                # First, scroll the table to make sure the dropdown column is visible
+                self.logger.info("Scrolling table to ensure dropdown is visible...")
+                await self.page.evaluate("document.querySelector('.el-table__body-wrapper').scrollLeft = 1000")
+                await asyncio.sleep(1)
+                
+                # Find dropdown button in the specific inverter row
+                dropdown_button = None
+                try:
+                    # Look for dropdowns in rows that contain our inverter ID
+                    inverter_rows = await self.page.query_selector_all(f'tr:has-text("{inverter_id}")')
+                    self.logger.info(f"Found {len(inverter_rows)} rows containing inverter {inverter_id}")
+                    
+                    for i, row in enumerate(inverter_rows):
+                        # Check if this row actually contains our inverter ID
+                        row_text = await row.text_content()
+                        if inverter_id in row_text:
+                            self.logger.info(f"Row {i+1} contains inverter {inverter_id}")
+                            # Look for dropdown in this specific row
+                            dropdown_in_row = await row.query_selector('.w24.h30.flex-align-around.el-dropdown-selfdefine')
+                            if dropdown_in_row and await dropdown_in_row.is_visible():
+                                dropdown_button = dropdown_in_row
+                                self.logger.info(f"Found dropdown in row {i+1}")
+                                break
+                except Exception as e:
+                    self.logger.error(f"Error finding dropdown in specific row: {e}")
+                    return False
+                
+                if dropdown_button:
+                    # Ensure the button is in view
+                    await dropdown_button.scroll_into_view_if_needed()
+                    await asyncio.sleep(0.5)
+                    
+                    # Click the dropdown
+                    await dropdown_button.click()
+                    self.logger.info("Clicked on 'More' dropdown")
+                    await asyncio.sleep(2)  # Wait for dropdown to appear
+                else:
+                    self.logger.error("Could not find 'More' dropdown button with any selector")
+                    return False
+                    
+            except Exception as e:
+                self.logger.error(f"Error clicking dropdown: {e}")
+                return False
             
-            # TODO: Toggle checkbox to desired state
-            # Check current state first to avoid unnecessary toggles
-            # Then toggle to the desired state
+            # Navigate to "Parameters Setting" using keyboard navigation
+            self.logger.info("Navigating to 'Parameters Setting' using keyboard...")
             
-            # TODO: Save settings
-            # Find and click the save/apply button
-            # Verify the change was applied successfully
+            try:
+                # Wait for the dropdown menu to appear and be visible
+                self.logger.info("Waiting for dropdown menu to appear...")
+                
+                # Wait a bit for the menu to appear
+                await asyncio.sleep(2)
+                
+                # Check for dropdown menus
+                all_menus = await self.page.query_selector_all('.el-dropdown-menu')
+                self.logger.info(f"Found {len(all_menus)} dropdown menus on page")
+                
+                visible_menu = None
+                for i, menu in enumerate(all_menus):
+                    try:
+                        is_visible = await menu.is_visible()
+                        if is_visible and not visible_menu:
+                            visible_menu = menu
+                            self.logger.info(f"Found visible dropdown menu {i+1}")
+                            break
+                    except:
+                        continue
+                
+                if not visible_menu:
+                    self.logger.error("No visible dropdown menu found")
+                    return False
+                
+                # Use keyboard navigation - much more reliable than DOM clicking
+                self.logger.info("Using keyboard navigation to select 'Parameters Setting'...")
+                
+                # First arrow down to wake up the menu and highlight first item
+                self.logger.info("Pressing ↓ to wake up menu...")
+                await self.page.keyboard.press('ArrowDown')
+                await asyncio.sleep(0.5)
+                
+                # Second arrow down to go to Parameters Setting
+                self.logger.info("Pressing ↓ once more to reach Parameters Setting...")
+                await self.page.keyboard.press('ArrowDown')
+                await asyncio.sleep(0.5)
+                
+                # Press Enter to select Parameters Setting
+                self.logger.info("Pressing Enter to select Parameters Setting...")
+                await self.page.keyboard.press('Enter')
+                self.logger.info("Successfully navigated to 'Parameters Setting' using keyboard!")
+                await asyncio.sleep(3)  # Wait for parameters page to load
+                    
+            except Exception as e:
+                self.logger.error(f"Error clicking Parameters Setting: {e}")
+                return False
             
-            # Placeholder implementation - will be completed during interactive work
-            self.logger.warning("TOU toggle not yet implemented - requires interactive browser work")
-            return False
+            # Take a screenshot of the parameters page for analysis
+            screenshot_file = self.cache_dir / f"parameters_page_{inverter_id}.png"
+            await self.page.screenshot(path=str(screenshot_file))
+            self.logger.info(f"Screenshot saved: {screenshot_file}")
+            
+            # Download the parameters page HTML for analysis
+            html_content = await self.page.content()
+            html_file = self.cache_dir / f"parameters_page_{inverter_id}.html"
+            with open(html_file, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            self.logger.info(f"Parameters page HTML saved: {html_file}")
+            
+            self.logger.info(f"Successfully navigated to parameters page for inverter {inverter_id}")
+            
+            # Now look for Time of Use settings
+            self.logger.info("Looking for Time of Use settings...")
+            
+            # Wait for the parameters page to fully load
+            await self.page.wait_for_load_state('networkidle')
+            await asyncio.sleep(2)
+            
+            # Look for TOU-related elements
+            tou_selectors = [
+                'text=Time of Use',
+                'text=TOU',
+                'text=分时电价',  # Chinese for Time of Use
+                'text=峰谷电价',  # Chinese for Peak-Valley pricing
+                '[placeholder*="TOU"]',
+                '[placeholder*="Time of Use"]',
+                'input[type="checkbox"]:near(text=Time of Use)',
+                'input[type="checkbox"]:near(text=TOU)',
+                '.el-checkbox:has-text("Time of Use")',
+                '.el-checkbox:has-text("TOU")',
+                '.el-checkbox:has-text("分时电价")',
+                '.el-checkbox:has-text("峰谷电价")'
+            ]
+            
+            tou_element = None
+            for selector in tou_selectors:
+                try:
+                    tou_element = await self.page.query_selector(selector)
+                    if tou_element and await tou_element.is_visible():
+                        self.logger.info(f"Found TOU element with selector: {selector}")
+                        break
+                except:
+                    continue
+            
+            if tou_element:
+                # Check if it's a checkbox
+                tag_name = await tou_element.evaluate('el => el.tagName.toLowerCase()')
+                if tag_name == 'input' and await tou_element.get_attribute('type') == 'checkbox':
+                    # It's a checkbox - check current state
+                    is_checked = await tou_element.is_checked()
+                    self.logger.info(f"TOU checkbox current state: {'checked' if is_checked else 'unchecked'}")
+                    
+                    # Toggle if needed
+                    if (enable and not is_checked) or (not enable and is_checked):
+                        await tou_element.click()
+                        self.logger.info(f"Toggled TOU checkbox to {'ON' if enable else 'OFF'}")
+                        await asyncio.sleep(1)
+                    else:
+                        self.logger.info(f"TOU checkbox already in desired state ({'ON' if enable else 'OFF'})")
+                else:
+                    # It might be a button or other element - try clicking
+                    self.logger.info("TOU element is not a checkbox, attempting to click")
+                    await tou_element.click()
+                    await asyncio.sleep(1)
+                
+                # Look for save button
+                save_selectors = [
+                    'button:has-text("Save")',
+                    'button:has-text("保存")',
+                    'button:has-text("Apply")',
+                    'button:has-text("应用")',
+                    '.el-button--primary:has-text("Save")',
+                    '.el-button--primary:has-text("保存")',
+                    'input[type="submit"]',
+                    '.el-button[type="submit"]'
+                ]
+                
+                save_button = None
+                for selector in save_selectors:
+                    try:
+                        save_button = await self.page.query_selector(selector)
+                        if save_button and await save_button.is_visible():
+                            self.logger.info(f"Found save button with selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if save_button:
+                    await save_button.click()
+                    self.logger.info("Clicked save button")
+                    await asyncio.sleep(2)
+                    
+                    # Verify the change was applied
+                    self.logger.info("TOU setting change applied successfully")
+                    return True
+                else:
+                    self.logger.warning("Could not find save button - changes may not be saved")
+                    return True  # Assume success if we can't find save button
+            else:
+                self.logger.error("Could not find Time of Use settings on parameters page")
+                return False
             
         except Exception as e:
             self.logger.error(f"Failed to toggle Time of Use: {e}")

@@ -105,13 +105,13 @@ class SolArkIntegration:
     
     def _build_optocoupler_plant_mapping(self) -> Dict[str, str]:
         """
-        Build mapping from optocoupler names to Sol-Ark plant serial numbers
+        Build mapping from optocoupler names to Sol-Ark inverter IDs
         
         Returns:
-            Dict mapping optocoupler name to plant serial number
+            Dict mapping optocoupler name to inverter ID
             
         Raises:
-            ValueError: If optocoupler name doesn't match configured plant
+            ValueError: If optocoupler name doesn't match configured inverter
         """
         mapping = {}
         
@@ -121,11 +121,11 @@ class SolArkIntegration:
             # Process primary optocoupler
             primary_config = optocoupler_config['primary']
             primary_name = primary_config['name']
-            primary_serial = primary_config.get('solark_plant_serial', '')
+            primary_inverter_id = primary_config.get('solark_inverter_id', '')
             
-            if primary_serial:
-                mapping[primary_name] = primary_serial
-                self.logger.info(f"Mapped optocoupler '{primary_name}' to plant serial '{primary_serial}'")
+            if primary_inverter_id:
+                mapping[primary_name] = primary_inverter_id
+                self.logger.info(f"Mapped optocoupler '{primary_name}' to inverter ID '{primary_inverter_id}'")
             
             # Process secondary optocoupler (if enabled)
             secondary_config = optocoupler_config['secondary']
@@ -133,14 +133,14 @@ class SolArkIntegration:
             
             if secondary_gpio != -1:  # Secondary optocoupler is enabled
                 secondary_name = secondary_config['name']
-                secondary_serial = secondary_config.get('solark_plant_serial', '')
+                secondary_inverter_id = secondary_config.get('solark_inverter_id', '')
                 
-                if secondary_serial:
-                    mapping[secondary_name] = secondary_serial
-                    self.logger.info(f"Mapped optocoupler '{secondary_name}' to plant serial '{secondary_serial}'")
+                if secondary_inverter_id:
+                    mapping[secondary_name] = secondary_inverter_id
+                    self.logger.info(f"Mapped optocoupler '{secondary_name}' to inverter ID '{secondary_inverter_id}'")
             
             if not mapping:
-                self.logger.warning("No optocoupler-to-plant mappings configured")
+                self.logger.warning("No optocoupler-to-inverter mappings configured")
             
             return mapping
             
@@ -282,22 +282,22 @@ class SolArkIntegration:
                 asyncio.set_event_loop(loop)
                 
                 try:
-                    # Get plant serial for this optocoupler
-                    plant_serial = self.optocoupler_plants.get(optocoupler_name)
-                    if not plant_serial:
-                        self.logger.error(f"No plant serial configured for optocoupler '{optocoupler_name}'")
+                    # Get inverter ID for this optocoupler
+                    inverter_id = self.optocoupler_plants.get(optocoupler_name)
+                    if not inverter_id:
+                        self.logger.error(f"No inverter ID configured for optocoupler '{optocoupler_name}'")
                         return
                     
                     result = loop.run_until_complete(
-                        self.solark_cloud.toggle_time_of_use(enable, plant_serial)
+                        self.solark_cloud.toggle_time_of_use(enable, inverter_id)
                     )
                     
                     if result:
                         self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for {power_source} "
-                                       f"(optocoupler: {optocoupler_name}, plant: {plant_serial})")
+                                       f"(optocoupler: {optocoupler_name}, inverter: {inverter_id})")
                     else:
                         self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for {power_source} "
-                                        f"(optocoupler: {optocoupler_name}, plant: {plant_serial})")
+                                        f"(optocoupler: {optocoupler_name}, inverter: {inverter_id})")
                         
                 finally:
                     loop.close()
