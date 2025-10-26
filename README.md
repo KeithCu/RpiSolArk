@@ -46,45 +46,9 @@ Unlike voltage (which can be similar for both sources), **frequency behavior is 
 
 #### 🎯 **Why Generators Hunt:**
 
-1. **Mechanical Governor Response**: The governor tries to maintain 3600 RPM (60 Hz), but:
-   - Load changes cause speed variations
-   - Governor overcorrects, causing overshoot
-   - System oscillates around target speed
-   - Creates characteristic hunting pattern
+Generators hunt because they use mechanical governors that try to maintain 3600 RPM (60 Hz), but load changes cause speed variations. The governor overcorrects, causing overshoot, and the system oscillates around the target speed, creating characteristic hunting patterns. This instability is much more pronounced in single-cylinder engines, air-cooled units, and older generators.
 
-2. **Engine Characteristics**:
-   - Single-cylinder engines have more hunting than multi-cylinder
-   - Air-cooled engines hunt more than liquid-cooled
-   - Older generators hunt more than newer ones
-   - Load-dependent hunting (more load = more hunting)
-
-3. **Governor Design**:
-   - Mechanical governors are inherently less stable
-   - Electronic governors are better but still hunt
-   - Hunting frequency typically 0.1-2 Hz (every 0.5-10 seconds)
-
-#### 📊 **Real-World Generator Hunting Examples:**
-
-**Generac Guardian 20kW:**
-```
-Pattern: 61-62 Hz → 59-60 Hz → 61-62 Hz (every 3-5 seconds)
-Cause: Governor hunting under load changes
-Detection: High Allan variance + cycling pattern
-```
-
-**Generac V-Twin 16kW:**
-```
-Pattern: 59-60 Hz baseline, drops to 57-58 Hz under load
-Cause: Load-dependent frequency regulation
-Detection: Standard deviation + load correlation
-```
-
-**Portable Generators (XG7000E):**
-```
-Pattern: 59-60 Hz ±1 Hz hunting (no load), 49-62 Hz (loaded)
-Cause: Extreme governor instability
-Detection: Very high kurtosis + wide frequency range
-```
+*For detailed technical explanations of hunting patterns, real-world examples, and detection algorithms, see [FREQUENCY_ANALYSIS.md](FREQUENCY_ANALYSIS.md).*
 
 #### 📈 **Visual Example of Frequency Hunting:**
 
@@ -110,41 +74,15 @@ Frequency: 59-64 Hz with hunting pattern
 
 ### 🧮 **Detection Algorithm**
 
-The system uses **three complementary analysis methods**:
-
-<div align="center">
+The system uses **three complementary analysis methods** to detect power sources:
 
 | Analysis Method | What It Detects | Why It Works |
 |:---:|:---:|:---:|
 | **📊 Allan Variance** | Short-term frequency instability | Captures hunting oscillations |
-| **📈 Standard Deviation** | Overall frequency spread | Detects wide frequency ranges |
+| **📈 Standard Deviation** | Overall freqauency spread | Detects wide frequency ranges |
 | **📉 Kurtosis** | Distribution shape analysis | Identifies hunting patterns vs random noise |
 
-</div>
-
-#### 🔬 **The Math Behind Detection:**
-
-```python
-# Convert frequency to fractional frequency for analysis
-frac_freq = (frequency - 60.0) / 60.0
-
-# Allan Variance: Detects hunting patterns
-allan_variance = calculate_allan_variance(frac_freq, tau=10.0)
-
-# Standard Deviation: Overall instability
-std_deviation = np.std(frac_freq * 60.0)
-
-# Kurtosis: Pattern detection (hunting vs noise)
-kurtosis = scipy.stats.kurtosis(frac_freq)
-
-# Classification logic
-if (allan_variance > threshold OR 
-    std_deviation > threshold OR 
-    kurtosis > threshold):
-    return "Generac Generator"
-else:
-    return "Utility Grid"
-```
+*For detailed mathematical formulas, implementation details, and metric effectiveness analysis, see [FREQUENCY_ANALYSIS.md](FREQUENCY_ANALYSIS.md).*
 
 ### 🎯 **Why This Works So Well**
 
@@ -153,115 +91,40 @@ else:
 3. **Pattern Recognition**: The combination of three metrics catches different types of instability
 4. **Real-World Tested**: Algorithm trained on actual generator data from various models
 
-## 🔬 **Detailed Analysis: Detection Metrics Explained**
+## 📊 Features
 
-### 📊 **Standard Deviation - The Primary Indicator**
+<div align="center">
 
-**What it measures:** How spread out frequency values are from the mean.
+| 🎯 **Core Monitoring** | 🔧 **Smart Integration** | 📱 **User Interface** |
+|:---:|:---:|:---:|
+| Real-time frequency analysis | Sol-Ark cloud integration (WIP) | LCD display with status |
+| Power source classification | Automatic parameter updates (WIP) | LED status indicators |
+| Allan variance analysis | Web automation (Playwright) | Web dashboard |
+| Health monitoring | Graceful degradation | Comprehensive logging |
 
-**Formula:** `std_dev = sqrt(sum((x - mean)^2) / N)`
+</div>
 
-**Why it's effective:**
-- **Utility Grid**: Very stable frequency (0.01-0.05 Hz std dev)
-- **Generators**: Inherently unstable (0.5-10+ Hz std dev)
+### 🌟 Key Capabilities
 
-**Advantages:**
-- Simple to calculate (basic statistics)
-- Fast computation (O(n) complexity)
-- Intuitive to understand
-- Works with any sample size
-- No external library dependencies
+- ⚡ **Real-time frequency monitoring** using optocoupler input
 
-**Disadvantages:**
-- Doesn't capture temporal patterns
-- Sensitive to outliers
-- Doesn't distinguish between different types of instability
+- 🔍 **Power source classification** (Utility Grid vs Generac Generator)
 
-**Real-world performance:** 100% detection rate (12/12 generator patterns detected)
+- 📈 **Allan variance analysis** for frequency stability assessment
 
-### 📈 **Allan Variance - The Temporal Pattern Detector**
+- 📺 **LCD display** with real-time status updates and U/G indicator
 
-**What it measures:** Frequency stability over time, specifically designed to detect systematic frequency variations and drift patterns.
+- 💡 **LED indicators** for instant power source identification
 
-**Formula:** `allan_var = (1/2) * E[(y(t+tau) - y(t))^2]`
+- 🎯 **U/G indicator** showing majority classification over recent data window
 
-**Why it's effective:**
-- **Utility Grid**: Very stable over time (1e-6 to 1e-5 Allan variance)
-- **Generators**: Systematic hunting patterns (1e-4 to 1e-2 Allan variance)
+- 🏥 **Health monitoring** with system resource tracking
 
-**What it detects:**
-1. **Governor Hunting**: Cyclical frequency variations (60 Hz → 59 Hz → 61 Hz → 60 Hz)
-2. **Load-Dependent Drift**: Frequency changes with load (60 Hz no load → 58 Hz loaded)
-3. **Startup Instability**: Initial frequency settling (50 Hz → 55 Hz → 60 Hz startup)
+- 🛡️ **Graceful degradation** when hardware is unavailable
 
-**Advantages:**
-- Detects systematic frequency variations
-- Captures temporal patterns and hunting
-- Less sensitive to random noise
-- Industry standard for frequency stability analysis
-- Good at detecting governor hunting cycles
+- 📝 **Comprehensive logging** with hourly status reports
 
-**Disadvantages:**
-- More complex to calculate
-- Requires sufficient data points
-- Sensitive to sampling rate
-- Requires external library (allantools)
-- Can be computationally expensive
-
-**Real-world performance:** 75% detection rate (9/12 generator patterns detected)
-
-### 📉 **Kurtosis - The Distribution Shape Analyzer**
-
-**What it measures:** The 'tailedness' of the frequency distribution - whether data has heavy tails or is more peaked than normal.
-
-**Formula:** `K = E[(X - mean)^4] / std_dev^4 - 3`
-
-**Kurtosis values:**
-- Kurtosis = 0: Normal distribution (bell curve)
-- Kurtosis > 0: Heavy tails, more peaked (leptokurtic)
-- Kurtosis < 0: Light tails, flatter (platykurtic)
-
-**Why it might be effective:**
-- **Utility Grid**: Normal distribution (kurtosis ~ 0)
-- **Generators**: Non-normal distributions (kurtosis ≠ 0)
-
-**What it detects:**
-1. **Hunting Patterns**: Bimodal distributions (59 Hz and 61 Hz clusters)
-2. **Extreme Swings**: Heavy-tailed distributions (mostly 60 Hz with occasional 50-70 Hz)
-3. **Startup Surges**: Initial instability (normal 60 Hz with startup spikes)
-
-**Advantages:**
-- Detects non-normal frequency distributions
-- Good at identifying hunting patterns
-- Captures extreme frequency swings
-- Simple to calculate
-
-**Disadvantages:**
-- Less intuitive than standard deviation
-- Sensitive to sample size
-- Can be misleading with small datasets
-- Not as reliable as other metrics
-
-**Real-world performance:** 25% detection rate (3/12 generator patterns detected)
-
-### 🎯 **Metric Effectiveness Summary**
-
-| Metric | Detection Rate | Complexity | Dependencies | Recommendation |
-|:---:|:---:|:---:|:---:|:---:|
-| **Standard Deviation** | 100% (12/12) | Low | None | ✅ **Primary metric** |
-| **Allan Variance** | 75% (9/12) | Medium | allantools | ✅ **Secondary metric** |
-| **Kurtosis** | 25% (3/12) | Low | scipy | ⚠️ **Consider removing** |
-
-### 💡 **Simplification Analysis**
-
-**Key Finding:** Standard deviation alone achieves 100% detection accuracy!
-
-**Simplification options:**
-1. **Current approach**: All three metrics (100% accuracy, more complex)
-2. **Simplified approach**: Standard deviation only (100% accuracy, much simpler)
-3. **Moderate approach**: Standard deviation + Allan variance (100% accuracy, moderate complexity)
-
-**Recommendation:** Based on real-world testing, you could simplify to **standard deviation only** and maintain 100% detection accuracy while significantly reducing code complexity and dependencies.
+- ⚙️ **Configurable parameters** via YAML configuration
 
 ## 📊 Features
 
