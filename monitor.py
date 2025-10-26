@@ -30,6 +30,7 @@ from data_logger import DataLogger
 from tuning_collector import TuningDataCollector
 from offline_analyzer import OfflineAnalyzer
 from restart_manager import RestartManager
+from solark_integration import SolArkIntegration
 
 
 class PowerState(Enum):
@@ -43,10 +44,11 @@ class PowerState(Enum):
 class PowerStateMachine:
     """State machine for power system management."""
 
-    def __init__(self, config, logger: logging.Logger, display_manager=None):
+    def __init__(self, config, logger: logging.Logger, display_manager=None, solark_integration=None):
         self.config = config
         self.logger = logger
         self.display_manager = display_manager  # Reference to display manager for backlight control
+        self.solark_integration = solark_integration  # Reference to Sol-Ark integration
         self.current_state = PowerState.TRANSITIONING  # Start in transitioning to allow detection
         self.previous_state = PowerState.TRANSITIONING
         self.state_entry_time = time.time()
@@ -218,6 +220,9 @@ class PowerStateMachine:
         if self.display_manager:
             self.display_manager.force_display_on()
             self.logger.info("Display backlight turned on for power outage")
+        # Disable TOU when off-grid
+        if self.solark_integration:
+            self.solark_integration.on_power_source_change('off_grid', {})
 
     def _on_enter_grid(self):
         """Called when entering GRID state."""
@@ -228,6 +233,9 @@ class PowerStateMachine:
         if self.display_manager:
             self.display_manager.force_display_on()
             self.logger.info("Display backlight turned on for grid power")
+        # Enable TOU when on grid power
+        if self.solark_integration:
+            self.solark_integration.on_power_source_change('grid', {})
 
     def _on_enter_generator(self):
         """Called when entering GENERATOR state."""
@@ -238,6 +246,9 @@ class PowerStateMachine:
         if self.display_manager:
             self.display_manager.force_display_on()
             self.logger.info("Display backlight turned on for generator operation")
+        # Disable TOU when on generator
+        if self.solark_integration:
+            self.solark_integration.on_power_source_change('generator', {})
 
 
 class FrequencyAnalyzer:
@@ -665,7 +676,16 @@ class FrequencyMonitor:
             self.logger.info("Real mode: Using real hardware for frequency data")
         
         self.analyzer = FrequencyAnalyzer(self.config, self.logger)
-        self.state_machine = PowerStateMachine(self.config, self.logger, self.hardware.display)
+        
+        # Initialize Sol-Ark integration (with graceful handling if disabled)
+        try:
+            self.solark_integration = SolArkIntegration()
+            self.logger.info("Sol-Ark integration initialized")
+        except Exception as e:
+            self.logger.warning(f"Sol-Ark integration disabled: {e}")
+            self.solark_integration = None
+        
+        self.state_machine = PowerStateMachine(self.config, self.logger, self.hardware.display, self.solark_integration)
         self.health_monitor = HealthMonitor(self.config, self.logger)
         self.memory_monitor = MemoryMonitor(self.config, self.logger)
         self.data_logger = DataLogger(self.config, self.logger)

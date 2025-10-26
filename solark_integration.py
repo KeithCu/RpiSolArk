@@ -43,6 +43,7 @@ class SolArkIntegration:
         self.enabled = self.solark_config['enabled']
         self.sync_interval = self.solark_config['sync_interval']  # 5 minutes
         self.parameter_changes_enabled = self.solark_config['parameter_changes']['enabled']
+        self.time_of_use_enabled = self.solark_config['parameter_changes'].get('time_of_use_enabled', True)
         
         # State tracking
         self.last_power_source = None
@@ -52,17 +53,14 @@ class SolArkIntegration:
         
         # Parameter mapping for different power sources
         self.power_source_parameters = {
-            'utility': {
-                # Parameters to set when on utility power
-                'grid_mode': 'grid-tie',
-                'backup_mode': 'disabled',
-                'load_priority': 'solar-first'
+            'grid': {
+                'time_of_use_enabled': True  # Enable TOU on grid power
             },
             'generator': {
-                # Parameters to set when on generator power
-                'grid_mode': 'backup',
-                'backup_mode': 'enabled',
-                'load_priority': 'battery-first'
+                'time_of_use_enabled': False  # Disable TOU on generator
+            },
+            'off_grid': {
+                'time_of_use_enabled': False  # Disable TOU off-grid
             }
         }
         
@@ -138,7 +136,7 @@ class SolArkIntegration:
         Handle power source change events
         
         Args:
-            power_source: 'utility' or 'generator'
+            power_source: 'grid', 'generator', or 'off_grid'
             frequency_data: Dictionary containing frequency analysis data
         """
         if not self.enabled or not self.parameter_changes_enabled:
@@ -156,10 +154,53 @@ class SolArkIntegration:
             self.logger.warning(f"No parameters defined for power source: {power_source}")
             return
         
-        # Apply parameter changes
-        self._apply_parameter_changes(new_parameters, power_source)
+        # Handle TOU toggle specifically
+        if 'time_of_use_enabled' in new_parameters:
+            self._toggle_time_of_use(new_parameters['time_of_use_enabled'], power_source)
+        
+        # Apply other parameter changes if any
+        other_parameters = {k: v for k, v in new_parameters.items() if k != 'time_of_use_enabled'}
+        if other_parameters:
+            self._apply_parameter_changes(other_parameters, power_source)
         
         self.last_power_source = power_source
+    
+    def _toggle_time_of_use(self, enable: bool, power_source: str):
+        """
+        Toggle Time of Use setting asynchronously
+        
+        Args:
+            enable: True to enable TOU, False to disable
+            power_source: Current power source for logging
+        """
+        if not self.time_of_use_enabled:
+            self.logger.debug("TOU automation disabled in configuration")
+            return
+            
+        def do_toggle():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    result = loop.run_until_complete(
+                        self.solark_cloud.toggle_time_of_use(enable)
+                    )
+                    
+                    if result:
+                        self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for {power_source}")
+                    else:
+                        self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for {power_source}")
+                        
+                finally:
+                    loop.close()
+                    
+            except Exception as e:
+                self.logger.error(f"Error toggling TOU: {e}")
+        
+        # Run in separate thread to avoid blocking
+        thread = threading.Thread(target=do_toggle, daemon=True)
+        thread.start()
     
     def _apply_parameter_changes(self, parameters: Dict[str, Any], power_source: str):
         """

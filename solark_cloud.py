@@ -862,6 +862,51 @@ class SolArkCloud:
             self.logger.error(f"Sync failed: {e}")
             return {'status': 'error', 'message': str(e)}
     
+    async def toggle_time_of_use(self, enable: bool) -> bool:
+        """
+        Toggle Time of Use setting in inverter settings
+        
+        Args:
+            enable: True to enable TOU, False to disable
+            
+        Returns:
+            bool: True if toggle successful
+        """
+        try:
+            self.logger.info(f"Toggling Time of Use to {'ON' if enable else 'OFF'}")
+            
+            if not self.is_logged_in:
+                if not await self.login():
+                    return False
+            
+            if not self.current_plant_id:
+                if not await self.select_plant():
+                    return False
+            
+            # TODO: Navigate to inverter settings submenu
+            # Need to identify the exact menu path and selectors
+            # This will be completed during interactive browser work
+            
+            # TODO: Find TOU checkbox element (work in interactive mode)
+            # Need to identify the exact selector for the Time of Use checkbox
+            # This will be completed during interactive browser work
+            
+            # TODO: Toggle checkbox to desired state
+            # Check current state first to avoid unnecessary toggles
+            # Then toggle to the desired state
+            
+            # TODO: Save settings
+            # Find and click the save/apply button
+            # Verify the change was applied successfully
+            
+            # Placeholder implementation - will be completed during interactive work
+            self.logger.warning("TOU toggle not yet implemented - requires interactive browser work")
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Failed to toggle Time of Use: {e}")
+            return False
+
     async def apply_parameter_changes(self, changes: Dict[str, Any]) -> bool:
         """
         Apply multiple parameter changes

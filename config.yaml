@@ -158,6 +158,7 @@ solark_cloud:
     enabled: true           # Enable automatic parameter changes
     dry_run: false          # Set to true to log changes without applying
     backup_before_change: true # Backup current settings before changes
+    time_of_use_enabled: true  # Enable TOU automation
 
 # Restart Configuration
 restart:
