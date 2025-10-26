@@ -9,7 +9,7 @@
 
 **A sophisticated frequency monitoring system for Raspberry Pi that detects power source (Utility Grid vs Generator) by analyzing AC line frequency stability.**
 
-[📖 Documentation](#documentation) • [🚀 Quick Start](#quick-start) • [📸 Screenshots](#screenshots) • [🔧 Configuration](#configuration) • [📊 Features](#features)
+[📖 Documentation](#documentation) • [🚀 Quick Start](#quick-start) • [🔧 Configuration](#configuration) • [📊 Features](#features)
 
 </div>
 
@@ -124,9 +124,7 @@ The system uses **three complementary analysis methods** to detect power sources
 
 - ⚙️ **Configurable parameters** via YAML configuration
 
-## 📸 Screenshots
-
-<div align="center">
+## 📺 Display Interface
 
 ### 🖥️ Live Simulator Output
 
@@ -148,30 +146,37 @@ Press Ctrl+C to stop
 
 ### 🖥️ LCD Display Interface
 
+The 2-line LCD display provides comprehensive real-time information:
+
 #### 🔌 Utility Grid Mode
-![LCD Display - Utility](https://via.placeholder.com/400x200/2c3e50/ffffff?text=Time:+14:32:15+[U]%0A%0AFreq:+60.02+Hz%0A%0AStatus:+UTILITY+GRID%0AStability:+EXCELLENT)
+```
+Time: 14:32:15 [U]
+Freq: 60.02 Hz
+Status: UTILITY GRID
+Stability: EXCELLENT
+```
 
 #### ⚡ Generator Mode  
-![LCD Display - Generator](https://via.placeholder.com/400x200/2c3e50/ffffff?text=Time:+14:32:15+[G]%0A%0AFreq:+59.87+Hz%0A%0AStatus:+GENERATOR%0AStability:+POOR)
+```
+Time: 14:32:15 [G]
+Freq: 59.87 Hz
+Status: GENERATOR
+Stability: POOR
+```
 
 *Real-time frequency monitoring showing timestamp with U/G indicator, frequency reading, power source classification, and stability assessment. The [U] or [G] indicator shows the majority classification over the last 5 minutes of data.*
 
 ### 📊 Web Dashboard
-![Web Dashboard](https://via.placeholder.com/600x300/34495e/ffffff?text=Web+Dashboard+with+Frequency+Charts+and+System+Health)
 
 *Separate Flask-based web dashboard for system health monitoring (run with `python dashboard.py`)*
 
 ### 🔧 Hardware Setup
-![Hardware Setup](https://via.placeholder.com/500x300/27ae60/ffffff?text=Raspberry+Pi+with+Optocoupler+and+LCD+Display)
 
-*Clean hardware setup with optocoupler isolation and status indicators*
+*Clean hardware setup with optocoupler isolation and LCD display*
 
 ### 📈 Frequency Analysis
-![Frequency Analysis](https://via.placeholder.com/600x300/e74c3c/ffffff?text=Allan+Variance+Analysis+and+Frequency+Stability+Charts)
 
 *Advanced frequency analysis showing Allan variance and stability metrics*
-
-</div>
 
 ## 🔧 Hardware Requirements
 
