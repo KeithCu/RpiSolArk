@@ -222,6 +222,7 @@ Raspberry Pi GPIO 22 ──┬─── Button ─── GND
 | `python monitor.py --detailed-logging` | Detailed frequency logging | Data collection for analysis |
 | `python test_solark_cloud.py` | Test cloud integration | Verify Sol-Ark connection |
 
+</div>
 ### 📊 Detailed Logging Mode
 
 ```bash
