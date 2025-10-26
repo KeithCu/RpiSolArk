@@ -832,14 +832,14 @@ async def test_inverter_automation():
         print("   4. ✅ Test the complete TOU toggle flow")
         print("   5. 🔄 Ready for production integration!")
         
-        # Keep browser open for manual exploration
+        # Keep browser open for manual exploration with timeout
         print(f"\n🌐 Browser is open for manual exploration...")
-        print("   Press Ctrl+C to close when done")
+        print("   Will auto-close in 30 seconds...")
         
         try:
-            # Keep the script running so you can explore manually
-            while True:
-                await asyncio.sleep(1)
+            # Keep the script running for 30 seconds then auto-close
+            await asyncio.sleep(30)
+            print("\n⏰ 30-second timeout reached, closing browser...")
         except KeyboardInterrupt:
             print("\n👋 Closing browser...")
         

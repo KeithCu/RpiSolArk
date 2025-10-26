@@ -175,9 +175,17 @@ class SolArkCloud:
             
             self.logger.info("Attempting to login to Sol-Ark Cloud...")
             
-            # Navigate to login page
-            await self.page.goto(f"{self.base_url}/login")
+            # Navigate directly to inverter page - if not logged in, will redirect to login
+            inverter_url = f"{self.base_url}/device/inverter"
+            await self.page.goto(inverter_url)
             await self.page.wait_for_load_state('networkidle')
+            
+            # Check if we got redirected to login page
+            current_url = self.page.url
+            if 'login' not in current_url and 'signin' not in current_url:
+                self.logger.info("Already logged in - no login needed")
+                self.is_logged_in = True
+                return True
             
             # Wait for JavaScript to load and form elements to be ready
             await self.page.wait_for_selector('input[placeholder="Please input your E-mail"]', timeout=10000)
@@ -994,12 +1002,23 @@ class SolArkCloud:
                 if not await self.login():
                     return False
             
-            # Navigate to the inverter device page
+            # Navigate directly to the inverter device page (skip unnecessary redirects)
             inverter_url = f"{self.base_url}/device/inverter"
             
-            self.logger.info(f"Navigating to inverter device page: {inverter_url}")
+            self.logger.info(f"Navigating directly to inverter device page: {inverter_url}")
             await self.page.goto(inverter_url)
             await self.page.wait_for_load_state('networkidle')
+            
+            # Check if we got redirected to login page
+            current_url = self.page.url
+            if 'login' in current_url or 'signin' in current_url:
+                self.logger.info("Redirected to login page, performing login...")
+                if not await self.login():
+                    return False
+                # After login, navigate back to inverter page
+                self.logger.info("Login successful, navigating back to inverter page...")
+                await self.page.goto(inverter_url)
+                await self.page.wait_for_load_state('networkidle')
             
             # Wait for JavaScript to load the inverter list
             self.logger.info("Waiting for inverter list to load...")
@@ -1024,14 +1043,14 @@ class SolArkCloud:
             self.logger.info(f"Looking for inverter {inverter_id}...")
             
             # Wait for the table to load
-            await self.page.wait_for_selector('.el-table__body', timeout=10000)
+            await self.page.wait_for_selector('.el-table__body', timeout=30000)
             
             # Find the inverter row by looking for the SN in the table
             inverter_row = None
             try:
                 # Look for the specific inverter SN in the table
                 sn_selector = f"text={inverter_id}"
-                await self.page.wait_for_selector(sn_selector, timeout=10000)
+                await self.page.wait_for_selector(sn_selector, timeout=30000)
                 
                 # Find the row containing this SN
                 inverter_row = await self.page.query_selector(f"tr:has-text('{inverter_id}')")
@@ -1153,7 +1172,7 @@ class SolArkCloud:
             # Wait for iframe to load
             try:
                 self.logger.info("Waiting for parameters iframe to appear...")
-                await self.page.wait_for_selector('iframe.testiframe', timeout=10000)
+                await self.page.wait_for_selector('iframe.testiframe', timeout=30000)
                 self.logger.info("Found parameters iframe")
             except Exception as e:
                 self.logger.error(f"Could not find parameters iframe: {e}")
@@ -1256,10 +1275,7 @@ class SolArkCloud:
                     # Check current state of the TOU switch
                     try:
                         # Try to find the actual checkbox input
-                        checkbox = await tou_element.query_selector('input[type="checkbox"]')
-                        if not checkbox:
-                            # If not found as child, try to find it nearby
-                            checkbox = await self.page.query_selector('.el-switch__input')
+                        checkbox = await self.page.query_selector('.el-switch__input')
                         
                         if checkbox:
                             is_checked = await checkbox.is_checked()
@@ -1268,8 +1284,18 @@ class SolArkCloud:
                             # Toggle the TOU switch if needed
                             if (enable and not is_checked) or (not enable and is_checked):
                                 self.logger.info("Toggling TOU switch...")
-                                await checkbox.click()
-                                await asyncio.sleep(1)
+                                
+                                # Try clicking the switch core instead of the checkbox input
+                                switch_core = await self.page.query_selector('.el-switch__core')
+                                if switch_core:
+                                    self.logger.info("Clicking switch core...")
+                                    await switch_core.click()
+                                else:
+                                    self.logger.info("Clicking checkbox input...")
+                                    await checkbox.click()
+                                
+                                # Wait for the switch to update and register the change
+                                await asyncio.sleep(2)
                                 
                                 # Check new state
                                 new_state = await checkbox.is_checked()
@@ -1314,7 +1340,8 @@ class SolArkCloud:
                     if save_button:
                         self.logger.info("Clicking Save button...")
                         await save_button.click()
-                        await asyncio.sleep(2)
+                        # Wait for save to register and page to update
+                        await asyncio.sleep(3)
                         self.logger.info("Successfully clicked Save button!")
                         
                         # Verify the change was actually applied by checking the TOU state again
