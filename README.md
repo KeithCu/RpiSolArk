@@ -126,35 +126,6 @@ The system uses **three complementary analysis methods** to detect power sources
 
 - ⚙️ **Configurable parameters** via YAML configuration
 
-## 📊 Features
-
-<div align="center">
-
-| 🎯 **Core Monitoring** | 🔧 **Smart Integration** | 📱 **User Interface** |
-|:---:|:---:|:---:|
-| Real-time frequency analysis | Sol-Ark cloud integration (WIP) | LCD display with status |
-| Power source classification | Automatic parameter updates (WIP) | LED status indicators |
-| Allan variance analysis | Web automation (Playwright) | Web dashboard |
-| Health monitoring | Graceful degradation | Comprehensive logging |
-
-</div>
-
-### 🌟 Key Capabilities
-
-- ⚡ **Real-time frequency monitoring** using optocoupler input
-- 🔍 **Power source classification** (Utility Grid vs Generac Generator)
-- 📈 **Allan variance analysis** for frequency stability assessment
-- 📺 **LCD display** with real-time status updates and U/G indicator
-- 💡 **LED indicators** for instant power source identification
-- 🎯 **U/G indicator** showing majority classification over recent data window
-- 🏥 **Health monitoring** with system resource tracking
-- 🛡️ **Graceful degradation** when hardware is unavailable
-- 📝 **Comprehensive logging** with hourly status reports
-- ⚙️ **Configurable parameters** via YAML configuration
-- 🧪 **Unit tests** for reliability assurance
-- ☁️ **Sol-Ark cloud integration** - Complete TOU automation system (100% working)
-- 🤖 **Web automation** using Playwright for cloud platform interaction
-
 ## 📸 Screenshots
 
 <div align="center">
