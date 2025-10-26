@@ -205,120 +205,7 @@ else:
 
 **Recommendation:** Based on real-world testing, you could simplify to **standard deviation only** and maintain 100% detection accuracy while significantly reducing code complexity and dependencies.
 
-## 🔬 Advanced Frequency Analysis Engine
-
-The frequency analysis engine is the heart of the system, using sophisticated statistical techniques to detect the characteristic instability patterns of generators.
-
-### 🔍 What the Analyzer Looks For
-
-#### ⚡ **Utility Grid Characteristics**
-- **Rock-solid frequency**: 60.00 ± 0.01 Hz
-- **Minimal variation**: Standard deviation < 0.05 Hz
-- **Stable distribution**: Low kurtosis (normal distribution)
-- **Consistent timing**: Allan variance < 1e-9
-
-#### 🔧 **Generator Characteristics**
-Based on real-world data from various Generac generators, the analyzer detects these instability patterns:
-
-| Generator Type | Frequency Pattern | Stability Issues | Detection Method |
-|:---:|:---:|:---:|:---:|
-| **20kW Guardian** | 59-64 Hz cycling | Governor hunting | High Allan variance |
-| **16kW Guardian** | 50-61 Hz surging | Cold start issues | Extreme std deviation |
-| **16kW V-Twin** | 57-62 Hz load-dependent | Won't hit 60Hz until >80% load | Load correlation |
-| **XG7000E Portable** | 59-60 Hz hunting ±1Hz | No-load instability | High kurtosis |
-| **12kW Units** | 51-62.5 Hz extreme swings | Engine hunting | Multiple thresholds |
-| **22kW Home Standby** | 60.2 Hz with harmonics | Waveform distortion | Spectral analysis |
-| **PowerPact Series** | 60.2 Hz with noise | "Shaggy" waveform | THD detection |
-
-### 📊 Real-World Generator Data Analysis
-
-The analyzer is trained on actual generator performance data:
-
-#### 🔧 **Typical Generator Instability Patterns**
-
-**Frequency Hunting (Most Common)**
-```
-No-load: 61-62 Hz
-Loaded: 57-58 Hz (steady, no adjustment possible)
-Pattern: Drops from 60 to 59-58.5 Hz during AC cycles (every 10-30s)
-Detection: High Allan variance + load correlation
-```
-
-**Governor Issues**
-```
-Startup: 50-58 Hz (surging, overspeed shutdown)
-Post-fix: 59-61 Hz cycling (every 5-10s under load)
-Pattern: RPM/Hz tied (3600 RPM = 60 Hz)
-Detection: Extreme standard deviation + cycling pattern
-```
-
-**Load-Dependent Instability**
-```
-No-load: 59-60 Hz, hunting ±1 Hz
-Loaded: Drops to 49 Hz baseline
-Pattern: Won't hit 60 Hz until >80% load
-Detection: Load correlation + frequency drop analysis
-```
-
-**Harmonic Distortion**
-```
-True frequency: ~60 Hz
-Meter readings: 300-419 Hz (false highs from harmonics)
-Pattern: "Shaggy" waveform, THD <5% but noisy
-Detection: Spectral analysis + harmonic rejection
-```
-
-### 🎛️ Detection Thresholds
-
-The analyzer uses configurable thresholds to classify power sources:
-
-```yaml
-analysis:
-  generator_thresholds:
-    allan_variance: 1e-9    # Allan variance threshold
-    std_dev: 0.05          # Standard deviation threshold (Hz)
-    kurtosis: 0.5          # Kurtosis threshold for hunting detection
-```
-
-#### 🔍 **Classification Logic**
-
-```python
-def classify_power_source(avar_10s, std_freq, kurtosis):
-    if avar_10s > 1e-9 or std_freq > 0.05 or kurtosis > 0.5:
-        return "Generac Generator"
-    return "Utility Grid"
-```
-
-### 📈 Analysis Process
-
-1. **Data Collection**: Continuous frequency sampling at 2 Hz
-2. **Buffer Management**: 300-second rolling buffer for analysis
-3. **Fractional Frequency**: Convert to (freq - 60.0) / 60.0 for analysis
-4. **Statistical Analysis**: Compute Allan variance, std dev, kurtosis
-5. **Classification**: Apply thresholds to determine power source
-6. **Validation**: Cross-check with multiple metrics for reliability
-
-### 🔬 Advanced Detection Features
-
-#### 🎯 **Multi-Metric Validation**
-- **Allan Variance**: Detects short-term frequency instability
-- **Standard Deviation**: Identifies overall frequency spread
-- **Kurtosis**: Recognizes "hunting" and cycling patterns
-- **Load Correlation**: Associates frequency changes with load changes
-
-#### 🛡️ **False Positive Prevention**
-- **Harmonic Rejection**: Filters out meter errors from harmonics
-- **Noise Filtering**: Removes electrical noise and transients
-- **Validation Windows**: Requires sustained patterns for classification
-- **Threshold Tuning**: Configurable sensitivity for different environments
-
-#### 📊 **Real-Time Monitoring**
-- **Continuous Analysis**: Updates classification every 0.5 seconds
-- **Trend Analysis**: Tracks frequency stability over time
-- **Alert Generation**: Logs significant frequency events
-- **Historical Tracking**: Maintains frequency history for analysis
-
-### 🎛️ Configuration Examples
+## 🎛️ Configuration Examples
 
 #### 🔧 **Sensitive Detection** (Catches subtle generator issues)
 ```yaml
@@ -514,6 +401,205 @@ logging:
    # Lower thresholds if needed
    ```
 
----
+### 📊 **Tuning Data Collection Mode**
+
+For advanced users who need to gather detailed data for threshold optimization, the system includes a comprehensive tuning data collection mode.
+
+#### 🎯 **Enable Tuning Mode**
+
+```bash
+# Enable tuning mode for 1 hour (default)
+python monitor.py --tuning
+
+# Enable tuning mode for custom duration (30 minutes)
+python monitor.py --tuning --tuning-duration 1800
+
+# Enable tuning mode with verbose logging
+python monitor.py --tuning --verbose
+
+# Enable tuning mode in simulator for testing
+python monitor.py --tuning --simulator
+```
+
+#### 📋 **Configuration for Tuning**
+
+```yaml
+# config.yaml - Tuning mode settings
+tuning:
+  enabled: false            # Enable enhanced data collection
+  detailed_logging: false   # Log every frequency reading
+  sample_interval: 0.1      # 10 Hz sampling rate
+  analysis_interval: 1.0    # Analysis every second
+  data_file: "tuning_data.csv"      # Raw frequency data
+  analysis_file: "tuning_analysis.csv"  # Analysis results
+  collection_duration: 3600 # 1 hour collection
+  auto_stop: true           # Auto-stop after duration
+  include_raw_data: true    # Include raw frequency readings
+  include_analysis: true    # Include Allan variance, std dev, kurtosis
+  include_classification: true  # Include power source classification
+  include_timestamps: true  # Include detailed timestamps
+  buffer_analysis: true     # Analyze full buffer on each sample
+  export_format: "csv"      # Export format: csv, json, both
+```
+
+#### 📊 **Data Collection Output**
+
+**Raw Frequency Data (`tuning_data.csv`)**
+```csv
+timestamp,datetime,frequency_hz,unix_timestamp,elapsed_seconds,allan_variance,std_deviation,kurtosis,power_source,confidence
+1704720000.123,2024-01-08 14:32:15,60.023,1704720000.123,0.1,2.3e-10,0.012,0.15,Utility Grid,0.15
+1704720000.223,2024-01-08 14:32:15,59.987,1704720000.223,0.2,2.3e-10,0.012,0.15,Utility Grid,0.15
+```
+
+**Analysis Results (`tuning_analysis.csv`)**
+```csv
+timestamp,datetime,sample_count,buffer_size,allan_variance,std_deviation,kurtosis,power_source,confidence,thresholds_used
+1704720000.123,2024-01-08 14:32:15,600,600,2.3e-10,0.012,0.15,Utility Grid,0.15,avar=5.00e-10,std=0.080,kurt=0.400
+```
+
+**Summary Report (`tuning_summary_1704720000.json`)**
+```json
+{
+  "collection_duration": 3600.0,
+  "sample_count": 36000,
+  "frequency_stats": {
+    "mean": 60.001,
+    "std": 0.015,
+    "min": 59.95,
+    "max": 60.05,
+    "range": 0.10
+  }
+}
+```
+
+#### 🔍 **Using Tuning Data for Optimization**
+
+1. **Collect Data During Different Conditions**:
+   ```bash
+   # Collect utility data (1 hour)
+   python monitor.py --tuning --tuning-duration 3600
+   
+   # Collect generator data (when generator is running)
+   python monitor.py --tuning --tuning-duration 1800
+   ```
+
+2. **Analyze the Data**:
+   ```bash
+   # View frequency statistics
+   python -c "
+   import pandas as pd
+   df = pd.read_csv('tuning_data.csv')
+   print('Frequency Statistics:')
+   print(df['frequency_hz'].describe())
+   print('\nClassification Distribution:')
+   print(df['power_source'].value_counts())
+   "
+   ```
+
+3. **Optimize Thresholds**:
+   ```python
+   # Example threshold optimization
+   import pandas as pd
+   import numpy as np
+   
+   # Load data
+   df = pd.read_csv('tuning_analysis.csv')
+   
+   # Separate utility and generator data
+   utility_data = df[df['power_source'] == 'Utility Grid']
+   generator_data = df[df['power_source'] == 'Generac Generator']
+   
+   # Calculate optimal thresholds
+   optimal_allan_variance = np.percentile(utility_data['allan_variance'], 95)
+   optimal_std_dev = np.percentile(utility_data['std_deviation'], 95)
+   optimal_kurtosis = np.percentile(utility_data['kurtosis'], 95)
+   
+   print(f"Recommended thresholds:")
+   print(f"allan_variance: {optimal_allan_variance:.2e}")
+   print(f"std_dev: {optimal_std_dev:.3f}")
+   print(f"kurtosis: {optimal_kurtosis:.2f}")
+   ```
+
+#### 🎛️ **Tuning Mode Features**
+
+<div align="center">
+
+| Feature | Description | Use Case |
+|:---:|:---:|:---:|
+| **High-Speed Sampling** | 10 Hz frequency sampling | Capture rapid frequency changes |
+| **Detailed Analysis** | Allan variance, std dev, kurtosis | Understand frequency patterns |
+| **Classification Tracking** | Power source classification | Verify detection accuracy |
+| **Confidence Scoring** | Classification confidence | Identify uncertain cases |
+| **Automatic Export** | CSV and JSON formats | Easy data analysis |
+| **Summary Reports** | Statistical summaries | Quick overview of data |
+
+</div>
+
+#### 📈 **Data Analysis Workflow**
+
+1. **Collect Baseline Data** (Utility Grid):
+   ```bash
+   python monitor.py --tuning --tuning-duration 1800
+   ```
+
+2. **Collect Generator Data** (When Generator Runs):
+   ```bash
+   python monitor.py --tuning --tuning-duration 1800
+   ```
+
+3. **Analyze Patterns**:
+   ```python
+   # Load and analyze data
+   import pandas as pd
+   import matplotlib.pyplot as plt
+   
+   df = pd.read_csv('tuning_analysis.csv')
+   
+   # Plot frequency vs time
+   plt.figure(figsize=(12, 6))
+   plt.subplot(2, 1, 1)
+   plt.plot(df['elapsed_seconds'], df['std_deviation'])
+   plt.title('Standard Deviation Over Time')
+   
+   plt.subplot(2, 1, 2)
+   plt.plot(df['elapsed_seconds'], df['allan_variance'])
+   plt.title('Allan Variance Over Time')
+   plt.show()
+   ```
+
+4. **Optimize Thresholds**:
+   ```yaml
+   # Update config.yaml with optimized values
+   analysis:
+     generator_thresholds:
+       allan_variance: 3.2e-10  # Based on your data
+       std_dev: 0.045           # Based on your data
+       kurtosis: 0.28           # Based on your data
+   ```
+
+#### 🔧 **Tuning Mode Commands**
+
+```bash
+# Basic tuning data collection
+python monitor.py --tuning
+
+# Extended collection (2 hours)
+python monitor.py --tuning --tuning-duration 7200
+
+# Tuning with verbose logging
+python monitor.py --tuning --verbose
+
+# Tuning in simulator mode
+python monitor.py --tuning --simulator
+
+# Check tuning status
+tail -f monitor.log | grep "tuning"
+
+# View collected data
+head -20 tuning_data.csv
+head -20 tuning_analysis.csv
+```
+
+
 
 *For more information about using the system, configuration options, and troubleshooting, see the [main README](README.md).*
