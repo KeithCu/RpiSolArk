@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 import json
 
@@ -103,12 +103,12 @@ class SolArkIntegration:
         except KeyError as e:
             raise ValueError(f"Missing required optocoupler configuration: {e}")
     
-    def _build_optocoupler_plant_mapping(self) -> Dict[str, str]:
+    def _build_optocoupler_plant_mapping(self) -> Dict[str, List[str]]:
         """
-        Build mapping from optocoupler names to Sol-Ark inverter IDs
+        Build mapping from optocoupler names to Sol-Ark inverter IDs (now supports multiple inverters per optocoupler)
         
         Returns:
-            Dict mapping optocoupler name to inverter ID
+            Dict mapping optocoupler name to list of inverter IDs
             
         Raises:
             ValueError: If optocoupler name doesn't match configured inverter
@@ -121,11 +121,27 @@ class SolArkIntegration:
             # Process primary optocoupler
             primary_config = optocoupler_config['primary']
             primary_name = primary_config['name']
-            primary_inverter_id = primary_config.get('solark_inverter_id', '')
             
-            if primary_inverter_id:
-                mapping[primary_name] = primary_inverter_id
-                self.logger.info(f"Mapped optocoupler '{primary_name}' to inverter ID '{primary_inverter_id}'")
+            # Handle new multi-inverter format
+            primary_inverters = primary_config.get('inverters', [])
+            
+            # Handle backward compatibility - if old format exists, convert it
+            if 'solark_inverter_id' in primary_config and primary_config['solark_inverter_id']:
+                primary_inverters = [{
+                    'id': primary_config['solark_inverter_id'],
+                    'name': f"{primary_name} Inverter",
+                    'enabled': True
+                }]
+                self.logger.info("Converted legacy single inverter config to new multi-inverter format")
+            
+            primary_inverter_ids = []
+            for inverter in primary_inverters:
+                if inverter.get('id') and inverter.get('enabled', True):
+                    primary_inverter_ids.append(inverter['id'])
+                    self.logger.info(f"Mapped optocoupler '{primary_name}' to inverter ID '{inverter['id']}' ({inverter.get('name', 'Unnamed')})")
+            
+            if primary_inverter_ids:
+                mapping[primary_name] = primary_inverter_ids
             
             # Process secondary optocoupler (if enabled)
             secondary_config = optocoupler_config['secondary']
@@ -133,11 +149,26 @@ class SolArkIntegration:
             
             if secondary_gpio != -1:  # Secondary optocoupler is enabled
                 secondary_name = secondary_config['name']
-                secondary_inverter_id = secondary_config.get('solark_inverter_id', '')
                 
-                if secondary_inverter_id:
-                    mapping[secondary_name] = secondary_inverter_id
-                    self.logger.info(f"Mapped optocoupler '{secondary_name}' to inverter ID '{secondary_inverter_id}'")
+                # Handle new multi-inverter format
+                secondary_inverters = secondary_config.get('inverters', [])
+                
+                # Handle backward compatibility
+                if 'solark_inverter_id' in secondary_config and secondary_config['solark_inverter_id']:
+                    secondary_inverters = [{
+                        'id': secondary_config['solark_inverter_id'],
+                        'name': f"{secondary_name} Inverter",
+                        'enabled': True
+                    }]
+                
+                secondary_inverter_ids = []
+                for inverter in secondary_inverters:
+                    if inverter.get('id') and inverter.get('enabled', True):
+                        secondary_inverter_ids.append(inverter['id'])
+                        self.logger.info(f"Mapped optocoupler '{secondary_name}' to inverter ID '{inverter['id']}' ({inverter.get('name', 'Unnamed')})")
+                
+                if secondary_inverter_ids:
+                    mapping[secondary_name] = secondary_inverter_ids
             
             if not mapping:
                 self.logger.warning("No optocoupler-to-inverter mappings configured")
@@ -214,7 +245,7 @@ class SolArkIntegration:
     
     def on_power_source_change(self, power_source: str, frequency_data: Dict[str, Any], optocoupler_name: str = None):
         """
-        Handle power source change events
+        Handle power source change events for multiple inverters per optocoupler
         
         Args:
             power_source: 'grid', 'generator', or 'off_grid'
@@ -228,9 +259,6 @@ class SolArkIntegration:
         if not optocoupler_name and self.optocoupler_plants:
             optocoupler_name = list(self.optocoupler_plants.keys())[0]
             self.logger.debug(f"No optocoupler name provided, using first configured: {optocoupler_name}")
-        
-        # Note: optocoupler_name validation is not needed since names come from the same config
-        # that builds the mapping, so they will always match
         
         # Skip if no plant mapping for this optocoupler
         if optocoupler_name and not self.optocoupler_plants.get(optocoupler_name):
@@ -252,14 +280,24 @@ class SolArkIntegration:
             self.logger.warning(f"No parameters defined for power source: {power_source}")
             return
         
-        # Handle TOU toggle specifically
+        # Get all inverters for this optocoupler
+        inverter_ids = self.optocoupler_plants.get(optocoupler_name, [])
+        
+        if not inverter_ids:
+            self.logger.warning(f"No inverters configured for optocoupler '{optocoupler_name}'")
+            return
+        
+        # Apply changes to all inverters for this optocoupler
+        self.logger.info(f"Applying power source changes to {len(inverter_ids)} inverters: {inverter_ids}")
+        
+        # Handle TOU toggle specifically for all inverters (sequential)
         if 'time_of_use_enabled' in new_parameters:
-            self._toggle_time_of_use(new_parameters['time_of_use_enabled'], power_source, optocoupler_name)
+            self._toggle_time_of_use_sequential(new_parameters['time_of_use_enabled'], inverter_ids, power_source, optocoupler_name)
         
         # Apply other parameter changes if any
         other_parameters = {k: v for k, v in new_parameters.items() if k != 'time_of_use_enabled'}
         if other_parameters:
-            self._apply_parameter_changes(other_parameters, power_source, optocoupler_name)
+            self._apply_parameter_changes_sequential(other_parameters, inverter_ids, power_source, optocoupler_name)
         
         self.last_power_source = state_key
     
@@ -307,6 +345,134 @@ class SolArkIntegration:
         
         # Run in separate thread to avoid blocking
         thread = threading.Thread(target=do_toggle, daemon=True)
+        thread.start()
+    
+    def _toggle_time_of_use_sequential(self, enable: bool, inverter_ids: List[str], power_source: str, optocoupler_name: str):
+        """
+        Toggle Time of Use setting for multiple inverters sequentially using existing code
+        
+        Args:
+            enable: True to enable TOU, False to disable
+            inverter_ids: List of inverter IDs to update
+            power_source: Current power source for logging
+            optocoupler_name: Name of the optocoupler
+        """
+        if not self.time_of_use_enabled:
+            self.logger.debug("TOU automation disabled in configuration")
+            return
+        
+        def do_toggle_sequential():
+            try:
+                success_count = 0
+                total_count = len(inverter_ids)
+                
+                for inverter_id in inverter_ids:
+                    try:
+                        # Temporarily update the mapping to use existing single-inverter code
+                        original_mapping = self.optocoupler_plants.get(optocoupler_name, [])
+                        self.optocoupler_plants[optocoupler_name] = [inverter_id]
+                        
+                        # Use existing single-inverter method
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        
+                        try:
+                            result = loop.run_until_complete(
+                                self.solark_cloud.toggle_time_of_use(enable, inverter_id)
+                            )
+                            
+                            if result:
+                                success_count += 1
+                                self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for inverter {inverter_id}")
+                            else:
+                                self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for inverter {inverter_id}")
+                                
+                        finally:
+                            loop.close()
+                            # Restore original mapping
+                            self.optocoupler_plants[optocoupler_name] = original_mapping
+                            
+                    except Exception as e:
+                        self.logger.error(f"Error toggling TOU for inverter {inverter_id}: {e}")
+                
+                # Log overall result
+                if success_count == total_count:
+                    self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for all {total_count} inverters "
+                                   f"(optocoupler: {optocoupler_name}, power source: {power_source})")
+                elif success_count > 0:
+                    self.logger.warning(f"Partially {'enabled' if enable else 'disabled'} TOU: {success_count}/{total_count} inverters "
+                                      f"(optocoupler: {optocoupler_name}, power source: {power_source})")
+                else:
+                    self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for any inverters "
+                                    f"(optocoupler: {optocoupler_name}, power source: {power_source})")
+                    
+            except Exception as e:
+                self.logger.error(f"Error in sequential TOU toggle: {e}")
+        
+        # Run in separate thread to avoid blocking
+        thread = threading.Thread(target=do_toggle_sequential, daemon=True)
+        thread.start()
+    
+    def _apply_parameter_changes_sequential(self, parameters: Dict[str, Any], inverter_ids: List[str], power_source: str, optocoupler_name: str):
+        """
+        Apply parameter changes to multiple inverters sequentially using existing code
+        
+        Args:
+            parameters: Dictionary of parameters to change
+            inverter_ids: List of inverter IDs to update
+            power_source: Current power source for logging
+            optocoupler_name: Name of the optocoupler
+        """
+        def do_apply_sequential():
+            try:
+                success_count = 0
+                total_count = len(inverter_ids)
+                
+                for inverter_id in inverter_ids:
+                    try:
+                        # Temporarily update the mapping to use existing single-inverter code
+                        original_mapping = self.optocoupler_plants.get(optocoupler_name, [])
+                        self.optocoupler_plants[optocoupler_name] = [inverter_id]
+                        
+                        # Use existing single-inverter method
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        
+                        try:
+                            result = loop.run_until_complete(
+                                self.solark_cloud.apply_parameter_changes(parameters, inverter_id)
+                            )
+                            
+                            if result:
+                                success_count += 1
+                                self.logger.info(f"Successfully applied parameter changes to inverter {inverter_id}: {parameters}")
+                            else:
+                                self.logger.error(f"Failed to apply parameter changes to inverter {inverter_id}: {parameters}")
+                                
+                        finally:
+                            loop.close()
+                            # Restore original mapping
+                            self.optocoupler_plants[optocoupler_name] = original_mapping
+                            
+                    except Exception as e:
+                        self.logger.error(f"Error applying parameters to inverter {inverter_id}: {e}")
+                
+                # Log overall result
+                if success_count == total_count:
+                    self.logger.info(f"Successfully applied parameter changes to all {total_count} inverters "
+                                   f"(optocoupler: {optocoupler_name}, power source: {power_source}): {parameters}")
+                elif success_count > 0:
+                    self.logger.warning(f"Partially applied parameter changes: {success_count}/{total_count} inverters "
+                                      f"(optocoupler: {optocoupler_name}, power source: {power_source}): {parameters}")
+                else:
+                    self.logger.error(f"Failed to apply parameter changes to any inverters "
+                                    f"(optocoupler: {optocoupler_name}, power source: {power_source}): {parameters}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error in sequential parameter application: {e}")
+        
+        # Run in separate thread to avoid blocking
+        thread = threading.Thread(target=do_apply_sequential, daemon=True)
         thread.start()
     
     def _apply_parameter_changes(self, parameters: Dict[str, Any], power_source: str, optocoupler_name: str):

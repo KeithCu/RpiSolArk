@@ -22,13 +22,23 @@ hardware:
       pulses_per_cycle: 1 # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
       measurement_duration: 5.0  # Duration in seconds for frequency measurement (longer = more stable)
       name: "Mechanical"   # Display name for primary optocoupler
-      solark_plant_serial: "SOLARK123456"  # Sol-Ark plant serial number for this optocoupler
+      # Multiple inverters can be connected to one optocoupler
+      inverters:
+        - id: "2207079903"  # Sol-Ark inverter ID
+          name: "Main Inverter"  # Display name for this inverter
+          enabled: true  # Enable control for this inverter
+        - id: "2207079904"  # Second inverter ID (example)
+          name: "Backup Inverter"  # Display name for this inverter
+          enabled: true  # Enable control for this inverter
     secondary:
       gpio_pin: -1      # GPIO pin for secondary optocoupler input (H11AA1), set to -1 for single optocoupler mode
       pulses_per_cycle: 1 # GPIO event counter detects FALLING edges only = 1 pulse per AC cycle
       measurement_duration: 1.0  # Duration in seconds for frequency measurement
       name: "Lights" # Display name for secondary optocoupler
-      solark_plant_serial: "SOLARK789012"  # Sol-Ark plant serial number for this optocoupler (set to "" to disable)
+      inverters:
+        - id: ""  # Sol-Ark inverter ID (set to "" to disable)
+          name: "Secondary Inverter"
+          enabled: false
 
 # Sampling Configuration
 sampling:
@@ -146,7 +156,6 @@ solark_cloud:
   base_url: "https://www.solarkcloud.com"
   username: ""              # Your Sol-Ark cloud username
   password: ""              # Your Sol-Ark cloud password
-  plant_id: ""              # Your plant ID (will be auto-detected if empty)
   timeout: 30               # Request timeout in seconds
   retry_attempts: 3         # Number of retry attempts for failed requests
   cache_pages: true         # Cache downloaded pages to disk
@@ -155,7 +164,7 @@ solark_cloud:
   sync_interval: 300        # Sync interval in seconds (5 minutes)
   session_persistence: true # Save login session to avoid repeated logins
   session_file: "solark_session.json" # File to store session data
-  session_timeout: 3600     # Session timeout in seconds (1 hour)
+  session_timeout: 15768000   # Session timeout in seconds (6 months)
   parameter_changes:
     enabled: true           # Enable automatic parameter changes
     dry_run: false          # Set to true to log changes without applying

@@ -236,6 +236,106 @@ class OptocouplerManager:
         self.optocoupler_initialized = any(opt.initialized for opt in self.optocouplers.values())
         mode_str = "dual" if self.dual_mode else "single"
         self.logger.info(f"{mode_str.capitalize()} optocoupler setup complete. Initialized: {self.optocoupler_initialized}")
+        
+        # Build inverter mapping for each optocoupler
+        self._build_inverter_mapping()
+    
+    def _build_inverter_mapping(self):
+        """Build mapping of optocouplers to their associated inverters."""
+        self.inverter_mapping = {}
+        
+        try:
+            optocoupler_config = self.config['hardware']['optocoupler']
+            
+            # Process primary optocoupler inverters
+            primary_config = optocoupler_config['primary']
+            primary_inverters = primary_config.get('inverters', [])
+            
+            # Handle backward compatibility - if old format exists, convert it
+            if 'solark_inverter_id' in primary_config and primary_config['solark_inverter_id']:
+                primary_inverters = [{
+                    'id': primary_config['solark_inverter_id'],
+                    'name': f"{primary_config['name']} Inverter",
+                    'enabled': True
+                }]
+                self.logger.info("Converted legacy single inverter config to new multi-inverter format")
+            
+            self.inverter_mapping['primary'] = []
+            for inverter in primary_inverters:
+                if inverter.get('id') and inverter.get('enabled', True):
+                    self.inverter_mapping['primary'].append({
+                        'id': inverter['id'],
+                        'name': inverter.get('name', f"Inverter {inverter['id']}"),
+                        'enabled': inverter.get('enabled', True)
+                    })
+                    self.logger.info(f"Primary optocoupler mapped to inverter: {inverter['id']} ({inverter.get('name', 'Unnamed')})")
+            
+            # Process secondary optocoupler inverters (if dual mode)
+            if self.dual_mode:
+                secondary_config = optocoupler_config['secondary']
+                secondary_inverters = secondary_config.get('inverters', [])
+                
+                # Handle backward compatibility
+                if 'solark_inverter_id' in secondary_config and secondary_config['solark_inverter_id']:
+                    secondary_inverters = [{
+                        'id': secondary_config['solark_inverter_id'],
+                        'name': f"{secondary_config['name']} Inverter",
+                        'enabled': True
+                    }]
+                
+                self.inverter_mapping['secondary'] = []
+                for inverter in secondary_inverters:
+                    if inverter.get('id') and inverter.get('enabled', True):
+                        self.inverter_mapping['secondary'].append({
+                            'id': inverter['id'],
+                            'name': inverter.get('name', f"Inverter {inverter['id']}"),
+                            'enabled': inverter.get('enabled', True)
+                        })
+                        self.logger.info(f"Secondary optocoupler mapped to inverter: {inverter['id']} ({inverter.get('name', 'Unnamed')})")
+            else:
+                self.inverter_mapping['secondary'] = []
+                
+        except KeyError as e:
+            self.logger.warning(f"Missing inverter configuration: {e}")
+            self.inverter_mapping = {'primary': [], 'secondary': []}
+    
+    def get_inverters_for_optocoupler(self, optocoupler_name: str) -> List[dict]:
+        """
+        Get list of inverters associated with a specific optocoupler.
+        
+        Args:
+            optocoupler_name: 'primary' or 'secondary'
+            
+        Returns:
+            List of inverter dictionaries with 'id', 'name', and 'enabled' keys
+        """
+        return self.inverter_mapping.get(optocoupler_name, [])
+    
+    def get_all_inverters(self) -> List[dict]:
+        """
+        Get all inverters from all optocouplers.
+        
+        Returns:
+            List of all inverter dictionaries with optocoupler context
+        """
+        all_inverters = []
+        
+        for optocoupler_name, inverters in self.inverter_mapping.items():
+            for inverter in inverters:
+                inverter_with_context = inverter.copy()
+                inverter_with_context['optocoupler'] = optocoupler_name
+                all_inverters.append(inverter_with_context)
+        
+        return all_inverters
+    
+    def get_enabled_inverters(self) -> List[dict]:
+        """
+        Get all enabled inverters from all optocouplers.
+        
+        Returns:
+            List of enabled inverter dictionaries with optocoupler context
+        """
+        return [inv for inv in self.get_all_inverters() if inv.get('enabled', True)]
     
     def _setup_thread_priority(self):
         """Setup high-priority threading and CPU affinity for optocoupler measurements."""
