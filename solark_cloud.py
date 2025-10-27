@@ -453,8 +453,8 @@ class SolArkCloud:
                 except Exception as e:
                     self.logger.warning(f"Failed to restore storage data: {e}")
             
-            # Wait a moment for the page to fully load
-            time.sleep(2)
+            # Wait for the page to fully load
+            self.page.wait_for_load_state('networkidle')
             
             # Check if we're still logged in by looking for login indicators
             current_url = self.page.url
@@ -466,7 +466,6 @@ class SolArkCloud:
             try:
                 self.page.goto(f"{self.base_url}/device/inverter")
                 self.page.wait_for_load_state('networkidle')
-                time.sleep(1)
                 
                 # Check if we're redirected to login
                 if '/login' in self.page.url:
@@ -775,7 +774,7 @@ class SolArkCloud:
             
             # Wait for JavaScript to load the inverter list
             self.logger.info("Waiting for inverter list to load...")
-            time.sleep(3)  # Give JS time to render
+            self.page.wait_for_selector('.el-table__body', timeout=10000)
             
             # Download the rendered HTML for analysis
             html_content = self.page.content()
@@ -827,7 +826,8 @@ class SolArkCloud:
                 # First, scroll the table to make sure the dropdown column is visible
                 self.logger.info("Scrolling table to ensure dropdown is visible...")
                 self.page.evaluate("document.querySelector('.el-table__body-wrapper').scrollLeft = 1000")
-                time.sleep(1)
+                # Wait for scroll to complete
+                self.page.wait_for_timeout(500)
                 
                 # Find dropdown button in the specific inverter row
                 dropdown_button = None
@@ -854,12 +854,13 @@ class SolArkCloud:
                 if dropdown_button:
                     # Ensure the button is in view
                     dropdown_button.scroll_into_view_if_needed()
-                    time.sleep(0.5)
+                    self.page.wait_for_timeout(500)
                     
                     # Click the dropdown
                     dropdown_button.click()
                     self.logger.info("Clicked on 'More' dropdown")
-                    time.sleep(2)  # Wait for dropdown to appear
+                    # Wait for dropdown menu to appear
+                    self.page.wait_for_selector('.el-dropdown-menu', timeout=5000)
                 else:
                     self.logger.error("Could not find 'More' dropdown button with any selector")
                     return False
@@ -875,8 +876,8 @@ class SolArkCloud:
                 # Wait for the dropdown menu to appear and be visible
                 self.logger.info("Waiting for dropdown menu to appear...")
                 
-                # Wait a bit for the menu to appear
-                time.sleep(2)
+                # Wait for dropdown menu to be visible
+                self.page.wait_for_selector('.el-dropdown-menu:visible', timeout=5000)
                 
                 # Check for dropdown menus
                 all_menus = self.page.query_selector_all('.el-dropdown-menu')
@@ -903,18 +904,19 @@ class SolArkCloud:
                 # First arrow down to wake up the menu and highlight first item
                 self.logger.info("Pressing ↓ to wake up menu...")
                 self.page.keyboard.press('ArrowDown')
-                time.sleep(0.5)
+                self.page.wait_for_timeout(500)
                 
                 # Second arrow down to go to Parameters Setting
                 self.logger.info("Pressing ↓ once more to reach Parameters Setting...")
                 self.page.keyboard.press('ArrowDown')
-                time.sleep(0.5)
+                self.page.wait_for_timeout(500)
                 
                 # Press Enter to select Parameters Setting
                 self.logger.info("Pressing Enter to select Parameters Setting...")
                 self.page.keyboard.press('Enter')
                 self.logger.info("Successfully navigated to 'Parameters Setting' using keyboard!")
-                time.sleep(3)  # Wait for parameters page to load
+                # Wait for parameters page to load
+                self.page.wait_for_load_state('networkidle')
                     
             except Exception as e:
                 self.logger.error(f"Error clicking Parameters Setting: {e}")
@@ -927,7 +929,7 @@ class SolArkCloud:
             
             # Wait for parameters page to load and look for iframe
             self.logger.info("Waiting for parameters page to load...")
-            time.sleep(3)  # Wait for content to load
+            self.page.wait_for_load_state('networkidle')
             
             # Look for the iframe that contains the actual settings
             self.logger.info("Looking for settings iframe...")
@@ -940,7 +942,7 @@ class SolArkCloud:
                     # Navigate directly to the iframe URL
                     self.logger.info("Navigating to iframe URL...")
                     self.page.goto(iframe_src)
-                    time.sleep(3)  # Wait for iframe content to load
+                    self.page.wait_for_load_state('networkidle')
                     self.logger.info("Successfully navigated to iframe URL")
                     
                     # First, click on "System Work Mode" to access the TOU settings
@@ -977,7 +979,7 @@ class SolArkCloud:
                         # Click the System Work Mode link
                         self.logger.info("Clicking System Work Mode link...")
                         system_work_mode_element.click()
-                        time.sleep(3)  # Wait for the page to load
+                        self.page.wait_for_load_state('networkidle')
                         self.logger.info("Successfully clicked System Work Mode link!")
                         
                         # Now look for TOU switch on the System Work Mode page
@@ -1049,7 +1051,7 @@ class SolArkCloud:
                                 checkbox.click()
                             
                             # Wait for the switch to update and register the change
-                            time.sleep(2)
+                            self.page.wait_for_timeout(1000)
                             
                             # Check new state
                             new_state = checkbox.is_checked()
@@ -1069,7 +1071,7 @@ class SolArkCloud:
                         # Try clicking the switch element directly
                         self.logger.info("Trying to click TOU switch element directly...")
                         tou_element.click()
-                        time.sleep(1)
+                        self.page.wait_for_timeout(1000)
                         self.logger.info("Clicked TOU switch element")
                         
                 except Exception as e:
@@ -1099,7 +1101,7 @@ class SolArkCloud:
                     
                     # Ensure the button is visible and clickable
                     save_button.scroll_into_view_if_needed()
-                    time.sleep(0.5)
+                    self.page.wait_for_timeout(500)
                     
                     # Try multiple click methods for better reliability
                     try:
@@ -1122,11 +1124,10 @@ class SolArkCloud:
                                 self.logger.error(f"All click methods failed: {e3}")
                                 return False
                     
-                    # Wait longer for save to register and page to update
+                    # Wait for save operation to complete by looking for success indicators
                     self.logger.info("Waiting for save operation to complete...")
-                    time.sleep(5)  # Increased wait time
                     
-                    # Check for success indicators
+                    # Wait for either success indicators or timeout
                     success_indicators = [
                         '.el-message--success',
                         '.success-message',
@@ -1138,15 +1139,20 @@ class SolArkCloud:
                     ]
                     
                     save_success = False
-                    for indicator in success_indicators:
-                        try:
-                            success_element = self.page.query_selector(indicator)
-                            if success_element and success_element.is_visible():
-                                self.logger.info(f"Found success indicator: {indicator}")
-                                save_success = True
-                                break
-                        except:
-                            continue
+                    try:
+                        # Wait for any success indicator to appear
+                        for indicator in success_indicators:
+                            try:
+                                success_element = self.page.wait_for_selector(indicator, timeout=5000)
+                                if success_element and success_element.is_visible():
+                                    self.logger.info(f"Found success indicator: {indicator}")
+                                    save_success = True
+                                    break
+                            except:
+                                continue
+                    except:
+                        # If no success indicator found, assume success after reasonable wait
+                        self.page.wait_for_timeout(2000)
                     
                     if save_success:
                         self.logger.info("✅ Save operation completed successfully!")
@@ -1155,7 +1161,7 @@ class SolArkCloud:
                     
                     # Verify the change was actually applied by checking the TOU state again
                     self.logger.info("Verifying TOU setting change...")
-                    time.sleep(2)  # Wait for page to update
+                    self.page.wait_for_timeout(1000)  # Brief wait for page to update
                     
                     try:
                         # Check TOU state again after save
