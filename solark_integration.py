@@ -303,7 +303,7 @@ class SolArkIntegration:
     
     def _toggle_time_of_use(self, enable: bool, power_source: str, optocoupler_name: str):
         """
-        Toggle Time of Use setting asynchronously
+        Toggle Time of Use setting synchronously
         
         Args:
             enable: True to enable TOU, False to disable
@@ -316,29 +316,23 @@ class SolArkIntegration:
             
         def do_toggle():
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                # Get inverter ID for this optocoupler
+                inverter_ids = self.optocoupler_plants.get(optocoupler_name, [])
+                if not inverter_ids:
+                    self.logger.error(f"No inverter IDs configured for optocoupler '{optocoupler_name}'")
+                    return
                 
-                try:
-                    # Get inverter ID for this optocoupler
-                    inverter_id = self.optocoupler_plants.get(optocoupler_name)
-                    if not inverter_id:
-                        self.logger.error(f"No inverter ID configured for optocoupler '{optocoupler_name}'")
-                        return
-                    
-                    result = loop.run_until_complete(
-                        self.solark_cloud.toggle_time_of_use(enable, inverter_id)
-                    )
-                    
-                    if result:
-                        self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for {power_source} "
-                                       f"(optocoupler: {optocoupler_name}, inverter: {inverter_id})")
-                    else:
-                        self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for {power_source} "
-                                        f"(optocoupler: {optocoupler_name}, inverter: {inverter_id})")
-                        
-                finally:
-                    loop.close()
+                # Use first inverter ID (for backward compatibility)
+                inverter_id = inverter_ids[0]
+                
+                result = self.solark_cloud.toggle_time_of_use_sync(enable, inverter_id)
+                
+                if result:
+                    self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for {power_source} "
+                                   f"(optocoupler: {optocoupler_name}, inverter: {inverter_id})")
+                else:
+                    self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for {power_source} "
+                                    f"(optocoupler: {optocoupler_name}, inverter: {inverter_id})")
                     
             except Exception as e:
                 self.logger.error(f"Error toggling TOU: {e}")
@@ -349,7 +343,7 @@ class SolArkIntegration:
     
     def _toggle_time_of_use_sequential(self, enable: bool, inverter_ids: List[str], power_source: str, optocoupler_name: str):
         """
-        Toggle Time of Use setting for multiple inverters sequentially using existing code
+        Toggle Time of Use setting for multiple inverters sequentially using synchronous code
         
         Args:
             enable: True to enable TOU, False to disable
@@ -372,25 +366,17 @@ class SolArkIntegration:
                         original_mapping = self.optocoupler_plants.get(optocoupler_name, [])
                         self.optocoupler_plants[optocoupler_name] = [inverter_id]
                         
-                        # Use existing single-inverter method
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
+                        # Use synchronous Sol-Ark cloud method
+                        result = self.solark_cloud.toggle_time_of_use_sync(enable, inverter_id)
                         
-                        try:
-                            result = loop.run_until_complete(
-                                self.solark_cloud.toggle_time_of_use(enable, inverter_id)
-                            )
+                        if result:
+                            success_count += 1
+                            self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for inverter {inverter_id}")
+                        else:
+                            self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for inverter {inverter_id}")
                             
-                            if result:
-                                success_count += 1
-                                self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for inverter {inverter_id}")
-                            else:
-                                self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for inverter {inverter_id}")
-                                
-                        finally:
-                            loop.close()
-                            # Restore original mapping
-                            self.optocoupler_plants[optocoupler_name] = original_mapping
+                        # Restore original mapping
+                        self.optocoupler_plants[optocoupler_name] = original_mapping
                             
                     except Exception as e:
                         self.logger.error(f"Error toggling TOU for inverter {inverter_id}: {e}")
@@ -415,7 +401,7 @@ class SolArkIntegration:
     
     def _apply_parameter_changes_sequential(self, parameters: Dict[str, Any], inverter_ids: List[str], power_source: str, optocoupler_name: str):
         """
-        Apply parameter changes to multiple inverters sequentially using existing code
+        Apply parameter changes to multiple inverters sequentially using synchronous code
         
         Args:
             parameters: Dictionary of parameters to change
@@ -434,25 +420,17 @@ class SolArkIntegration:
                         original_mapping = self.optocoupler_plants.get(optocoupler_name, [])
                         self.optocoupler_plants[optocoupler_name] = [inverter_id]
                         
-                        # Use existing single-inverter method
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
+                        # Use synchronous Sol-Ark cloud method
+                        result = self.solark_cloud.apply_parameter_changes_sync(parameters, inverter_id)
                         
-                        try:
-                            result = loop.run_until_complete(
-                                self.solark_cloud.apply_parameter_changes(parameters, inverter_id)
-                            )
+                        if result:
+                            success_count += 1
+                            self.logger.info(f"Successfully applied parameter changes to inverter {inverter_id}: {parameters}")
+                        else:
+                            self.logger.error(f"Failed to apply parameter changes to inverter {inverter_id}: {parameters}")
                             
-                            if result:
-                                success_count += 1
-                                self.logger.info(f"Successfully applied parameter changes to inverter {inverter_id}: {parameters}")
-                            else:
-                                self.logger.error(f"Failed to apply parameter changes to inverter {inverter_id}: {parameters}")
-                                
-                        finally:
-                            loop.close()
-                            # Restore original mapping
-                            self.optocoupler_plants[optocoupler_name] = original_mapping
+                        # Restore original mapping
+                        self.optocoupler_plants[optocoupler_name] = original_mapping
                             
                     except Exception as e:
                         self.logger.error(f"Error applying parameters to inverter {inverter_id}: {e}")
@@ -477,7 +455,7 @@ class SolArkIntegration:
     
     def _apply_parameter_changes(self, parameters: Dict[str, Any], power_source: str, optocoupler_name: str):
         """
-        Apply parameter changes asynchronously
+        Apply parameter changes synchronously
         
         Args:
             parameters: Dictionary of parameters to change
@@ -486,21 +464,21 @@ class SolArkIntegration:
         """
         def apply_changes():
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                # Get inverter ID for this optocoupler
+                inverter_ids = self.optocoupler_plants.get(optocoupler_name, [])
+                if not inverter_ids:
+                    self.logger.error(f"No inverter IDs configured for optocoupler '{optocoupler_name}'")
+                    return
                 
-                try:
-                    result = loop.run_until_complete(
-                        self.solark_cloud.apply_parameter_changes(parameters)
-                    )
-                    
-                    if result:
-                        self.logger.info(f"Successfully applied {len(parameters)} parameter changes for {power_source}")
-                    else:
-                        self.logger.error(f"Failed to apply parameter changes for {power_source}")
-                        
-                finally:
-                    loop.close()
+                # Use first inverter ID (for backward compatibility)
+                inverter_id = inverter_ids[0]
+                
+                result = self.solark_cloud.apply_parameter_changes_sync(parameters, inverter_id)
+                
+                if result:
+                    self.logger.info(f"Successfully applied {len(parameters)} parameter changes for {power_source}")
+                else:
+                    self.logger.error(f"Failed to apply parameter changes for {power_source}")
                     
             except Exception as e:
                 self.logger.error(f"Error applying parameter changes: {e}")
@@ -558,7 +536,7 @@ class SolArkIntegration:
     
     def set_parameter(self, param_name: str, value: Any) -> bool:
         """
-        Manually set a parameter
+        Manually set a parameter synchronously
         
         Args:
             param_name: Name of the parameter
@@ -573,21 +551,12 @@ class SolArkIntegration:
         
         def do_set_parameter():
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                result = self.solark_cloud.apply_parameter_changes_sync({param_name: value})
                 
-                try:
-                    result = loop.run_until_complete(
-                        self.solark_cloud.apply_parameter_changes({param_name: value})
-                    )
-                    
-                    if result:
-                        self.logger.info(f"Successfully set parameter {param_name} = {value}")
-                    else:
-                        self.logger.error(f"Failed to set parameter {param_name}")
-                        
-                finally:
-                    loop.close()
+                if result:
+                    self.logger.info(f"Successfully set parameter {param_name} = {value}")
+                else:
+                    self.logger.error(f"Failed to set parameter {param_name}")
                     
             except Exception as e:
                 self.logger.error(f"Error setting parameter: {e}")
