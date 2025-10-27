@@ -1423,6 +1423,56 @@ class SolArkCloud:
             self.logger.error(f"Failed to toggle Time of Use: {e}")
             return False
 
+    def toggle_time_of_use_sync(self, enable: bool, inverter_id: str) -> bool:
+        """
+        Synchronous wrapper for toggle_time_of_use
+        
+        Args:
+            enable: True to enable TOU, False to disable
+            inverter_id: Sol-Ark inverter ID
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                result = loop.run_until_complete(self.toggle_time_of_use(enable, inverter_id))
+                return result
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            self.logger.error(f"Error in synchronous TOU toggle: {e}")
+            return False
+
+    def apply_parameter_changes_sync(self, changes: Dict[str, Any], inverter_id: str = None) -> bool:
+        """
+        Synchronous wrapper for apply_parameter_changes
+        
+        Args:
+            changes: Dictionary of parameter changes
+            inverter_id: Sol-Ark inverter ID (optional, for logging)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                result = loop.run_until_complete(self.apply_parameter_changes(changes))
+                return result
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            self.logger.error(f"Error in synchronous parameter changes: {e}")
+            return False
+
     async def apply_parameter_changes(self, changes: Dict[str, Any]) -> bool:
         """
         Apply multiple parameter changes
