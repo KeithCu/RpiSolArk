@@ -34,17 +34,24 @@ This document provides comprehensive guidance for new developers joining the Rpi
 
 ### 1. monitor.py - Main Application Orchestrator
 
-**Purpose**: Central coordinator that orchestrates all system components.
+**Purpose**: Central coordinator that orchestrates all system components with comprehensive reliability features.
 
 **Key Classes**:
-- `FrequencyMonitor`: Main application controller
+- `FrequencyMonitor`: Main application controller with resource tracking
 - `FrequencyAnalyzer`: Frequency analysis and classification
-- `PowerStateMachine`: State management for power system
+- `PowerStateMachine`: Persistent state management for power system
 
 **Key Methods**:
-- `run()`: Main monitoring loop
+- `run()`: Main monitoring loop with buffer validation
 - `_signal_handler()`: Graceful shutdown handling
-- `cleanup()`: Resource cleanup
+- `cleanup()`: Resource cleanup with verification
+- `validate_buffers()`: Periodic buffer corruption detection
+
+**Reliability Features**:
+- Persistent state management with JSON storage
+- Buffer corruption detection and recovery
+- Resource leak prevention and verification
+- Atomic file operations for data integrity
 
 **Dependencies**: All other components
 
@@ -79,17 +86,21 @@ This document provides comprehensive guidance for new developers joining the Rpi
 
 ### 4. optocoupler.py - Frequency Measurement
 
-**Purpose**: High-accuracy frequency measurement using libgpiod interrupts.
+**Purpose**: High-accuracy frequency measurement using libgpiod interrupts with comprehensive error recovery.
 
 **Key Classes**:
-- `OptocouplerManager`: Manages one or more optocouplers
-- `SingleOptocoupler`: Individual optocoupler management
+- `OptocouplerManager`: Manages one or more optocouplers with health monitoring
+- `SingleOptocoupler`: Individual optocoupler management with recovery mechanisms
 
 **Key Features**:
 - GIL-free interrupt counting via libgpiod
 - Dual optocoupler support
 - CPU affinity optimization for consistent timing
 - High-priority threading for accuracy
+- **Health checks and automatic recovery**
+- **Configurable error thresholds and recovery attempts**
+- **Context manager support for proper cleanup**
+- **Hardware status monitoring and reporting**
 
 **AC-into-DC-Optocoupler Configuration**:
 - **Hardware Setup**: H11AA1 DC optocoupler receiving AC input WITHOUT rectifier
@@ -125,34 +136,42 @@ This document provides comprehensive guidance for new developers joining the Rpi
 
 ### 7. config.py - Configuration Management
 
-**Purpose**: YAML configuration loading and access helpers.
+**Purpose**: YAML configuration loading and access helpers with comprehensive validation.
 
 **Key Features**:
 - Hierarchical configuration access
 - Type conversion helpers
-- Default value handling
+- **Comprehensive validation** with type checking and range validation
+- **Fail-fast startup** with clear error messages
+- **No default values** - requires complete config.yaml file
+- **Clear error messages** for missing or invalid configuration
 
 ### 8. health.py - System Monitoring
 
-**Purpose**: Monitors system health and memory usage.
+**Purpose**: Monitors system health and memory usage with comprehensive resource tracking.
 
 **Key Classes**:
-- `HealthMonitor`: System health tracking
-- `MemoryMonitor`: Memory usage monitoring
+- `HealthMonitor`: System health tracking with resource management
+- `MemoryMonitor`: Memory usage monitoring with atomic writes
 
 **Key Features**:
 - CPU and memory threshold monitoring
-- Watchdog timeout detection
+- **Configurable watchdog recovery actions** (log, restart, reboot)
+- **Resource leak detection and cleanup verification**
+- **Thread and file handle tracking**
+- **Loop rate monitoring and slowdown detection**
+- **Atomic CSV writes for data integrity**
 - Memory cleanup automation
-- CSV logging of memory usage
 
 ### 9. data_logger.py - Data Persistence
 
-**Purpose**: Handles all data logging operations.
+**Purpose**: Handles all data logging operations with atomic writes for data integrity.
 
 **Key Features**:
-- Hourly status logging
+- Hourly status logging with atomic writes
 - Detailed frequency logging (configurable)
+- **Atomic CSV operations** with file locking
+- **Power-loss safe writes** using temporary files
 - CSV output with comprehensive metadata
 - Confidence scoring for classifications
 
@@ -245,6 +264,9 @@ The system uses three complementary analysis methods:
 - Confidence-based transitions
 - Emergency state handling (prevents system upgrades, forces display on)
 - Timeout protection against stuck states
+- **Persistent state management** with JSON storage
+- **Duplicate action prevention** across restarts
+- **State validation** with automatic fallback
 
 ### Graceful Degradation
 
@@ -261,6 +283,48 @@ The system is designed to continue operating even when hardware components fail:
 - Cycling display between readings (2-second intervals)
 - Configurable via GPIO pins in config.yaml
 - Useful for comparing different measurement points
+
+## Reliability Improvements
+
+### Long-Term Operation Features
+
+The system has been enhanced for **5+ years of continuous operation** with comprehensive reliability improvements:
+
+### 1. Persistent State Management
+- **JSON-based state persistence** survives restarts and power outages
+- **Atomic file writes** prevent corruption during power loss
+- **Duplicate action prevention** avoids redundant operations after restart
+- **State validation** with automatic fallback to safe defaults
+
+### 2. Resource Leak Prevention
+- **Comprehensive resource tracking** monitors threads and file handles
+- **Context manager support** ensures proper cleanup of all hardware components
+- **Cleanup verification** detects and logs resource leaks
+- **Automatic garbage collection** prevents memory accumulation
+
+### 3. Hardware Error Recovery
+- **Optocoupler health checks** with automatic recovery mechanisms
+- **Counter reset and re-initialization** on hardware failures
+- **Configurable error thresholds** with graceful degradation
+- **Hardware status monitoring** with detailed health reporting
+
+### 4. Data Integrity Protection
+- **Buffer corruption detection** identifies and clears invalid data
+- **Periodic validation** checks for NaN/inf values and monotonic time
+- **Atomic CSV writes** with file locking for concurrent access
+- **Power-loss safe operations** using temporary files and atomic renames
+
+### 5. Automated Recovery Systems
+- **Configurable watchdog actions**: log, restart application, or reboot system
+- **Loop rate monitoring** detects system slowdowns
+- **Recovery detection** tracks system responsiveness
+- **Fallback mechanisms** for failed recovery attempts
+
+### 6. Robust Configuration
+- **Comprehensive validation** with type checking and range validation
+- **Fail-fast startup** with clear error messages for missing configuration
+- **No default values** - requires complete config.yaml file
+- **Clear error messages** for missing or invalid configuration
 
 ## Configuration
 
@@ -304,6 +368,10 @@ state_machine:
   transition_timeout: 30.0       # Max time in transitioning
   zero_voltage_threshold: 1.0    # Time before off-grid
   unsteady_voltage_threshold: 0.1 # Hz variation threshold
+  persistent_state_enabled: true # Enable persistent state storage
+  state_file: '/var/run/rpisolark_state.json' # State file location
+  confidence_threshold_maintain: 0.6  # Confidence to maintain state
+  confidence_threshold_transition: 0.8 # Confidence to transition state
 
 # Logging Configuration
 logging:
@@ -316,7 +384,14 @@ health:
   watchdog_timeout: 30.0
   memory_warning_threshold: 0.8
   cpu_warning_threshold: 0.8
-  auto_reboot: true
+  watchdog_action: 'log'  # 'log', 'restart', or 'reboot'
+
+# Hardware Error Recovery
+hardware:
+  optocoupler:
+    max_consecutive_errors: 5    # Errors before recovery attempt
+    health_check_interval: 30.0  # Seconds between health checks
+    max_recovery_attempts: 3     # Max recovery attempts before giving up
 
 # Sol-Ark Cloud (Work in Progress)
 solark_cloud:

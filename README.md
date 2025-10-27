@@ -100,6 +100,12 @@ The system uses **three complementary analysis methods** to detect power sources
 - ⚙️ **Configurable parameters** via YAML configuration
 - ☁️ **Sol-Ark cloud integration** with web automation (Playwright)
 - 🤖 **Automatic parameter updates** based on power source detection
+- 🔄 **Persistent state management** with automatic recovery after restarts
+- 🛡️ **Resource leak prevention** with comprehensive cleanup verification
+- 🔧 **Hardware error recovery** with automatic optocoupler health checks
+- 📊 **Buffer corruption detection** with automatic data validation
+- 🔒 **Atomic file operations** for power-loss safe data logging
+- ⚡ **Configurable watchdog recovery** with restart/reboot capabilities
 
 ## 📺 Display Interface
 
@@ -247,6 +253,33 @@ The system uses a comprehensive YAML configuration file `config.yaml` with setti
 | 📝 **Logging** | Log files, rotation | Logging and data retention |
 | 🏥 **Health** | Watchdog timeout, thresholds | System health monitoring |
 | ☁️ **Sol-Ark** | Credentials, sync intervals | Cloud integration settings |
+| 🛡️ **Reliability** | State persistence, recovery actions | Long-term operation settings |
+
+### 🛡️ **New Reliability Configuration Options**
+
+**⚠️ Important**: The system now requires a complete `config.yaml` file. Missing configuration will cause the application to crash with clear error messages.
+
+```yaml
+# Persistent State Management
+state_machine:
+  persistent_state_enabled: true
+  state_file: '/var/run/rpisolark_state.json'
+  confidence_threshold_maintain: 0.6
+  confidence_threshold_transition: 0.8
+
+# Hardware Error Recovery
+hardware:
+  optocoupler:
+    max_consecutive_errors: 5
+    health_check_interval: 30.0
+    max_recovery_attempts: 3
+
+# Watchdog Recovery Actions
+health:
+  watchdog_action: 'log'  # 'log', 'restart', or 'reboot'
+```
+
+**Configuration Philosophy**: The system now follows a "fail-fast" approach - if configuration is missing or invalid, the application will crash immediately with clear error messages rather than using potentially incorrect defaults.
 
 ## 📁 Output Files
 
@@ -256,6 +289,9 @@ The system uses a comprehensive YAML configuration file `config.yaml` with setti
 | 📝 `monitor.log` | Detailed application logs | Rotating log files |
 | ☁️ `solark_cache/` | Cached Sol-Ark cloud pages | HTML files for analysis |
 | 🔄 `solark_session.json` | Session data | JSON session storage |
+| 🛡️ `/var/run/rpisolark_state*.json` | Persistent state files | JSON state storage |
+| 📊 `memory_usage.csv` | Memory monitoring data | CSV with resource metrics |
+| 📈 `detailed_frequency_data.csv` | Detailed frequency logs | CSV with analysis data |
 
 ## 🧪 Testing
 
@@ -394,9 +430,49 @@ result = await solark.toggle_time_of_use(False, "2207079903")
 - **Power Source**: Utility vs Generator classification
 - **Network Status**: Cloud connectivity monitoring
 
+## 🛡️ Long-Term Reliability Features
+
+**Designed for 5+ years of continuous operation** with comprehensive reliability improvements:
+
+### 🔄 **Persistent State Management**
+- **JSON-based state persistence** survives restarts and power outages
+- **Atomic file writes** prevent corruption during power loss
+- **Duplicate action prevention** avoids redundant operations after restart
+- **State validation** with automatic fallback to safe defaults
+
+### 🛡️ **Resource Leak Prevention**
+- **Comprehensive resource tracking** monitors threads and file handles
+- **Context manager support** ensures proper cleanup of all hardware components
+- **Cleanup verification** detects and logs resource leaks
+- **Automatic garbage collection** prevents memory accumulation
+
+### 🔧 **Hardware Error Recovery**
+- **Optocoupler health checks** with automatic recovery mechanisms
+- **Counter reset and re-initialization** on hardware failures
+- **Configurable error thresholds** with graceful degradation
+- **Hardware status monitoring** with detailed health reporting
+
+### 📊 **Data Integrity Protection**
+- **Buffer corruption detection** identifies and clears invalid data
+- **Periodic validation** checks for NaN/inf values and monotonic time
+- **Atomic CSV writes** with file locking for concurrent access
+- **Power-loss safe operations** using temporary files and atomic renames
+
+### ⚡ **Automated Recovery Systems**
+- **Configurable watchdog actions**: log, restart application, or reboot system
+- **Loop rate monitoring** detects system slowdowns
+- **Recovery detection** tracks system responsiveness
+- **Fallback mechanisms** for failed recovery attempts
+
+### ⚙️ **Robust Configuration**
+- **Comprehensive validation** with type checking and range validation
+- **Complete default configuration** prevents runtime errors
+- **Fail-fast startup** with clear error messages
+- **Configuration schema** for future migrations
+
 ## MicroSD wear reduction (moderate)
 
-Goal: keep root writable; retain your app’s hourly write; curb OS background writes.
+Goal: keep root writable; retain your app's hourly write; curb OS background writes.
 
 ### 1) Put systemd journal in RAM (volatile)
 ```bash

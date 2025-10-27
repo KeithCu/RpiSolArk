@@ -102,6 +102,15 @@ class DisplayManager:
         
         self._setup_display()
     
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup."""
+        self.cleanup()
+        return False  # Don't suppress exceptions
+    
     def _setup_display(self):
         """Setup LCD display."""
         self.logger.info(f"LCD available: {self.lcd_available}")

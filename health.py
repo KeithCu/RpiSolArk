@@ -8,24 +8,41 @@ import gc
 import logging
 import threading
 import time
+import psutil
+import os
+import csv
+import fcntl
 from collections import deque
 from pathlib import Path
-from typing import Dict, Any
-
-import psutil
+from typing import Dict, Any, Set, List
 
 
 class HealthMonitor:
-    """Monitors system health and performance."""
+    """Monitors system health and performance with resource tracking."""
     
     def __init__(self, config, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.watchdog_timeout = config.get('health.watchdog_timeout', 30.0)
-        self.memory_threshold = config.get('health.memory_warning_threshold', 0.8)
-        self.cpu_threshold = config.get('health.cpu_warning_threshold', 0.8)
+        self.watchdog_timeout = config.get('health.watchdog_timeout')
+        self.memory_threshold = config.get('health.memory_warning_threshold')
+        self.cpu_threshold = config.get('health.cpu_warning_threshold')
+        self.watchdog_action = config.get('health.watchdog_action')
         self.last_activity = time.time()
         self.running = True
+        
+        # Resource tracking
+        self.tracked_threads: Set[threading.Thread] = set()
+        self.tracked_files: Set[str] = set()
+        self.resource_lock = threading.Lock()
+        self.startup_time = time.time()
+        
+        # Watchdog tracking
+        self.loop_iteration_count = 0
+        self.last_loop_time = time.time()
+        self.loop_rate_history = deque(maxlen=10)  # Track last 10 loop rates
+        self.watchdog_triggered = False
+        self.last_known_good_heartbeat = time.time()
+        
         self._start_monitoring()
     
     def _start_monitoring(self):
@@ -61,18 +78,177 @@ class HealthMonitor:
             self.logger.error(f"System health check error: {e}")
     
     def _check_watchdog(self):
-        """Check if system is responsive."""
-        if time.time() - self.last_activity > self.watchdog_timeout:
-            self.logger.error("Watchdog timeout - system appears unresponsive")
-            # Could implement restart logic here
+        """Check if system is responsive and take action if needed."""
+        current_time = time.time()
+        time_since_activity = current_time - self.last_activity
+        
+        if time_since_activity > self.watchdog_timeout:
+            if not self.watchdog_triggered:
+                self.watchdog_triggered = True
+                self.logger.error(f"Watchdog timeout - system appears unresponsive for {time_since_activity:.1f}s")
+                
+                # Take configured action
+                self._execute_watchdog_action()
+            else:
+                # Already triggered, check if we've recovered
+                if time_since_activity < self.watchdog_timeout:
+                    self.logger.info("Watchdog recovery detected - system responsive again")
+                    self.watchdog_triggered = False
+        else:
+            # System is responsive, update last known good heartbeat
+            self.last_known_good_heartbeat = current_time
+            if self.watchdog_triggered:
+                self.logger.info("Watchdog recovery detected - system responsive again")
+                self.watchdog_triggered = False
+    
+    def _execute_watchdog_action(self):
+        """Execute the configured watchdog action."""
+        try:
+            if self.watchdog_action == 'log':
+                self.logger.critical("Watchdog timeout - logging only (no action taken)")
+                
+            elif self.watchdog_action == 'restart':
+                self.logger.critical("Watchdog timeout - initiating application restart")
+                self._restart_application()
+                
+            elif self.watchdog_action == 'reboot':
+                self.logger.critical("Watchdog timeout - initiating system reboot")
+                self._reboot_system()
+                
+            else:
+                self.logger.warning(f"Unknown watchdog action: {self.watchdog_action}, defaulting to log")
+                
+        except Exception as e:
+            self.logger.error(f"Error executing watchdog action '{self.watchdog_action}': {e}")
+    
+    def _restart_application(self):
+        """Restart the application."""
+        try:
+            import sys
+            import os
+            self.logger.critical("Restarting application due to watchdog timeout")
+            os.execv(sys.executable, ['python'] + sys.argv)
+        except Exception as e:
+            self.logger.critical(f"Failed to restart application: {e}")
+            # Fallback to system reboot
+            self._reboot_system()
+    
+    def _reboot_system(self):
+        """Reboot the system."""
+        try:
+            import subprocess
+            self.logger.critical("Rebooting system due to watchdog timeout")
+            subprocess.run(['sudo', 'reboot'], check=True)
+        except Exception as e:
+            self.logger.critical(f"Failed to reboot system: {e}")
+            # Last resort - exit the process
+            self.logger.critical("Exiting process as last resort")
+            os._exit(1)
     
     def update_activity(self):
-        """Update last activity timestamp."""
-        self.last_activity = time.time()
+        """Update last activity timestamp and track loop rate."""
+        current_time = time.time()
+        self.last_activity = current_time
+        
+        # Track loop rate
+        self.loop_iteration_count += 1
+        if self.loop_iteration_count > 0:
+            time_since_last = current_time - self.last_loop_time
+            if time_since_last > 0:
+                loop_rate = 1.0 / time_since_last
+                self.loop_rate_history.append(loop_rate)
+                
+                # Check for loop slowdown
+                if len(self.loop_rate_history) >= 5:
+                    avg_rate = sum(self.loop_rate_history) / len(self.loop_rate_history)
+                    if avg_rate < 0.1:  # Less than 0.1 Hz (10 second intervals)
+                        self.logger.warning(f"Main loop slowdown detected: {avg_rate:.3f} Hz average")
+        
+        self.last_loop_time = current_time
     
     def stop(self):
         """Stop health monitoring."""
         self.running = False
+    
+    def track_thread(self, thread: threading.Thread, name: str = None):
+        """Track a thread for resource monitoring."""
+        with self.resource_lock:
+            if name:
+                thread.name = name
+            self.tracked_threads.add(thread)
+            self.logger.debug(f"Tracking thread: {thread.name}")
+    
+    def untrack_thread(self, thread: threading.Thread):
+        """Stop tracking a thread."""
+        with self.resource_lock:
+            self.tracked_threads.discard(thread)
+            self.logger.debug(f"Untracking thread: {thread.name}")
+    
+    def track_file(self, filepath: str):
+        """Track a file for resource monitoring."""
+        with self.resource_lock:
+            self.tracked_files.add(filepath)
+            self.logger.debug(f"Tracking file: {filepath}")
+    
+    def untrack_file(self, filepath: str):
+        """Stop tracking a file."""
+        with self.resource_lock:
+            self.tracked_files.discard(filepath)
+            self.logger.debug(f"Untracking file: {filepath}")
+    
+    def get_resource_status(self) -> Dict[str, Any]:
+        """Get current resource status."""
+        with self.resource_lock:
+            # Check thread status
+            active_threads = []
+            for thread in self.tracked_threads:
+                if thread.is_alive():
+                    active_threads.append({
+                        'name': thread.name,
+                        'daemon': thread.daemon,
+                        'ident': thread.ident
+                    })
+            
+            # Check file status
+            open_files = []
+            for filepath in self.tracked_files:
+                if os.path.exists(filepath):
+                    try:
+                        stat = os.stat(filepath)
+                        open_files.append({
+                            'path': filepath,
+                            'size': stat.st_size,
+                            'modified': stat.st_mtime
+                        })
+                    except OSError:
+                        open_files.append({'path': filepath, 'status': 'error'})
+            
+            return {
+                'tracked_threads': len(self.tracked_threads),
+                'active_threads': len(active_threads),
+                'active_thread_details': active_threads,
+                'tracked_files': len(self.tracked_files),
+                'open_files': open_files,
+                'uptime_seconds': time.time() - self.startup_time
+            }
+    
+    def verify_cleanup(self) -> bool:
+        """Verify that cleanup was successful."""
+        status = self.get_resource_status()
+        
+        # Check for leaked threads
+        leaked_threads = []
+        for thread in self.tracked_threads:
+            if thread.is_alive():
+                leaked_threads.append(thread.name)
+        
+        if leaked_threads:
+            self.logger.critical(f"Resource leak detected: {len(leaked_threads)} threads still active: {leaked_threads}")
+            return False
+        
+        # Check for leaked files (optional - files might be legitimately open)
+        self.logger.info(f"Cleanup verification passed: {status['tracked_threads']} threads cleaned up")
+        return True
 
 
 class MemoryMonitor:
@@ -84,15 +260,15 @@ class MemoryMonitor:
         self.process = psutil.Process()
         
         # Memory thresholds
-        self.process_memory_warning = config.get('memory.process_warning_mb', 500)  # MB
-        self.process_memory_critical = config.get('memory.process_critical_mb', 1000)  # MB
-        self.system_memory_warning = config.get('memory.system_warning_percent', 80)  # %
-        self.system_memory_critical = config.get('memory.system_critical_percent', 90)  # %
+        self.process_memory_warning = config.get('memory.process_warning_mb')  # MB
+        self.process_memory_critical = config.get('memory.process_critical_mb')  # MB
+        self.system_memory_warning = config.get('memory.system_warning_percent')  # %
+        self.system_memory_critical = config.get('memory.system_critical_percent')  # %
         
         # Memory tracking
         self.memory_history = deque(maxlen=1000)  # Keep last 1000 measurements
         self.last_cleanup_time = time.time()
-        self.cleanup_interval = config.get('memory.cleanup_interval', 3600)  # 1 hour
+        self.cleanup_interval = config.get('memory.cleanup_interval')  # 1 hour
         
         self.logger.info("Memory monitor initialized")
     
@@ -203,41 +379,75 @@ class MemoryMonitor:
             f"GC Objects: {memory_info['gc_objects']}"
         )
     
-    def log_memory_to_csv(self, csv_file: str) -> None:
-        """Log memory information to CSV file."""
+    def _atomic_write_csv(self, filepath: str, data_rows: list, headers: list = None):
+        """Write CSV data atomically with file locking."""
+        temp_file = f"{filepath}.tmp"
+        
         try:
-            import csv
+            # Write to temporary file
+            with open(temp_file, 'w', newline='') as f:
+                # Acquire exclusive lock
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                
+                writer = csv.writer(f)
+                
+                # Write headers if provided
+                if headers:
+                    writer.writerow(headers)
+                
+                # Write data rows
+                for row in data_rows:
+                    writer.writerow(row)
+                
+                # Flush and sync to disk
+                f.flush()
+                os.fsync(f.fileno())
             
+            # Atomic rename
+            os.rename(temp_file, filepath)
+            self.logger.debug(f"Atomic write completed: {filepath}")
+            
+        except Exception as e:
+            # Clean up temp file on error
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            self.logger.error(f"Atomic write failed for {filepath}: {e}")
+            raise
+    
+    def log_memory_to_csv(self, csv_file: str) -> None:
+        """Log memory information to CSV file using atomic writes."""
+        try:
             memory_info = self.get_memory_info()
             if not memory_info:
                 return
             
             # Check if file exists to determine if we need headers
-            file_exists = Path(csv_file).exists()
+            file_exists = os.path.exists(csv_file)
             
-            with open(csv_file, 'a', newline='') as f:
-                writer = csv.writer(f)
-                
-                # Write headers if file is new
-                if not file_exists:
-                    writer.writerow([
-                        'timestamp', 'datetime', 'process_memory_mb', 'process_memory_percent',
-                        'system_memory_percent', 'system_available_gb', 'gc_objects',
-                        'gc_collections', 'process_status'
-                    ])
-                
-                # Write data
-                writer.writerow([
-                    memory_info['timestamp'],
-                    time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(memory_info['timestamp'])),
-                    memory_info['process_memory_mb'],
-                    memory_info['process_memory_percent'],
-                    memory_info['system_memory_percent'],
-                    memory_info['system_available_gb'],
-                    memory_info['gc_objects'],
-                    memory_info['gc_collections'],
-                    memory_info['process_status']
-                ])
+            # Prepare data row
+            data_row = [
+                memory_info['timestamp'],
+                time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(memory_info['timestamp'])),
+                memory_info['process_memory_mb'],
+                memory_info['process_memory_percent'],
+                memory_info['system_memory_percent'],
+                memory_info['system_available_gb'],
+                memory_info['gc_objects'],
+                memory_info['gc_collections'],
+                memory_info['process_status']
+            ]
+            
+            # Prepare headers if file doesn't exist
+            headers = None
+            if not file_exists:
+                headers = [
+                    'timestamp', 'datetime', 'process_memory_mb', 'process_memory_percent',
+                    'system_memory_percent', 'system_available_gb', 'gc_objects',
+                    'gc_collections', 'process_status'
+                ]
+            
+            # Use atomic write
+            self._atomic_write_csv(csv_file, [data_row], headers)
                 
         except Exception as e:
             self.logger.error(f"Failed to log memory to CSV: {e}")

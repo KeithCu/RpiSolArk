@@ -7,6 +7,7 @@ Monitors AC line frequency to detect power source (Utility vs Generator)
 # Standard library imports
 import argparse
 import csv
+import json
 import logging
 import os
 import random
@@ -42,7 +43,7 @@ class PowerState(Enum):
 
 
 class PowerStateMachine:
-    """State machine for power system management."""
+    """State machine for power system management with persistent state storage."""
 
     def __init__(self, config, logger: logging.Logger, display_manager=None, solark_integration=None, optocoupler_name=None):
         self.config = config
@@ -50,9 +51,21 @@ class PowerStateMachine:
         self.display_manager = display_manager  # Reference to display manager for backlight control
         self.solark_integration = solark_integration  # Reference to Sol-Ark integration
         self.optocoupler_name = optocoupler_name  # Name of the optocoupler this state machine manages
-        self.current_state = PowerState.TRANSITIONING  # Start in transitioning to allow detection
+        
+        # Persistent state configuration
+        self.state_file = config.get('state_machine.state_file')
+        self.persistent_state_enabled = config.get('state_machine.persistent_state_enabled')
+        
+        # Initialize state variables
+        self.current_state = PowerState.TRANSITIONING  # Default start state
         self.previous_state = PowerState.TRANSITIONING
         self.state_entry_time = time.time()
+        self.last_action_taken = None  # Track last action to prevent duplicates
+        
+        # Load persistent state if enabled
+        if self.persistent_state_enabled:
+            self._load_persistent_state()
+        
         try:
             self.transition_timeout = config['state_machine']['transition_timeout']  # seconds
             self.zero_voltage_threshold = config['state_machine']['zero_voltage_threshold']  # seconds of no cycles
@@ -70,7 +83,7 @@ class PowerStateMachine:
             PowerState.GENERATOR: self._on_enter_generator
         }
 
-        self.logger.info(f"Power state machine initialized in {self.current_state.value} state")
+        self.logger.info(f"Power state machine initialized in {self.current_state.value} state (persistent: {self.persistent_state_enabled})")
 
     def update_state(self, frequency: Optional[float], power_source: str,
                     zero_voltage_duration: float) -> PowerState:
@@ -165,6 +178,10 @@ class PowerStateMachine:
 
         self.logger.info(f"Power state transition: {old_state.value} -> {new_state.value}")
 
+        # Save persistent state after transition
+        if self.persistent_state_enabled:
+            self._save_persistent_state()
+
         # Execute state change callback
         if new_state in self.on_state_change_callbacks:
             try:
@@ -180,6 +197,88 @@ class PowerStateMachine:
             'state_duration': time.time() - self.state_entry_time,
             'transition_timeout': self.transition_timeout
         }
+
+    def _load_persistent_state(self):
+        """Load persistent state from file with validation."""
+        try:
+            if not os.path.exists(self.state_file):
+                self.logger.info(f"State file {self.state_file} does not exist, starting fresh")
+                return
+            
+            with open(self.state_file, 'r') as f:
+                state_data = json.load(f)
+            
+            # Validate state data
+            if not self._validate_state_data(state_data):
+                self.logger.warning(f"Invalid state data in {self.state_file}, starting fresh")
+                return
+            
+            # Load state
+            self.current_state = PowerState(state_data['current_state'])
+            self.previous_state = PowerState(state_data['previous_state'])
+            self.state_entry_time = state_data['state_entry_time']
+            self.last_action_taken = state_data.get('last_action_taken')
+            
+            # Calculate state duration
+            state_duration = time.time() - self.state_entry_time
+            self.logger.info(f"Loaded persistent state: {self.current_state.value} (duration: {state_duration:.1f}s)")
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            self.logger.warning(f"Failed to load persistent state: {e}, starting fresh")
+        except Exception as e:
+            self.logger.error(f"Unexpected error loading persistent state: {e}, starting fresh")
+    
+    def _save_persistent_state(self):
+        """Save current state to file with atomic write."""
+        try:
+            state_data = {
+                'current_state': self.current_state.value,
+                'previous_state': self.previous_state.value,
+                'state_entry_time': self.state_entry_time,
+                'last_action_taken': self.last_action_taken,
+                'timestamp': time.time(),
+                'optocoupler_name': self.optocoupler_name
+            }
+            
+            # Atomic write: write to temp file, then rename
+            temp_file = f"{self.state_file}.tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(state_data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())  # Force write to disk
+            
+            # Atomic rename
+            os.rename(temp_file, self.state_file)
+            self.logger.debug(f"Persistent state saved to {self.state_file}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save persistent state: {e}")
+    
+    def _validate_state_data(self, state_data: dict) -> bool:
+        """Validate state data structure and values."""
+        try:
+            # Check required fields
+            required_fields = ['current_state', 'previous_state', 'state_entry_time']
+            for field in required_fields:
+                if field not in state_data:
+                    return False
+            
+            # Validate state values
+            valid_states = [state.value for state in PowerState]
+            if (state_data['current_state'] not in valid_states or 
+                state_data['previous_state'] not in valid_states):
+                return False
+            
+            # Validate timestamp (not too old, not in future)
+            current_time = time.time()
+            state_time = state_data['state_entry_time']
+            if state_time > current_time or (current_time - state_time) > 86400 * 7:  # 7 days max
+                return False
+            
+            return True
+            
+        except Exception:
+            return False
 
     def _create_upgrade_lock(self):
         """Create lock file to prevent automatic system upgrades."""
@@ -215,41 +314,65 @@ class PowerStateMachine:
     def _on_enter_off_grid(self):
         """Called when entering OFF_GRID state."""
         self.logger.info("POWER OUTAGE: System is now OFF-GRID")
-        # Prevent automatic system upgrades when off-grid
-        self._create_upgrade_lock()
-        # Turn on display backlight for power outage visibility
-        if self.display_manager:
-            self.display_manager.force_display_on()
-            self.logger.info("Display backlight turned on for power outage")
-        # Disable TOU when off-grid
-        if self.solark_integration and self.optocoupler_name:
-            self.solark_integration.on_power_source_change('off_grid', {}, self.optocoupler_name)
+        
+        # Only perform actions if not already done or state actually changed
+        if self.last_action_taken != 'off_grid_actions':
+            # Prevent automatic system upgrades when off-grid
+            self._create_upgrade_lock()
+            # Turn on display backlight for power outage visibility
+            if self.display_manager:
+                self.display_manager.force_display_on()
+                self.logger.info("Display backlight turned on for power outage")
+            # Disable TOU when off-grid
+            if self.solark_integration and self.optocoupler_name:
+                self.solark_integration.on_power_source_change('off_grid', {}, self.optocoupler_name)
+            
+            self.last_action_taken = 'off_grid_actions'
+            self.logger.info("OFF-GRID actions completed")
+        else:
+            self.logger.debug("OFF-GRID actions already performed, skipping")
 
     def _on_enter_grid(self):
         """Called when entering GRID state."""
         self.logger.info("GRID POWER: Stable utility power detected")
-        # Allow automatic system upgrades when on grid power
-        self._remove_upgrade_lock()
-        # Turn on display backlight for grid power confirmation
-        if self.display_manager:
-            self.display_manager.force_display_on()
-            self.logger.info("Display backlight turned on for grid power")
-        # Enable TOU when on grid power
-        if self.solark_integration and self.optocoupler_name:
-            self.solark_integration.on_power_source_change('grid', {}, self.optocoupler_name)
+        
+        # Only perform actions if not already done or state actually changed
+        if self.last_action_taken != 'grid_actions':
+            # Allow automatic system upgrades when on grid power
+            self._remove_upgrade_lock()
+            # Turn on display backlight for grid power confirmation
+            if self.display_manager:
+                self.display_manager.force_display_on()
+                self.logger.info("Display backlight turned on for grid power")
+            # Enable TOU when on grid power
+            if self.solark_integration and self.optocoupler_name:
+                self.solark_integration.on_power_source_change('grid', {}, self.optocoupler_name)
+            
+            self.last_action_taken = 'grid_actions'
+            self.logger.info("GRID actions completed")
+        else:
+            self.logger.debug("GRID actions already performed, skipping")
 
     def _on_enter_generator(self):
         """Called when entering GENERATOR state."""
         self.logger.info("GENERATOR: Backup generator power detected")
-        # Prevent automatic system upgrades when on generator (unstable power)
-        self._create_upgrade_lock()
-        # Turn on display backlight for generator operation visibility
-        if self.display_manager:
-            self.display_manager.force_display_on()
-            self.logger.info("Display backlight turned on for generator operation")
-        # Disable TOU when on generator
-        if self.solark_integration and self.optocoupler_name:
-            self.solark_integration.on_power_source_change('generator', {}, self.optocoupler_name)
+        
+        # Only perform actions if not already done or state actually changed
+        if self.last_action_taken != 'generator_actions':
+            # Prevent automatic system upgrades when on generator (unstable power)
+            self._create_upgrade_lock()
+            # Turn on display backlight for generator operation visibility
+            if self.display_manager:
+                self.display_manager.force_display_on()
+                self.logger.info("Display backlight turned on for generator operation")
+            # Disable TOU when on generator
+            if self.solark_integration and self.optocoupler_name:
+                self.solark_integration.on_power_source_change('generator', {}, self.optocoupler_name)
+            
+            self.last_action_taken = 'generator_actions'
+            self.logger.info("GENERATOR actions completed")
+        else:
+            self.logger.debug("GENERATOR actions already performed, skipping")
 
 
 class FrequencyAnalyzer:
@@ -736,6 +859,11 @@ class FrequencyMonitor:
         self.reset_button_pressed = False
         self.last_reset_check = 0
         
+        # Buffer validation tracking
+        self.last_buffer_validation = 0
+        self.buffer_validation_interval = 100  # Validate every 100 samples
+        self.buffer_corruption_count = 0
+        
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -926,6 +1054,11 @@ class FrequencyMonitor:
                     if self.dual_mode and secondary_freq is not None:
                         self.secondary_freq_buffer.append(secondary_freq)
                         self.logger.debug(f"Updated dual frequency buffers: Primary={freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
+
+                # Validate buffers periodically
+                if self.sample_count - self.last_buffer_validation >= self.buffer_validation_interval:
+                    self.validate_buffers()
+                    self.last_buffer_validation = self.sample_count
 
                 self.logger.debug("Updating health monitor...")
                 self.health_monitor.update_activity()
@@ -1162,6 +1295,69 @@ class FrequencyMonitor:
                 avg_confidence = sum(self.state_machine.confidence_history) / len(self.state_machine.confidence_history)
                 self.logger.debug(f"Confidence History: avg={avg_confidence:.2f}, recent={list(self.state_machine.confidence_history)[-3:]}")
 
+    def validate_buffers(self) -> bool:
+        """Validate buffer integrity and detect corruption."""
+        try:
+            corruption_detected = False
+            
+            # Check frequency buffer
+            if len(self.freq_buffer) > 0:
+                freq_list = list(self.freq_buffer)
+                
+                # Check for NaN or infinite values
+                for i, freq in enumerate(freq_list):
+                    if freq is not None and (np.isnan(freq) or np.isinf(freq)):
+                        self.logger.error(f"Buffer corruption detected: NaN/inf value at index {i}: {freq}")
+                        corruption_detected = True
+                        break
+                
+                # Check for sudden jumps (more than 10Hz change)
+                if len(freq_list) >= 2 and not corruption_detected:
+                    for i in range(1, len(freq_list)):
+                        if (freq_list[i] is not None and freq_list[i-1] is not None and 
+                            abs(freq_list[i] - freq_list[i-1]) > 10.0):
+                            self.logger.warning(f"Buffer anomaly: large frequency jump at index {i}: {freq_list[i-1]} -> {freq_list[i]}")
+            
+            # Check time buffer monotonicity
+            if len(self.time_buffer) > 0:
+                time_list = list(self.time_buffer)
+                for i in range(1, len(time_list)):
+                    if time_list[i] <= time_list[i-1]:
+                        self.logger.error(f"Buffer corruption detected: non-monotonic time at index {i}: {time_list[i-1]} -> {time_list[i]}")
+                        corruption_detected = True
+                        break
+            
+            # Check secondary frequency buffer if in dual mode
+            if self.dual_mode and len(self.secondary_freq_buffer) > 0:
+                secondary_list = list(self.secondary_freq_buffer)
+                for i, freq in enumerate(secondary_list):
+                    if freq is not None and (np.isnan(freq) or np.isinf(freq)):
+                        self.logger.error(f"Secondary buffer corruption detected: NaN/inf value at index {i}: {freq}")
+                        corruption_detected = True
+                        break
+            
+            # Clear buffers if corruption detected
+            if corruption_detected:
+                self.buffer_corruption_count += 1
+                self.logger.error(f"Buffer corruption detected (count: {self.buffer_corruption_count}), clearing buffers")
+                
+                # Clear all buffers
+                self.freq_buffer.clear()
+                self.time_buffer.clear()
+                self.classification_buffer.clear()
+                if self.dual_mode:
+                    self.secondary_freq_buffer.clear()
+                
+                # Log corruption event
+                self.logger.critical(f"Buffer corruption event #{self.buffer_corruption_count} - all buffers cleared")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Buffer validation error: {e}")
+            return False
+
     def _handle_reset(self):
         """Handle reset button press - restart the application."""
         self.logger.info("Initiating application restart...")
@@ -1183,20 +1379,37 @@ class FrequencyMonitor:
         os.execv(sys.executable, ['python'] + sys.argv)
 
     def cleanup(self):
-        """Cleanup resources."""
+        """Cleanup resources with verification."""
         self.logger.info("Cleaning up resources...")
+        
+        # Stop health monitoring
         self.health_monitor.stop()
         
         # Stop tuning data collection
         if self.tuning_collector.enabled:
             self.tuning_collector.stop_collection()
         
+        # Cleanup hardware components
         try:
             cleanup_on_exit = self.config['app']['cleanup_on_exit']
         except KeyError as e:
             raise KeyError(f"Missing required app configuration key: {e}")
+        
         if cleanup_on_exit and self.hardware is not None:
             self.hardware.cleanup()
+        
+        # Verify cleanup was successful
+        if hasattr(self.health_monitor, 'verify_cleanup'):
+            cleanup_success = self.health_monitor.verify_cleanup()
+            if not cleanup_success:
+                self.logger.critical("Resource cleanup verification failed - potential resource leaks detected")
+            else:
+                self.logger.info("Resource cleanup verification passed")
+        
+        # Log final resource status
+        if hasattr(self.health_monitor, 'get_resource_status'):
+            resource_status = self.health_monitor.get_resource_status()
+            self.logger.info(f"Final resource status: {resource_status}")
         
         self.logger.info("Cleanup completed")
     

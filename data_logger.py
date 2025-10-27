@@ -7,6 +7,8 @@ Handles CSV logging of frequency data and system status.
 import csv
 import logging
 import time
+import os
+import fcntl
 from typing import Optional, Dict, Any
 
 
@@ -16,17 +18,52 @@ class DataLogger:
     def __init__(self, config, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.hourly_log_file = config.get('logging.hourly_log_file', 'hourly_status.csv')
+        self.hourly_log_file = config.get('logging.hourly_log_file')
         
         # Detailed logging configuration
-        self.detailed_logging_enabled = config.get('logging.detailed_logging_enabled', False)
-        self.detailed_log_interval = config.get('logging.detailed_log_interval', 1.0)  # seconds
-        self.detailed_log_file = config.get('logging.detailed_log_file', 'detailed_frequency_data.csv')
+        self.detailed_logging_enabled = config.get('logging.detailed_logging_enabled')
+        self.detailed_log_interval = config.get('logging.detailed_log_interval')  # seconds
+        self.detailed_log_file = config.get('logging.detailed_log_file')
         self.last_detailed_log_time = 0
         
         # Initialize detailed log file header if enabled
         if self.detailed_logging_enabled:
             self._initialize_detailed_log_file()
+    
+    def _atomic_write_csv(self, filepath: str, data_rows: list, headers: list = None):
+        """Write CSV data atomically with file locking."""
+        temp_file = f"{filepath}.tmp"
+        
+        try:
+            # Write to temporary file
+            with open(temp_file, 'w', newline='') as f:
+                # Acquire exclusive lock
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                
+                writer = csv.writer(f)
+                
+                # Write headers if provided
+                if headers:
+                    writer.writerow(headers)
+                
+                # Write data rows
+                for row in data_rows:
+                    writer.writerow(row)
+                
+                # Flush and sync to disk
+                f.flush()
+                os.fsync(f.fileno())
+            
+            # Atomic rename
+            os.rename(temp_file, filepath)
+            self.logger.debug(f"Atomic write completed: {filepath}")
+            
+        except Exception as e:
+            # Clean up temp file on error
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            self.logger.error(f"Atomic write failed for {filepath}: {e}")
+            raise
     
     def _initialize_detailed_log_file(self):
         """Initialize the detailed log file with headers."""
@@ -45,28 +82,34 @@ class DataLogger:
     def log_hourly_status(self, timestamp: str, freq: float, source: str,
                          std_freq: Optional[float], kurtosis: Optional[float],
                          sample_count: int, state_info: Optional[Dict[str, Any]] = None):
-        """Log hourly status to CSV."""
+        """Log hourly status to CSV using atomic writes."""
         try:
-            with open(self.hourly_log_file, 'a', newline='') as f:
-                writer = csv.writer(f)
-                if f.tell() == 0:
-                    # Add state machine columns to header
-                    header = ['timestamp', 'frequency_hz', 'source',
-                             'std_dev_hz', 'kurtosis', 'samples_processed',
-                             'power_state', 'state_duration_seconds']
-                    writer.writerow(header)
-
-                # Extract state info
-                power_state = state_info.get('current_state', 'unknown') if state_info else 'unknown'
-                state_duration = state_info.get('state_duration', 0) if state_info else 0
-
-                writer.writerow([
-                    timestamp, f"{freq:.2f}", source,
-                    f"{std_freq:.4f}" if std_freq else "N/A",
-                    f"{kurtosis:.2f}" if kurtosis else "N/A",
-                    sample_count, power_state, f"{state_duration:.1f}"
-                ])
+            # Check if file exists to determine if we need headers
+            file_exists = os.path.exists(self.hourly_log_file)
+            
+            # Prepare data row
+            power_state = state_info.get('current_state', 'unknown') if state_info else 'unknown'
+            state_duration = state_info.get('state_duration', 0) if state_info else 0
+            
+            data_row = [
+                timestamp, f"{freq:.2f}", source,
+                f"{std_freq:.4f}" if std_freq else "N/A",
+                f"{kurtosis:.2f}" if kurtosis else "N/A",
+                sample_count, power_state, f"{state_duration:.1f}"
+            ]
+            
+            # Prepare headers if file doesn't exist
+            headers = None
+            if not file_exists:
+                headers = ['timestamp', 'frequency_hz', 'source',
+                          'std_dev_hz', 'kurtosis', 'samples_processed',
+                          'power_state', 'state_duration_seconds']
+            
+            # Use atomic write
+            self._atomic_write_csv(self.hourly_log_file, [data_row], headers)
+            
             self.logger.info(f"Hourly status logged: {source} at {freq:.2f} Hz, state: {power_state}")
+            
         except Exception as e:
             self.logger.error(f"Failed to log hourly status: {e}")
     
@@ -92,7 +135,7 @@ class DataLogger:
             unix_timestamp = current_time
             elapsed_seconds = current_time - start_time
             
-            row_data = [
+            data_row = [
                 timestamp,
                 time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],  # Include milliseconds
                 f"{unix_timestamp:.3f}",
@@ -107,10 +150,8 @@ class DataLogger:
                 buffer_size
             ]
             
-            # Write to file
-            with open(self.detailed_log_file, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(row_data)
+            # Use atomic write
+            self._atomic_write_csv(self.detailed_log_file, [data_row])
             
             self.last_detailed_log_time = current_time
             

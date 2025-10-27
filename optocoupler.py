@@ -8,8 +8,8 @@ import logging
 import time
 import threading
 import os
+from typing import Optional, Tuple, List, Dict, Any
 import psutil
-from typing import Optional, Tuple, List
 
 # Hardware imports with graceful degradation
 try:
@@ -41,12 +41,30 @@ class SingleOptocoupler:
         self.pulse_count_lock = threading.Lock()
         self.initialized = False
         
+        # Error tracking and recovery
+        self.consecutive_errors = 0
+        self.max_consecutive_errors = config.get('hardware.optocoupler.max_consecutive_errors')
+        self.last_successful_count = 0
+        self.last_health_check = time.time()
+        self.health_check_interval = config.get('hardware.optocoupler.health_check_interval')  # seconds
+        self.recovery_attempts = 0
+        self.max_recovery_attempts = config.get('hardware.optocoupler.max_recovery_attempts')
+        
         # Initialize GIL-safe counter (required)
         self.counter = create_counter(self.logger)
         self.logger.info(f"GIL-safe counter initialized for {self.name}")
         
         if self.gpio_available:
             self._setup_optocoupler()
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup."""
+        self.cleanup()
+        return False  # Don't suppress exceptions
     
     def _setup_optocoupler(self):
         """Setup optocoupler for edge detection using working libgpiod only."""
@@ -93,24 +111,45 @@ class SingleOptocoupler:
             self.logger.warning(f"{self.name} optocoupler not initialized, cannot count pulses")
             return 0
         
+        # Check health before measurement
+        if not self.check_health():
+            self.logger.warning(f"{self.name} optocoupler unhealthy, skipping measurement")
+            return 0
+        
         if duration is None:
             duration = self.measurement_duration
         
-        # Reset counter before measurement
-        self.counter.reset_count(self.pin)
-        
-        # Use libgpiod interrupt counting
-        start_time = time.perf_counter()
-        
-        # Wait for the specified duration - libgpiod handles counting in background
-        time.sleep(duration)
-        
-        # Get final count from libgpiod
-        pulse_count = self.counter.get_count(self.pin)
-        elapsed = time.perf_counter() - start_time
-        
-        self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds (libgpiod)")
-        return pulse_count
+        try:
+            # Reset counter before measurement
+            self.counter.reset_count(self.pin)
+            
+            # Use libgpiod interrupt counting
+            start_time = time.perf_counter()
+            
+            # Wait for the specified duration - libgpiod handles counting in background
+            time.sleep(duration)
+            
+            # Get final count from libgpiod
+            pulse_count = self.counter.get_count(self.pin)
+            elapsed = time.perf_counter() - start_time
+            
+            # Validate pulse count
+            if pulse_count < 0:
+                self.consecutive_errors += 1
+                self.logger.warning(f"{self.name} invalid pulse count: {pulse_count}")
+                return 0
+            
+            # Reset error count on successful measurement
+            self.consecutive_errors = 0
+            self.last_successful_count = pulse_count
+            
+            self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds (libgpiod)")
+            return pulse_count
+            
+        except Exception as e:
+            self.consecutive_errors += 1
+            self.logger.error(f"{self.name} pulse counting error: {e}")
+            return 0
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:
         """
@@ -137,6 +176,74 @@ class SingleOptocoupler:
         
         self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {duration:.2f}s")
         return frequency
+    
+    def check_health(self) -> bool:
+        """Check optocoupler health and attempt recovery if needed."""
+        current_time = time.time()
+        
+        # Only check health periodically
+        if current_time - self.last_health_check < self.health_check_interval:
+            return True
+        
+        self.last_health_check = current_time
+        
+        try:
+            # Perform a quick test read
+            test_count = self.counter.get_count(self.pin)
+            
+            # Check if counter is responding
+            if test_count >= 0:  # Valid count
+                self.consecutive_errors = 0
+                self.logger.debug(f"{self.name} health check passed: count={test_count}")
+                return True
+            else:
+                self.consecutive_errors += 1
+                self.logger.warning(f"{self.name} health check failed: invalid count={test_count}")
+                
+        except Exception as e:
+            self.consecutive_errors += 1
+            self.logger.warning(f"{self.name} health check failed: {e}")
+        
+        # Attempt recovery if too many consecutive errors
+        if self.consecutive_errors >= self.max_consecutive_errors:
+            return self._attempt_recovery()
+        
+        return True
+    
+    def _attempt_recovery(self) -> bool:
+        """Attempt to recover from optocoupler failure."""
+        if self.recovery_attempts >= self.max_recovery_attempts:
+            self.logger.critical(f"{self.name} optocoupler recovery failed after {self.max_recovery_attempts} attempts")
+            return False
+        
+        self.recovery_attempts += 1
+        self.logger.warning(f"{self.name} attempting recovery (attempt {self.recovery_attempts}/{self.max_recovery_attempts})")
+        
+        try:
+            # Reset counter
+            self.counter.reset_count(self.pin)
+            
+            # Re-setup optocoupler
+            self._setup_optocoupler()
+            
+            # Test with a short measurement
+            test_pulses = self.count_optocoupler_pulses(0.5)  # 0.5 second test
+            
+            if test_pulses >= 0:
+                self.consecutive_errors = 0
+                self.logger.info(f"{self.name} recovery successful: {test_pulses} pulses in test")
+                return True
+            else:
+                self.logger.warning(f"{self.name} recovery test failed: {test_pulses} pulses")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"{self.name} recovery attempt failed: {e}")
+            return False
+    
+    def is_healthy(self) -> bool:
+        """Check if optocoupler is currently healthy."""
+        return self.consecutive_errors < self.max_consecutive_errors and self.initialized
     
     def cleanup(self):
         """Cleanup optocoupler resources."""
@@ -190,6 +297,15 @@ class OptocouplerManager:
         
         if self.optocoupler_enabled:
             self._setup_optocouplers()
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup."""
+        self.cleanup()
+        return False  # Don't suppress exceptions
     
     def _setup_optocouplers(self):
         """Setup optocouplers based on configuration."""
@@ -512,6 +628,27 @@ class OptocouplerManager:
     def is_dual_optocoupler_mode(self) -> bool:
         """Check if dual optocoupler mode is enabled (alias for backward compatibility)."""
         return self.dual_mode
+    
+    def check_all_health(self) -> Dict[str, bool]:
+        """Check health of all optocouplers."""
+        health_status = {}
+        for name, optocoupler in self.optocouplers.items():
+            health_status[name] = optocoupler.check_health()
+        return health_status
+    
+    def get_health_status(self) -> Dict[str, Any]:
+        """Get detailed health status of all optocouplers."""
+        status = {}
+        for name, optocoupler in self.optocouplers.items():
+            status[name] = {
+                'healthy': optocoupler.is_healthy(),
+                'initialized': optocoupler.initialized,
+                'consecutive_errors': optocoupler.consecutive_errors,
+                'max_consecutive_errors': optocoupler.max_consecutive_errors,
+                'recovery_attempts': optocoupler.recovery_attempts,
+                'last_successful_count': optocoupler.last_successful_count
+            }
+        return status
     
     def cleanup(self):
         """Cleanup optocoupler resources."""
