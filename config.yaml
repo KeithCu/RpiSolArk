@@ -158,8 +158,9 @@ solark_cloud:
   password: ""              # Your Sol-Ark cloud password
   timeout: 30               # Request timeout in seconds
   retry_attempts: 3         # Number of retry attempts for failed requests
-  cache_pages: true         # Cache downloaded pages to disk
-  cache_dir: "solark_cache" # Directory to store cached pages
+  cache_pages: false         # Cache HTML pages for debugging (disable in production)
+  cache_screenshots: false  # Cache screenshots for debugging (disable in production)
+  cache_dir: "solark_cache" # Directory to store cached pages and screenshots
   headless: false           # Run browser in headless mode
   sync_interval: 300        # Sync interval in seconds (5 minutes)
   session_persistence: true # Save login session to avoid repeated logins

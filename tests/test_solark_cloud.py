@@ -59,37 +59,25 @@ async def test_solark_cloud():
             return False
         print("+ Login successful")
         
-        # Get plants
-        print("Fetching plant list...")
-        plants = await solark.get_plants()
-        if not plants:
-            print("WARNING: No plants found")
-        else:
-            print(f"+ Found {len(plants)} plants:")
-            for i, plant in enumerate(plants, 1):
-                print(f"  {i}. {plant['name']} (ID: {plant['id']})")
+        # Test TOU toggle functionality (core feature)
+        test_inverter_id = "2207079903"  # Example inverter ID
+        print(f"\nTesting TOU toggle for inverter {test_inverter_id}")
         
-        # Select first plant if available
-        if plants:
-            plant = plants[0]
-            print(f"\nSelecting plant: {plant['name']}")
-            if await solark.select_plant(plant['id']):
-                print("+ Plant selected successfully")
-                
-                # Get parameters
-                print("Fetching parameters...")
-                params = await solark.get_parameters()
-                if params:
-                    print(f"+ Found {len(params)} parameters:")
-                    # Show first 10 parameters
-                    for i, (name, value) in enumerate(list(params.items())[:10], 1):
-                        print(f"  {i}. {name}: {value}")
-                    if len(params) > 10:
-                        print(f"  ... and {len(params) - 10} more parameters")
-                else:
-                    print("WARNING: No parameters found")
-            else:
-                print("ERROR: Failed to select plant")
+        # Test enabling TOU
+        print("Testing TOU enable...")
+        result = await solark.toggle_time_of_use(True, test_inverter_id)
+        if result:
+            print("+ TOU enable successful")
+        else:
+            print("ERROR: TOU enable failed")
+        
+        # Test disabling TOU
+        print("Testing TOU disable...")
+        result = await solark.toggle_time_of_use(False, test_inverter_id)
+        if result:
+            print("+ TOU disable successful")
+        else:
+            print("ERROR: TOU disable failed")
         
         # Test sync
         print("\nTesting data sync...")
@@ -103,7 +91,7 @@ async def test_solark_cloud():
         
         # Show cached files
         print(f"\nCached files in {solark.cache_dir}:")
-        cache_files = list(solark.cache_dir.glob("*.html"))
+        cache_files = list(solark.cache_dir.glob("*"))
         if cache_files:
             for file in cache_files:
                 print(f"  - {file.name}")
@@ -147,13 +135,9 @@ async def download_pages_only():
         if not await solark.login():
             return False
         
-        print("Downloading pages...")
-        plants = await solark.get_plants()
-        
-        if plants:
-            plant = plants[0]
-            await solark.select_plant(plant['id'])
-            await solark.get_parameters()
+        print("Testing TOU toggle to generate cached pages...")
+        test_inverter_id = "2207079903"
+        await solark.toggle_time_of_use(True, test_inverter_id)
         
         print(f"Pages saved to: {solark.cache_dir}")
         return True

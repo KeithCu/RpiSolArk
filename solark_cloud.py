@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 import asyncio
-import psutil
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
 
 
@@ -67,6 +66,7 @@ class SolArkCloud:
         self.retry_attempts = self.solark_config['retry_attempts']
         self.headless = self.solark_config['headless']
         self.cache_pages = self.solark_config['cache_pages']
+        self.cache_screenshots = self.solark_config.get('cache_screenshots', False)
         self.session_persistence = self.solark_config['session_persistence']
         self.session_file = self.solark_config['session_file']
         self.session_timeout = self.solark_config['session_timeout']
@@ -193,6 +193,7 @@ class SolArkCloud:
             # Save login page for analysis
             if self.cache_pages:
                 await self._save_page_to_cache("login.html")
+            await self._save_screenshot_to_cache("login.png")
             
             # Fill login form
             # Email field (no name attribute, just placeholder)
@@ -274,6 +275,7 @@ class SolArkCloud:
                 # Save dashboard page
                 if self.cache_pages:
                     await self._save_page_to_cache("dashboard.html")
+                await self._save_screenshot_to_cache("dashboard.png")
                 
                 return True
             except PlaywrightTimeoutError:
@@ -307,6 +309,22 @@ class SolArkCloud:
             self.logger.debug(f"Saved page to cache: {cache_file}")
         except Exception as e:
             self.logger.error(f"Failed to save page to cache: {e}")
+    
+    async def _save_screenshot_to_cache(self, filename: str):
+        """Save current page screenshot to cache directory"""
+        if not self.cache_screenshots:
+            return
+        
+        try:
+            # Ensure filename has .png extension
+            if not filename.endswith('.png'):
+                filename = filename.replace('.html', '.png')
+            
+            screenshot_file = self.cache_dir / filename
+            await self.page.screenshot(path=str(screenshot_file))
+            self.logger.debug(f"Saved screenshot to cache: {screenshot_file}")
+        except Exception as e:
+            self.logger.error(f"Failed to save screenshot to cache: {e}")
     
     async def _save_session(self):
         """Save current session data to file"""
@@ -475,282 +493,16 @@ class SolArkCloud:
             self.logger.warning(f"Failed to clear session: {e}")
     
     async def _is_logged_in(self) -> bool:
-        """Check if currently logged in by looking for Sol-Ark specific login indicators"""
+        """Check if currently logged in by looking for login page in URL"""
         try:
             current_url = self.page.url
-            if '/login' in current_url:
-                return False
-            
-            # Look for Sol-Ark specific elements that indicate we're logged in
-            logged_in_indicators = [
-                # User dropdown with email in top-right
-                '.el-dropdown-link .font16',  # Email text in user dropdown
-                'span.font16',  # Email span
-                # User avatar image
-                '.titleImg img',  # User avatar
-                # Logout option in dropdown
-                'a[href="/logout"]',  # Logout link
-                '.el-dropdown-menu__item:has-text("Logout")',  # Logout menu item
-                # Sol-Ark specific navigation elements
-                '.el-menu-vertical-demo',  # Main navigation menu
-                '.menutop img[src*="logo"]',  # Sol-Ark logo
-                # Equipment/Inverter page elements
-                '.device-list',  # Device list on inverter page
-                '.el-table__body'  # Inverter table
-            ]
-            
-            for indicator in logged_in_indicators:
-                try:
-                    element = await self.page.query_selector(indicator)
-                    if element and await element.is_visible():
-                        self.logger.debug(f"Found logged-in indicator: {indicator}")
-                        return True
-                except:
-                    continue
-            
-            # If we're on Sol-Ark pages that require login, check for specific content
-            if any(path in current_url for path in ['/device/inverter', '/plants', '/dashboard', '/overview']):
-                # Check if we can see Sol-Ark specific content
-                try:
-                    # Look for the main Sol-Ark interface elements
-                    main_content = await self.page.query_selector('.el-container')
-                    if main_content and await main_content.is_visible():
-                        self.logger.debug("Found main Sol-Ark interface - assuming logged in")
-                        return True
-                except:
-                    pass
-            
-            return False
+            return '/login' not in current_url and 'signin' not in current_url
         except Exception as e:
             self.logger.debug(f"Error checking login status: {e}")
             return False
     
-    def get_browser_memory_usage(self) -> Dict[str, Any]:
-        """Get memory usage information for browser processes"""
-        try:
-            current_process = psutil.Process()
-            process_memory = current_process.memory_info()
-            
-            # Find browser processes (Chrome/Chromium)
-            browser_processes = []
-            total_browser_memory = 0
-            
-            for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
-                try:
-                    proc_info = proc.info
-                    if proc_info['name'] and any(browser in proc_info['name'].lower() 
-                                               for browser in ['chrome', 'chromium', 'playwright']):
-                        memory_mb = proc_info['memory_info'].rss / 1024 / 1024
-                        browser_processes.append({
-                            'pid': proc_info['pid'],
-                            'name': proc_info['name'],
-                            'memory_mb': round(memory_mb, 2)
-                        })
-                        total_browser_memory += memory_mb
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            return {
-                'main_process_memory_mb': round(process_memory.rss / 1024 / 1024, 2),
-                'browser_processes': browser_processes,
-                'total_browser_memory_mb': round(total_browser_memory, 2),
-                'total_memory_mb': round((process_memory.rss / 1024 / 1024) + total_browser_memory, 2)
-            }
-        except Exception as e:
-            self.logger.error(f"Failed to get browser memory usage: {e}")
-            return {}
     
-    async def get_plants(self) -> List[Dict[str, Any]]:
-        """
-        Get list of available plants
-        
-        Returns:
-            List of plant information dictionaries
-        """
-        if not self.is_logged_in:
-            self.logger.error("Not logged in")
-            return []
-        
-        try:
-            self.logger.info("Fetching plant list...")
-            
-            # Start from current page (where login redirected us)
-            current_url = self.page.url
-            self.logger.info(f"Starting from current page: {current_url}")
-            
-            # If we're not on the plants page, navigate to it
-            if '/plants' not in current_url:
-                self.logger.info("Navigating to plants page...")
-                await self.page.goto(f"{self.base_url}/plants")
-                await self.page.wait_for_load_state('networkidle')
-                current_url = self.page.url
-                self.logger.info(f"Now on: {current_url}")
-            else:
-                # Wait for the page to be fully loaded
-                await self.page.wait_for_load_state('networkidle')
-            
-            # Save plants page
-            if self.cache_pages:
-                await self._save_page_to_cache("plants_dashboard.html")
-            
-            # Look for plant elements or create from current page
-            plants = []
-            
-            # If we're on a plant page, create a plant entry from the current page
-            if '/plants' in current_url:
-                import re
-                # Try different URL patterns
-                url_match = re.search(r'/plants/overview/(\d+)/(\d+)', current_url)
-                if url_match:
-                    plant_id = f"{url_match.group(1)}_{url_match.group(2)}"
-                else:
-                    # If we're just on /plants, try to find plant info from the page
-                    plant_id = "default_plant"
-                
-                # Try to get plant name from the page
-                plant_name = "Unknown Plant"
-                try:
-                    # Look for plant name in various places
-                    name_selectors = [
-                        '.breadcrumb .breadcrumb',
-                        '.plant-info .name',
-                        '.plant-name',
-                        'h1',
-                        'h2',
-                        '.title'
-                    ]
-                    
-                    for selector in name_selectors:
-                        name_element = await self.page.query_selector(selector)
-                        if name_element:
-                            name_text = await name_element.text_content()
-                            if name_text and len(name_text.strip()) > 0:
-                                plant_name = name_text.strip()
-                                break
-                except Exception as e:
-                    self.logger.debug(f"Could not extract plant name: {e}")
-                
-                # Create a virtual element for the current plant
-                plants.append({
-                    'id': plant_id,
-                    'name': plant_name,
-                    'element': None,  # No specific element since we're on the overview page
-                    'selector': 'current_page',
-                    'attributes': {'url': current_url}
-                })
-                
-                self.logger.info(f"Created plant entry from current page: {plant_name} (ID: {plant_id})")
-            
-            # If no plants found from current page, try to find plant elements
-            if not plants:
-                # Try different selectors for plant elements
-                plant_selectors = [
-                    '.plant-item',
-                    '.plant-card',
-                    '.device-item',
-                    '.inverter-item',
-                    '[data-plant-id]',
-                    '.plant-list .item',
-                    '.device-list .item',
-                    '.card',
-                    '.list-item',
-                    '[class*="plant"]',
-                    '[class*="device"]',
-                    '[class*="inverter"]'
-                ]
-                
-                for selector in plant_selectors:
-                    plant_elements = await self.page.query_selector_all(selector)
-                    if plant_elements:
-                        self.logger.info(f"Found {len(plant_elements)} elements with selector: {selector}")
-                        for element in plant_elements:
-                            try:
-                                plant_id = await element.get_attribute('data-plant-id')
-                                if not plant_id:
-                                    plant_id = await element.get_attribute('data-device-id')
-                                if not plant_id:
-                                    plant_id = await element.get_attribute('data-id')
-                                
-                                plant_name = await element.text_content()
-                                if plant_name:
-                                    plant_name = plant_name.strip()
-                                
-                                # Get all attributes for debugging
-                                all_attrs = {}
-                                try:
-                                    attrs = await self.page.evaluate('(element) => { const attrs = {}; for (let attr of element.attributes) { attrs[attr.name] = attr.value; } return attrs; }', element)
-                                    all_attrs = attrs
-                                except:
-                                    pass
-                                
-                                if plant_name and len(plant_name) > 0:
-                                    plants.append({
-                                        'id': plant_id or f"unknown_{len(plants)}",
-                                        'name': plant_name,
-                                        'element': element,
-                                        'selector': selector,
-                                        'attributes': all_attrs
-                                    })
-                            except Exception as e:
-                                self.logger.debug(f"Error parsing plant element: {e}")
-                                continue
-                        
-                        if plants:
-                            break
-            
-            self.logger.info(f"Found {len(plants)} plants")
-            return plants
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get plants: {e}")
-            return []
     
-    async def select_plant(self, plant_id: str = None) -> bool:
-        """
-        Select a specific plant
-        
-        Args:
-            plant_id: Plant ID to select (uses configured plant_id if None)
-            
-        Returns:
-            bool: True if plant selected successfully
-        """
-        if not plant_id:
-            plant_id = self.plant_id
-        
-        if not plant_id:
-            self.logger.error("No plant ID provided")
-            return False
-        
-        try:
-            self.logger.info(f"Selecting plant: {plant_id}")
-            
-            # Navigate directly to the plant's overview page
-            # URL pattern: https://www.solarkcloud.com/plants/overview/{plant_id}/2
-            plant_url = f"{self.base_url}/plants/overview/{plant_id}/2"
-            
-            self.logger.info(f"Navigating to plant URL: {plant_url}")
-            await self.page.goto(plant_url)
-            await self.page.wait_for_load_state('networkidle')
-            
-            # Verify we're on the correct plant page
-            current_url = self.page.url
-            if plant_id in current_url:
-                self.current_plant_id = plant_id
-                self.logger.info(f"Successfully selected plant {plant_id}")
-                
-                # Save plant page
-                if self.cache_pages:
-                    await self._save_page_to_cache(f"plant_{plant_id}.html")
-                
-                return True
-            else:
-                self.logger.error(f"Failed to navigate to plant {plant_id}. Current URL: {current_url}")
-                return False
-            
-        except Exception as e:
-            self.logger.error(f"Failed to select plant {plant_id}: {e}")
-            return False
     
     async def get_parameters(self) -> Dict[str, Any]:
         """
@@ -1031,6 +783,9 @@ class SolArkCloud:
                 f.write(html_content)
             self.logger.info(f"Downloaded rendered HTML to: {html_file}")
             
+            # Save screenshot of inverter page
+            await self._save_screenshot_to_cache(f"inverter_page_{inverter_id}.png")
+            
             # Verify we're on the correct page
             current_url = self.page.url
             if 'device/inverter' in current_url:
@@ -1166,6 +921,9 @@ class SolArkCloud:
             
             self.logger.info(f"Successfully navigated to parameters page for inverter {inverter_id}")
             
+            # Save screenshot of parameters page
+            await self._save_screenshot_to_cache(f"parameters_page_{inverter_id}.png")
+            
             # Wait for parameters page to load and look for iframe
             self.logger.info("Waiting for parameters page to load...")
             await asyncio.sleep(3)  # Wait for content to load
@@ -1273,6 +1031,9 @@ class SolArkCloud:
                         is_checked = await checkbox.is_checked()
                         self.logger.info(f"TOU switch current state: {'ON' if is_checked else 'OFF'}")
                         
+                        # Save screenshot before TOU toggle
+                        await self._save_screenshot_to_cache(f"tou_before_{inverter_id}.png")
+                        
                         # Toggle the TOU switch if needed
                         if (enable and not is_checked) or (not enable and is_checked):
                             self.logger.info("Toggling TOU switch...")
@@ -1292,6 +1053,9 @@ class SolArkCloud:
                             # Check new state
                             new_state = await checkbox.is_checked()
                             self.logger.info(f"TOU switch new state: {'ON' if new_state else 'OFF'}")
+                            
+                            # Save screenshot after TOU toggle
+                            await self._save_screenshot_to_cache(f"tou_after_{inverter_id}.png")
                             
                             if new_state != is_checked:
                                 self.logger.info("TOU switch successfully toggled!")
@@ -1425,7 +1189,7 @@ class SolArkCloud:
 
     def toggle_time_of_use_sync(self, enable: bool, inverter_id: str) -> bool:
         """
-        Synchronous wrapper for toggle_time_of_use
+        Synchronous Time of Use toggle - calls async method synchronously
         
         Args:
             enable: True to enable TOU, False to disable
@@ -1450,7 +1214,7 @@ class SolArkCloud:
 
     def apply_parameter_changes_sync(self, changes: Dict[str, Any], inverter_id: str = None) -> bool:
         """
-        Synchronous wrapper for apply_parameter_changes
+        Synchronous parameter changes - calls async method synchronously
         
         Args:
             changes: Dictionary of parameter changes
@@ -1496,14 +1260,11 @@ class SolArkCloud:
                 if not await self.login():
                     return False
             
-            if not self.current_plant_id:
-                if not await self.select_plant():
-                    return False
             
             # Get current parameters for backup
             if self.solark_config['parameter_changes']['backup_before_change']:
                 current_params = await self.get_parameters()
-                backup_file = self.cache_dir / f"backup_{self.current_plant_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                backup_file = self.cache_dir / f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
                 with open(backup_file, 'w') as f:
                     json.dump(current_params, f, indent=2)
                 self.logger.info(f"Backup saved to {backup_file}")
@@ -1536,90 +1297,6 @@ class SolArkCloud:
             self.logger.error(f"Failed to apply parameter changes: {e}")
             return False
     
-    async def interactive_explore(self):
-        """
-        Interactive exploration mode - keeps browser open for manual navigation
-        """
-        if not self.is_logged_in:
-            self.logger.error("Not logged in")
-            return False
-        
-        try:
-            self.logger.info("Starting interactive exploration mode...")
-            self.logger.info("Browser will stay open for manual navigation")
-            self.logger.info("Press Ctrl+C to exit")
-            
-            # Get current page info
-            current_url = self.page.url
-            page_title = await self.page.title()
-            self.logger.info(f"Current page: {page_title} - {current_url}")
-            
-            # Save current page
-            if self.cache_pages:
-                await self._save_page_to_cache("interactive_explore.html")
-            
-            # Keep browser open and wait for user input
-            import asyncio
-            while True:
-                try:
-                    await asyncio.sleep(1)
-                    # Check if page changed
-                    new_url = self.page.url
-                    if new_url != current_url:
-                        current_url = new_url
-                        page_title = await self.page.title()
-                        self.logger.info(f"Page changed to: {page_title} - {current_url}")
-                        
-                        # Save the new page
-                        if self.cache_pages:
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            await self._save_page_to_cache(f"explore_{timestamp}.html")
-                except KeyboardInterrupt:
-                    self.logger.info("Interactive exploration ended by user")
-                    break
-                except Exception as e:
-                    self.logger.error(f"Error in interactive mode: {e}")
-                    break
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Interactive exploration failed: {e}")
-            return False
-    
-    async def explore_plants_interactive(self):
-        """
-        Login, get plants, and start interactive exploration
-        """
-        try:
-            # Initialize browser
-            if not await self.initialize():
-                return False
-            
-            # Login
-            if not await self.login():
-                return False
-            
-            # Get plants
-            plants = await self.get_plants()
-            if plants:
-                self.logger.info(f"Found {len(plants)} plants:")
-                for i, plant in enumerate(plants, 1):
-                    self.logger.info(f"  {i}. {plant['name']} (ID: {plant['id']})")
-            else:
-                self.logger.info("No plants found - starting interactive exploration")
-            
-            # Start interactive mode
-            await self.interactive_explore()
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Plant exploration failed: {e}")
-            return False
-        finally:
-            # Don't cleanup automatically in interactive mode
-            pass
 
 
 # Example usage and testing
@@ -1630,50 +1307,39 @@ async def main():
     solark = SolArkCloud()
     
     try:
-        # Check if interactive mode is requested
-        if len(sys.argv) > 1 and sys.argv[1] == "--interactive":
-            print("Starting interactive plant exploration...")
-            await solark.explore_plants_interactive()
-        else:
-            # Standard test mode
-            # Initialize browser
-            if not await solark.initialize():
-                print("Failed to initialize browser")
-                return
-            
-            # Login
-            if not await solark.login():
-                print("Login failed")
-                return
-            
-            # Get plants
-            plants = await solark.get_plants()
-            print(f"Found {len(plants)} plants:")
-            for plant in plants:
-                print(f"  - {plant['name']} (ID: {plant['id']})")
-            
-            # Select first plant if available
-            if plants:
-                plant_id = plants[0]['id']
-                if await solark.select_plant(plant_id):
-                    # Get parameters
-                    params = await solark.get_parameters()
-                    print(f"Found {len(params)} parameters:")
-                    for name, value in list(params.items())[:10]:  # Show first 10
-                        print(f"  - {name}: {value}")
-            
-            # Sync data
-            sync_result = await solark.sync_data()
-            print(f"Sync result: {sync_result}")
+        # Initialize browser
+        if not await solark.initialize():
+            print("Failed to initialize browser")
+            return
+        
+        # Login
+        if not await solark.login():
+            print("Login failed")
+            return
+        
+        # Test TOU toggle functionality
+        test_inverter_id = "2207079903"  # Example inverter ID
+        print(f"Testing TOU toggle for inverter {test_inverter_id}")
+        
+        # Test enabling TOU
+        result = await solark.toggle_time_of_use(True, test_inverter_id)
+        print(f"TOU enable result: {result}")
+        
+        # Test disabling TOU
+        result = await solark.toggle_time_of_use(False, test_inverter_id)
+        print(f"TOU disable result: {result}")
+        
+        # Sync data
+        sync_result = await solark.sync_data()
+        print(f"Sync result: {sync_result}")
         
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        if len(sys.argv) <= 1 or sys.argv[1] != "--interactive":
-            try:
-                await solark.cleanup()
-            except Exception:
-                pass  # Ignore cleanup errors
+        try:
+            await solark.cleanup()
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 if __name__ == "__main__":
