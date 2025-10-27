@@ -12,11 +12,11 @@ import json
 import time
 import logging
 import yaml
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
-import asyncio
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
 
 
 class SolArkCloudError(Exception):
@@ -57,6 +57,7 @@ class SolArkCloud:
         # State tracking
         self.is_logged_in = False
         self.last_sync = None
+        self.current_plant_id = None  # Will be set when needed
         
         # Configuration
         self.base_url = self.solark_config['base_url']
@@ -82,7 +83,7 @@ class SolArkCloud:
         except Exception as e:
             raise SolArkCloudError(f"Failed to load config: {e}")
     
-    async def initialize(self) -> bool:
+    def initialize(self) -> bool:
         """
         Initialize browser and context
         
@@ -92,19 +93,19 @@ class SolArkCloud:
         try:
             self.logger.info("Initializing Sol-Ark Cloud browser...")
             
-            playwright = await async_playwright().start()
-            self.browser = await playwright.chromium.launch(
+            playwright = sync_playwright().start()
+            self.browser = playwright.chromium.launch(
                 headless=self.headless,
                 args=['--no-sandbox', '--disable-dev-shm-usage']
             )
             
-            self.context = await self.browser.new_context(
+            self.context = self.browser.new_context(
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 #                viewport={'width': 1920, 'height': 1080},
                 java_script_enabled=True
             )
             
-            self.page = await self.context.new_page()
+            self.page = self.context.new_page()
             
             # Set default timeout
             self.page.set_default_timeout(self.timeout)
@@ -116,19 +117,19 @@ class SolArkCloud:
             self.logger.error(f"Failed to initialize browser: {e}")
             return False
     
-    async def cleanup(self):
+    def cleanup(self):
         """Cleanup browser resources"""
         try:
             # Save session before closing browser
             if self.is_logged_in and self.session_persistence:
-                await self._save_session()
+                self._save_session()
             
             if self.page:
-                await self.page.close()
+                self.page.close()
             if self.context:
-                await self.context.close()
+                self.context.close()
             if self.browser:
-                await self.browser.close()
+                self.browser.close()
             self.logger.info("Browser cleanup completed")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
@@ -139,7 +140,7 @@ class SolArkCloud:
             self.browser = None
             self.is_logged_in = False
     
-    async def login(self) -> bool:
+    def login(self) -> bool:
         """
         Login to Sol-Ark cloud platform
         
@@ -152,7 +153,7 @@ class SolArkCloud:
         
         # Initialize browser if not already done
         if not self.page:
-            if not await self.initialize():
+            if not self.initialize():
                 self.logger.error("Failed to initialize browser")
                 return False
         
@@ -162,9 +163,9 @@ class SolArkCloud:
                 session_data = self._load_session()
                 if session_data:
                     self.logger.info("Attempting to restore existing session...")
-                    if await self._restore_session(session_data):
+                    if self._restore_session(session_data):
                         # Verify we're actually logged in
-                        if await self._is_logged_in():
+                        if self._is_logged_in():
                             self.is_logged_in = True
                             self.logger.info("Successfully restored session - no login needed")
                             return True
@@ -177,8 +178,8 @@ class SolArkCloud:
             
             # Navigate directly to inverter page - if not logged in, will redirect to login
             inverter_url = f"{self.base_url}/device/inverter"
-            await self.page.goto(inverter_url)
-            await self.page.wait_for_load_state('networkidle')
+            self.page.goto(inverter_url)
+            self.page.wait_for_load_state('networkidle')
             
             # Check if we got redirected to login page
             current_url = self.page.url
@@ -188,18 +189,18 @@ class SolArkCloud:
                 return True
             
             # Wait for JavaScript to load and form elements to be ready
-            await self.page.wait_for_selector('input[placeholder="Please input your E-mail"]', timeout=10000)
+            self.page.wait_for_selector('input[placeholder="Please input your E-mail"]', timeout=10000)
             
             # Save login page for analysis
             if self.cache_pages:
-                await self._save_page_to_cache("login.html")
-            await self._save_screenshot_to_cache("login.png")
+                self._save_page_to_cache("login.html")
+            self._save_screenshot_to_cache("login.png")
             
             # Fill login form
             # Email field (no name attribute, just placeholder)
-            await self.page.fill('input[placeholder="Please input your E-mail"]', self.username)
+            self.page.fill('input[placeholder="Please input your E-mail"]', self.username)
             # Password field
-            await self.page.fill('input[name="txtPassword"]', self.password)
+            self.page.fill('input[name="txtPassword"]', self.password)
             
             # Check the terms agreement checkbox (required to enable login button)
             # Try different approaches to find and check the checkbox
@@ -215,46 +216,46 @@ class SolArkCloud:
             
             for selector in checkbox_selectors:
                 try:
-                    terms_checkbox = await self.page.query_selector(selector)
+                    terms_checkbox = self.page.query_selector(selector)
                     if terms_checkbox:
                         # Check if it's visible
-                        is_visible = await terms_checkbox.is_visible()
+                        is_visible = terms_checkbox.is_visible()
                         if is_visible:
                             break
                         else:
                             # Try to make it visible by clicking the label
-                            label = await self.page.query_selector('label.el-checkbox')
+                            label = self.page.query_selector('label.el-checkbox')
                             if label:
-                                await label.click()
+                                label.click()
                                 break
                 except Exception:
                     continue
             
             if terms_checkbox:
                 try:
-                    await terms_checkbox.check()
+                    terms_checkbox.check()
                     self.logger.info("Terms checkbox checked")
                 except Exception as e:
                     self.logger.warning(f"Could not check terms checkbox: {e}")
                     # Try clicking the label instead
                     try:
-                        label = await self.page.query_selector('label.el-checkbox')
+                        label = self.page.query_selector('label.el-checkbox')
                         if label:
-                            await label.click()
+                            label.click()
                             self.logger.info("Terms checkbox clicked via label")
                     except Exception as e2:
                         self.logger.warning(f"Could not click terms checkbox label: {e2}")
                 
                 # Wait a moment for the button to become enabled
-                await self.page.wait_for_timeout(1000)
+                self.page.wait_for_timeout(1000)
             
             # Look for and click login button
-            login_button = await self.page.query_selector('button:has-text("Log In")')
+            login_button = self.page.query_selector('button:has-text("Log In")')
             if login_button:
                 # Check if button is enabled
-                is_disabled = await login_button.get_attribute('disabled')
+                is_disabled = login_button.get_attribute('disabled')
                 if not is_disabled:
-                    await login_button.click()
+                    login_button.click()
                 else:
                     self.logger.error("Login button is disabled - terms agreement may not be checked")
                     return False
@@ -264,18 +265,18 @@ class SolArkCloud:
             
             # Wait for navigation or success indicator
             try:
-                await self.page.wait_for_url(f"{self.base_url}/dashboard", timeout=10000)
+                self.page.wait_for_url(f"{self.base_url}/dashboard", timeout=10000)
                 self.is_logged_in = True
                 self.logger.info("Login successful")
                 
                 # Save session after successful login
                 if self.session_persistence:
-                    await self._save_session()
+                    self._save_session()
                 
                 # Save dashboard page
                 if self.cache_pages:
-                    await self._save_page_to_cache("dashboard.html")
-                await self._save_screenshot_to_cache("dashboard.png")
+                    self._save_page_to_cache("dashboard.html")
+                self._save_screenshot_to_cache("dashboard.png")
                 
                 return True
             except PlaywrightTimeoutError:
@@ -291,7 +292,7 @@ class SolArkCloud:
                     
                     # Save session after successful login
                     if self.session_persistence:
-                        await self._save_session()
+                        self._save_session()
                     
                     return True
                     
@@ -299,10 +300,10 @@ class SolArkCloud:
             self.logger.error(f"Login failed: {e}")
             return False
     
-    async def _save_page_to_cache(self, filename: str):
+    def _save_page_to_cache(self, filename: str):
         """Save current page content to cache directory"""
         try:
-            content = await self.page.content()
+            content = self.page.content()
             cache_file = self.cache_dir / filename
             with open(cache_file, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -310,7 +311,7 @@ class SolArkCloud:
         except Exception as e:
             self.logger.error(f"Failed to save page to cache: {e}")
     
-    async def _save_screenshot_to_cache(self, filename: str):
+    def _save_screenshot_to_cache(self, filename: str):
         """Save current page screenshot to cache directory"""
         if not self.cache_screenshots:
             return
@@ -321,22 +322,22 @@ class SolArkCloud:
                 filename = filename.replace('.html', '.png')
             
             screenshot_file = self.cache_dir / filename
-            await self.page.screenshot(path=str(screenshot_file))
+            self.page.screenshot(path=str(screenshot_file))
             self.logger.debug(f"Saved screenshot to cache: {screenshot_file}")
         except Exception as e:
             self.logger.error(f"Failed to save screenshot to cache: {e}")
     
-    async def _save_session(self):
+    def _save_session(self):
         """Save current session data to file"""
         if not self.session_persistence or not self.context:
             return
         
         try:
             # Get cookies from the current context
-            cookies = await self.context.cookies()
+            cookies = self.context.cookies()
             
             # Also try to get cookies from the current page
-            page_cookies = await self.page.context.cookies()
+            page_cookies = self.page.context.cookies()
             
             # Use page cookies if context cookies are empty
             if not cookies and page_cookies:
@@ -348,9 +349,9 @@ class SolArkCloud:
             try:
                 if self.page:
                     # Get localStorage data
-                    local_storage = await self.page.evaluate("() => { return {...localStorage}; }")
+                    local_storage = self.page.evaluate("() => { return {...localStorage}; }")
                     # Get sessionStorage data  
-                    session_storage = await self.page.evaluate("() => { return {...sessionStorage}; }")
+                    session_storage = self.page.evaluate("() => { return {...sessionStorage}; }")
             except Exception as e:
                 self.logger.debug(f"Could not capture storage data: {e}")
             
@@ -406,7 +407,7 @@ class SolArkCloud:
             self.logger.warning(f"Failed to load session: {e}")
             return None
     
-    async def _restore_session(self, session_data: Dict[str, Any]) -> bool:
+    def _restore_session(self, session_data: Dict[str, Any]) -> bool:
         """Restore session from saved data"""
         try:
             if not self.context:
@@ -423,12 +424,12 @@ class SolArkCloud:
             
             # Set cookies if available
             if cookies:
-                await self.context.add_cookies(cookies)
+                self.context.add_cookies(cookies)
                 self.logger.info(f"Restored {len(cookies)} cookies to browser context")
             
             # Navigate to base URL first
-            await self.page.goto(self.base_url)
-            await self.page.wait_for_load_state('networkidle')
+            self.page.goto(self.base_url)
+            self.page.wait_for_load_state('networkidle')
             
             # Restore localStorage and sessionStorage if available
             if local_storage or session_storage:
@@ -436,24 +437,24 @@ class SolArkCloud:
                     # Restore localStorage
                     if local_storage:
                         for key, value in local_storage.items():
-                            await self.page.evaluate(f"localStorage.setItem('{key}', '{value}')")
+                            self.page.evaluate(f"localStorage.setItem('{key}', '{value}')")
                         self.logger.info(f"Restored {len(local_storage)} localStorage items")
                     
                     # Restore sessionStorage
                     if session_storage:
                         for key, value in session_storage.items():
-                            await self.page.evaluate(f"sessionStorage.setItem('{key}', '{value}')")
+                            self.page.evaluate(f"sessionStorage.setItem('{key}', '{value}')")
                         self.logger.info(f"Restored {len(session_storage)} sessionStorage items")
                     
                     # Refresh the page to apply storage changes
-                    await self.page.reload()
-                    await self.page.wait_for_load_state('networkidle')
+                    self.page.reload()
+                    self.page.wait_for_load_state('networkidle')
                     
                 except Exception as e:
                     self.logger.warning(f"Failed to restore storage data: {e}")
             
             # Wait a moment for the page to fully load
-            await asyncio.sleep(2)
+            time.sleep(2)
             
             # Check if we're still logged in by looking for login indicators
             current_url = self.page.url
@@ -463,9 +464,9 @@ class SolArkCloud:
             
             # Additional check - try to navigate to a protected page
             try:
-                await self.page.goto(f"{self.base_url}/device/inverter")
-                await self.page.wait_for_load_state('networkidle')
-                await asyncio.sleep(1)
+                self.page.goto(f"{self.base_url}/device/inverter")
+                self.page.wait_for_load_state('networkidle')
+                time.sleep(1)
                 
                 # Check if we're redirected to login
                 if '/login' in self.page.url:
@@ -492,7 +493,7 @@ class SolArkCloud:
         except Exception as e:
             self.logger.warning(f"Failed to clear session: {e}")
     
-    async def _is_logged_in(self) -> bool:
+    def _is_logged_in(self) -> bool:
         """Check if currently logged in by looking for login page in URL"""
         try:
             current_url = self.page.url
@@ -504,7 +505,7 @@ class SolArkCloud:
     
     
     
-    async def get_parameters(self) -> Dict[str, Any]:
+    def get_parameters(self) -> Dict[str, Any]:
         """
         Get current parameters from the selected plant
         
@@ -528,47 +529,47 @@ class SolArkCloud:
             
             for url in param_urls:
                 try:
-                    await self.page.goto(url)
-                    await self.page.wait_for_load_state('networkidle')
+                    self.page.goto(url)
+                    self.page.wait_for_load_state('networkidle')
                     
                     # Check if page loaded successfully (not 404)
-                    if "404" not in await self.page.content():
+                    if "404" not in self.page.content():
                         break
                 except Exception:
                     continue
             
             # Save parameters page
             if self.cache_pages:
-                await self._save_page_to_cache(f"parameters_{self.current_plant_id}.html")
+                self._save_page_to_cache(f"parameters_{self.current_plant_id}.html")
             
             # Extract parameters from the page
             parameters = {}
             
             # Look for form inputs, selects, and other parameter elements
-            form_elements = await self.page.query_selector_all('input, select, textarea')
+            form_elements = self.page.query_selector_all('input, select, textarea')
             
             for element in form_elements:
                 try:
-                    name = await element.get_attribute('name')
-                    element_type = await element.get_attribute('type')
-                    element_id = await element.get_attribute('id')
+                    name = element.get_attribute('name')
+                    element_type = element.get_attribute('type')
+                    element_id = element.get_attribute('id')
                     
                     if name or element_id:
                         param_name = name or element_id
                         
                         if element_type in ['text', 'number', 'email', 'tel']:
-                            value = await element.input_value()
+                            value = element.input_value()
                         elif element_type == 'checkbox':
-                            value = await element.is_checked()
+                            value = element.is_checked()
                         elif element_type == 'radio':
-                            if await element.is_checked():
-                                value = await element.get_attribute('value')
+                            if element.is_checked():
+                                value = element.get_attribute('value')
                             else:
                                 continue
                         elif element.tag_name == 'select':
-                            value = await element.input_value()
+                            value = element.input_value()
                         else:
-                            value = await element.input_value()
+                            value = element.input_value()
                         
                         parameters[param_name] = value
                         
@@ -583,7 +584,7 @@ class SolArkCloud:
             self.logger.error(f"Failed to get parameters: {e}")
             return {}
     
-    async def set_parameter(self, param_name: str, value: Any) -> bool:
+    def set_parameter(self, param_name: str, value: Any) -> bool:
         """
         Set a specific parameter value
         
@@ -602,28 +603,28 @@ class SolArkCloud:
             self.logger.info(f"Setting parameter {param_name} = {value}")
             
             # Find the parameter element
-            element = await self.page.query_selector(f'[name="{param_name}"], #{param_name}')
+            element = self.page.query_selector(f'[name="{param_name}"], #{param_name}')
             
             if not element:
                 self.logger.error(f"Parameter {param_name} not found")
                 return False
             
-            element_type = await element.get_attribute('type')
+            element_type = element.get_attribute('type')
             
             # Set the value based on element type
             if element_type in ['text', 'number', 'email', 'tel']:
-                await element.fill(str(value))
+                element.fill(str(value))
             elif element_type == 'checkbox':
                 if value:
-                    await element.check()
+                    element.check()
                 else:
-                    await element.uncheck()
+                    element.uncheck()
             elif element_type == 'radio':
-                await element.check()
+                element.check()
             elif element.tag_name == 'select':
-                await element.select_option(str(value))
+                element.select_option(str(value))
             else:
-                await element.fill(str(value))
+                element.fill(str(value))
             
             self.logger.info(f"Parameter {param_name} set to {value}")
             return True
@@ -632,7 +633,7 @@ class SolArkCloud:
             self.logger.error(f"Failed to set parameter {param_name}: {e}")
             return False
     
-    async def save_parameters(self) -> bool:
+    def save_parameters(self) -> bool:
         """
         Save current parameter changes
         
@@ -655,7 +656,7 @@ class SolArkCloud:
             
             save_button = None
             for selector in save_selectors:
-                save_button = await self.page.query_selector(selector)
+                save_button = self.page.query_selector(selector)
                 if save_button:
                     break
             
@@ -664,11 +665,11 @@ class SolArkCloud:
                 return False
             
             # Click save button
-            await save_button.click()
+            save_button.click()
             
             # Wait for save confirmation or navigation
             try:
-                await self.page.wait_for_load_state('networkidle', timeout=10000)
+                self.page.wait_for_load_state('networkidle', timeout=10000)
                 self.logger.info("Parameters saved successfully")
                 return True
             except PlaywrightTimeoutError:
@@ -681,7 +682,7 @@ class SolArkCloud:
                 ]
                 
                 for indicator in success_indicators:
-                    if await self.page.query_selector(indicator):
+                    if self.page.query_selector(indicator):
                         self.logger.info("Parameters saved successfully (success message found)")
                         return True
                 
@@ -692,7 +693,7 @@ class SolArkCloud:
             self.logger.error(f"Failed to save parameters: {e}")
             return False
     
-    async def sync_data(self) -> Dict[str, Any]:
+    def sync_data(self) -> Dict[str, Any]:
         """
         Sync data with Sol-Ark cloud
         
@@ -707,11 +708,11 @@ class SolArkCloud:
             self.logger.info("Starting Sol-Ark cloud sync...")
             
             if not self.is_logged_in:
-                if not await self.login():
+                if not self.login():
                     return {'status': 'error', 'message': 'Login failed'}
             
             # Get current parameters
-            parameters = await self.get_parameters()
+            parameters = self.get_parameters()
             
             sync_result = {
                 'status': 'success',
@@ -730,7 +731,7 @@ class SolArkCloud:
             self.logger.error(f"Sync failed: {e}")
             return {'status': 'error', 'message': str(e)}
     
-    async def toggle_time_of_use(self, enable: bool, inverter_id: str) -> bool:
+    def toggle_time_of_use(self, enable: bool, inverter_id: str) -> bool:
         """
         Toggle Time of Use setting in inverter settings
         
@@ -751,40 +752,40 @@ class SolArkCloud:
                            f"for inverter {inverter_id}")
             
             if not self.is_logged_in:
-                if not await self.login():
+                if not self.login():
                     return False
             
             # Navigate directly to the inverter device page (skip unnecessary redirects)
             inverter_url = f"{self.base_url}/device/inverter"
             
             self.logger.info(f"Navigating directly to inverter device page: {inverter_url}")
-            await self.page.goto(inverter_url)
-            await self.page.wait_for_load_state('networkidle')
+            self.page.goto(inverter_url)
+            self.page.wait_for_load_state('networkidle')
             
             # Check if we got redirected to login page
             current_url = self.page.url
             if 'login' in current_url or 'signin' in current_url:
                 self.logger.info("Redirected to login page, performing login...")
-                if not await self.login():
+                if not self.login():
                     return False
                 # After login, navigate back to inverter page
                 self.logger.info("Login successful, navigating back to inverter page...")
-                await self.page.goto(inverter_url)
-                await self.page.wait_for_load_state('networkidle')
+                self.page.goto(inverter_url)
+                self.page.wait_for_load_state('networkidle')
             
             # Wait for JavaScript to load the inverter list
             self.logger.info("Waiting for inverter list to load...")
-            await asyncio.sleep(3)  # Give JS time to render
+            time.sleep(3)  # Give JS time to render
             
             # Download the rendered HTML for analysis
-            html_content = await self.page.content()
+            html_content = self.page.content()
             html_file = self.cache_dir / f"inverter_page_{inverter_id}.html"
             with open(html_file, 'w', encoding='utf-8') as f:
                 f.write(html_content)
             self.logger.info(f"Downloaded rendered HTML to: {html_file}")
             
             # Save screenshot of inverter page
-            await self._save_screenshot_to_cache(f"inverter_page_{inverter_id}.png")
+            self._save_screenshot_to_cache(f"inverter_page_{inverter_id}.png")
             
             # Verify we're on the correct page
             current_url = self.page.url
@@ -798,17 +799,17 @@ class SolArkCloud:
             self.logger.info(f"Looking for inverter {inverter_id}...")
             
             # Wait for the table to load
-            await self.page.wait_for_selector('.el-table__body', timeout=10000)
+            self.page.wait_for_selector('.el-table__body', timeout=10000)
             
             # Find the inverter row by looking for the SN in the table
             inverter_row = None
             try:
                 # Look for the specific inverter SN in the table
                 sn_selector = f"text={inverter_id}"
-                await self.page.wait_for_selector(sn_selector, timeout=10000)
+                self.page.wait_for_selector(sn_selector, timeout=10000)
                 
                 # Find the row containing this SN
-                inverter_row = await self.page.query_selector(f"tr:has-text('{inverter_id}')")
+                inverter_row = self.page.query_selector(f"tr:has-text('{inverter_id}')")
                 if inverter_row:
                     self.logger.info(f"Found inverter row for {inverter_id}")
                 else:
@@ -825,24 +826,24 @@ class SolArkCloud:
             try:
                 # First, scroll the table to make sure the dropdown column is visible
                 self.logger.info("Scrolling table to ensure dropdown is visible...")
-                await self.page.evaluate("document.querySelector('.el-table__body-wrapper').scrollLeft = 1000")
-                await asyncio.sleep(1)
+                self.page.evaluate("document.querySelector('.el-table__body-wrapper').scrollLeft = 1000")
+                time.sleep(1)
                 
                 # Find dropdown button in the specific inverter row
                 dropdown_button = None
                 try:
                     # Look for dropdowns in rows that contain our inverter ID
-                    inverter_rows = await self.page.query_selector_all(f'tr:has-text("{inverter_id}")')
+                    inverter_rows = self.page.query_selector_all(f'tr:has-text("{inverter_id}")')
                     self.logger.info(f"Found {len(inverter_rows)} rows containing inverter {inverter_id}")
                     
                     for i, row in enumerate(inverter_rows):
                         # Check if this row actually contains our inverter ID
-                        row_text = await row.text_content()
+                        row_text = row.text_content()
                         if inverter_id in row_text:
                             self.logger.info(f"Row {i+1} contains inverter {inverter_id}")
                             # Look for dropdown in this specific row
-                            dropdown_in_row = await row.query_selector('.w24.h30.flex-align-around.el-dropdown-selfdefine')
-                            if dropdown_in_row and await dropdown_in_row.is_visible():
+                            dropdown_in_row = row.query_selector('.w24.h30.flex-align-around.el-dropdown-selfdefine')
+                            if dropdown_in_row and dropdown_in_row.is_visible():
                                 dropdown_button = dropdown_in_row
                                 self.logger.info(f"Found dropdown in row {i+1}")
                                 break
@@ -852,13 +853,13 @@ class SolArkCloud:
                 
                 if dropdown_button:
                     # Ensure the button is in view
-                    await dropdown_button.scroll_into_view_if_needed()
-                    await asyncio.sleep(0.5)
+                    dropdown_button.scroll_into_view_if_needed()
+                    time.sleep(0.5)
                     
                     # Click the dropdown
-                    await dropdown_button.click()
+                    dropdown_button.click()
                     self.logger.info("Clicked on 'More' dropdown")
-                    await asyncio.sleep(2)  # Wait for dropdown to appear
+                    time.sleep(2)  # Wait for dropdown to appear
                 else:
                     self.logger.error("Could not find 'More' dropdown button with any selector")
                     return False
@@ -875,16 +876,16 @@ class SolArkCloud:
                 self.logger.info("Waiting for dropdown menu to appear...")
                 
                 # Wait a bit for the menu to appear
-                await asyncio.sleep(2)
+                time.sleep(2)
                 
                 # Check for dropdown menus
-                all_menus = await self.page.query_selector_all('.el-dropdown-menu')
+                all_menus = self.page.query_selector_all('.el-dropdown-menu')
                 self.logger.info(f"Found {len(all_menus)} dropdown menus on page")
                 
                 visible_menu = None
                 for i, menu in enumerate(all_menus):
                     try:
-                        is_visible = await menu.is_visible()
+                        is_visible = menu.is_visible()
                         if is_visible and not visible_menu:
                             visible_menu = menu
                             self.logger.info(f"Found visible dropdown menu {i+1}")
@@ -901,19 +902,19 @@ class SolArkCloud:
                 
                 # First arrow down to wake up the menu and highlight first item
                 self.logger.info("Pressing ↓ to wake up menu...")
-                await self.page.keyboard.press('ArrowDown')
-                await asyncio.sleep(0.5)
+                self.page.keyboard.press('ArrowDown')
+                time.sleep(0.5)
                 
                 # Second arrow down to go to Parameters Setting
                 self.logger.info("Pressing ↓ once more to reach Parameters Setting...")
-                await self.page.keyboard.press('ArrowDown')
-                await asyncio.sleep(0.5)
+                self.page.keyboard.press('ArrowDown')
+                time.sleep(0.5)
                 
                 # Press Enter to select Parameters Setting
                 self.logger.info("Pressing Enter to select Parameters Setting...")
-                await self.page.keyboard.press('Enter')
+                self.page.keyboard.press('Enter')
                 self.logger.info("Successfully navigated to 'Parameters Setting' using keyboard!")
-                await asyncio.sleep(3)  # Wait for parameters page to load
+                time.sleep(3)  # Wait for parameters page to load
                     
             except Exception as e:
                 self.logger.error(f"Error clicking Parameters Setting: {e}")
@@ -922,24 +923,24 @@ class SolArkCloud:
             self.logger.info(f"Successfully navigated to parameters page for inverter {inverter_id}")
             
             # Save screenshot of parameters page
-            await self._save_screenshot_to_cache(f"parameters_page_{inverter_id}.png")
+            self._save_screenshot_to_cache(f"parameters_page_{inverter_id}.png")
             
             # Wait for parameters page to load and look for iframe
             self.logger.info("Waiting for parameters page to load...")
-            await asyncio.sleep(3)  # Wait for content to load
+            time.sleep(3)  # Wait for content to load
             
             # Look for the iframe that contains the actual settings
             self.logger.info("Looking for settings iframe...")
             try:
-                iframe_element = await self.page.query_selector('iframe.testiframe')
+                iframe_element = self.page.query_selector('iframe.testiframe')
                 if iframe_element:
-                    iframe_src = await iframe_element.get_attribute('src')
+                    iframe_src = iframe_element.get_attribute('src')
                     self.logger.info(f"Found iframe with URL: {iframe_src}")
                     
                     # Navigate directly to the iframe URL
                     self.logger.info("Navigating to iframe URL...")
-                    await self.page.goto(iframe_src)
-                    await asyncio.sleep(3)  # Wait for iframe content to load
+                    self.page.goto(iframe_src)
+                    time.sleep(3)  # Wait for iframe content to load
                     self.logger.info("Successfully navigated to iframe URL")
                     
                     # First, click on "System Work Mode" to access the TOU settings
@@ -959,9 +960,9 @@ class SolArkCloud:
                     for i, selector in enumerate(system_work_mode_selectors):
                         try:
                             self.logger.debug(f"Trying selector {i+1}/{len(system_work_mode_selectors)}: {selector}")
-                            system_work_mode_element = await self.page.query_selector(selector)
+                            system_work_mode_element = self.page.query_selector(selector)
                             if system_work_mode_element:
-                                is_visible = await system_work_mode_element.is_visible()
+                                is_visible = system_work_mode_element.is_visible()
                                 if is_visible:
                                     self.logger.info(f"Found System Work Mode with selector: {selector}")
                                     system_found_selector = selector
@@ -975,8 +976,8 @@ class SolArkCloud:
                         
                         # Click the System Work Mode link
                         self.logger.info("Clicking System Work Mode link...")
-                        await system_work_mode_element.click()
-                        await asyncio.sleep(3)  # Wait for the page to load
+                        system_work_mode_element.click()
+                        time.sleep(3)  # Wait for the page to load
                         self.logger.info("Successfully clicked System Work Mode link!")
                         
                         # Now look for TOU switch on the System Work Mode page
@@ -998,9 +999,9 @@ class SolArkCloud:
                         for i, selector in enumerate(tou_switch_selectors):
                             try:
                                 self.logger.debug(f"Trying selector {i+1}/{len(tou_switch_selectors)}: {selector}")
-                                tou_element = await self.page.query_selector(selector)
+                                tou_element = self.page.query_selector(selector)
                                 if tou_element:
-                                    is_visible = await tou_element.is_visible()
+                                    is_visible = tou_element.is_visible()
                                     if is_visible:
                                         self.logger.info(f"Found TOU switch with selector: {selector}")
                                         tou_found_selector = selector
@@ -1025,37 +1026,37 @@ class SolArkCloud:
                 # Check current state of the TOU switch
                 try:
                     # Try to find the actual checkbox input
-                    checkbox = await self.page.query_selector('.el-switch__input')
+                    checkbox = self.page.query_selector('.el-switch__input')
                     
                     if checkbox:
-                        is_checked = await checkbox.is_checked()
+                        is_checked = checkbox.is_checked()
                         self.logger.info(f"TOU switch current state: {'ON' if is_checked else 'OFF'}")
                         
                         # Save screenshot before TOU toggle
-                        await self._save_screenshot_to_cache(f"tou_before_{inverter_id}.png")
+                        self._save_screenshot_to_cache(f"tou_before_{inverter_id}.png")
                         
                         # Toggle the TOU switch if needed
                         if (enable and not is_checked) or (not enable and is_checked):
                             self.logger.info("Toggling TOU switch...")
                             
                             # Try clicking the switch core instead of the checkbox input
-                            switch_core = await self.page.query_selector('.el-switch__core')
+                            switch_core = self.page.query_selector('.el-switch__core')
                             if switch_core:
                                 self.logger.info("Clicking switch core...")
-                                await switch_core.click()
+                                switch_core.click()
                             else:
                                 self.logger.info("Clicking checkbox input...")
-                                await checkbox.click()
+                                checkbox.click()
                             
                             # Wait for the switch to update and register the change
-                            await asyncio.sleep(2)
+                            time.sleep(2)
                             
                             # Check new state
-                            new_state = await checkbox.is_checked()
+                            new_state = checkbox.is_checked()
                             self.logger.info(f"TOU switch new state: {'ON' if new_state else 'OFF'}")
                             
                             # Save screenshot after TOU toggle
-                            await self._save_screenshot_to_cache(f"tou_after_{inverter_id}.png")
+                            self._save_screenshot_to_cache(f"tou_after_{inverter_id}.png")
                             
                             if new_state != is_checked:
                                 self.logger.info("TOU switch successfully toggled!")
@@ -1067,8 +1068,8 @@ class SolArkCloud:
                         self.logger.error("Could not find checkbox input for TOU switch")
                         # Try clicking the switch element directly
                         self.logger.info("Trying to click TOU switch element directly...")
-                        await tou_element.click()
-                        await asyncio.sleep(1)
+                        tou_element.click()
+                        time.sleep(1)
                         self.logger.info("Clicked TOU switch element")
                         
                 except Exception as e:
@@ -1086,8 +1087,8 @@ class SolArkCloud:
                 save_button = None
                 for selector in save_selectors:
                     try:
-                        save_button = await self.page.query_selector(selector)
-                        if save_button and await save_button.is_visible():
+                        save_button = self.page.query_selector(selector)
+                        if save_button and save_button.is_visible():
                             self.logger.info(f"Found save button with selector: {selector}")
                             break
                     except:
@@ -1097,25 +1098,25 @@ class SolArkCloud:
                     self.logger.info("Clicking Save button...")
                     
                     # Ensure the button is visible and clickable
-                    await save_button.scroll_into_view_if_needed()
-                    await asyncio.sleep(0.5)
+                    save_button.scroll_into_view_if_needed()
+                    time.sleep(0.5)
                     
                     # Try multiple click methods for better reliability
                     try:
                         # Method 1: Regular click
-                        await save_button.click()
+                        save_button.click()
                         self.logger.info("Save button clicked (method 1)")
                     except Exception as e1:
                         self.logger.warning(f"Method 1 failed: {e1}")
                         try:
                             # Method 2: Force click
-                            await save_button.click(force=True)
+                            save_button.click(force=True)
                             self.logger.info("Save button clicked (method 2 - force)")
                         except Exception as e2:
                             self.logger.warning(f"Method 2 failed: {e2}")
                             try:
                                 # Method 3: JavaScript click
-                                await save_button.evaluate('element => element.click()')
+                                save_button.evaluate('element => element.click()')
                                 self.logger.info("Save button clicked (method 3 - JS)")
                             except Exception as e3:
                                 self.logger.error(f"All click methods failed: {e3}")
@@ -1123,7 +1124,7 @@ class SolArkCloud:
                     
                     # Wait longer for save to register and page to update
                     self.logger.info("Waiting for save operation to complete...")
-                    await asyncio.sleep(5)  # Increased wait time
+                    time.sleep(5)  # Increased wait time
                     
                     # Check for success indicators
                     success_indicators = [
@@ -1139,8 +1140,8 @@ class SolArkCloud:
                     save_success = False
                     for indicator in success_indicators:
                         try:
-                            success_element = await self.page.query_selector(indicator)
-                            if success_element and await success_element.is_visible():
+                            success_element = self.page.query_selector(indicator)
+                            if success_element and success_element.is_visible():
                                 self.logger.info(f"Found success indicator: {indicator}")
                                 save_success = True
                                 break
@@ -1154,13 +1155,13 @@ class SolArkCloud:
                     
                     # Verify the change was actually applied by checking the TOU state again
                     self.logger.info("Verifying TOU setting change...")
-                    await asyncio.sleep(2)  # Wait for page to update
+                    time.sleep(2)  # Wait for page to update
                     
                     try:
                         # Check TOU state again after save
-                        final_checkbox = await self.page.query_selector('.el-switch__input')
+                        final_checkbox = self.page.query_selector('.el-switch__input')
                         if final_checkbox:
-                            final_state = await final_checkbox.is_checked()
+                            final_state = final_checkbox.is_checked()
                             self.logger.info(f"Final TOU switch state after save: {'ON' if final_state else 'OFF'}")
                             
                             if final_state == enable:
@@ -1187,9 +1188,9 @@ class SolArkCloud:
             self.logger.error(f"Failed to toggle Time of Use: {e}")
             return False
 
-    def toggle_time_of_use_sync(self, enable: bool, inverter_id: str) -> bool:
+    def toggle_time_of_use_threaded(self, enable: bool, inverter_id: str) -> bool:
         """
-        Synchronous Time of Use toggle - calls async method synchronously
+        Threaded Time of Use toggle - runs the synchronous method in a thread
         
         Args:
             enable: True to enable TOU, False to disable
@@ -1198,23 +1199,24 @@ class SolArkCloud:
         Returns:
             bool: True if successful, False otherwise
         """
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
+        result = [False]  # Use list to allow modification in thread
+        
+        def run_toggle():
             try:
-                result = loop.run_until_complete(self.toggle_time_of_use(enable, inverter_id))
-                return result
-            finally:
-                loop.close()
-                
-        except Exception as e:
-            self.logger.error(f"Error in synchronous TOU toggle: {e}")
-            return False
+                result[0] = self.toggle_time_of_use(enable, inverter_id)
+            except Exception as e:
+                self.logger.error(f"Error in threaded TOU toggle: {e}")
+                result[0] = False
+        
+        thread = threading.Thread(target=run_toggle)
+        thread.start()
+        thread.join()
+        
+        return result[0]
 
-    def apply_parameter_changes_sync(self, changes: Dict[str, Any], inverter_id: str = None) -> bool:
+    def apply_parameter_changes_threaded(self, changes: Dict[str, Any], inverter_id: str = None) -> bool:
         """
-        Synchronous parameter changes - calls async method synchronously
+        Threaded parameter changes - runs the synchronous method in a thread
         
         Args:
             changes: Dictionary of parameter changes
@@ -1223,21 +1225,22 @@ class SolArkCloud:
         Returns:
             bool: True if successful, False otherwise
         """
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
+        result = [False]  # Use list to allow modification in thread
+        
+        def run_changes():
             try:
-                result = loop.run_until_complete(self.apply_parameter_changes(changes))
-                return result
-            finally:
-                loop.close()
-                
-        except Exception as e:
-            self.logger.error(f"Error in synchronous parameter changes: {e}")
-            return False
+                result[0] = self.apply_parameter_changes(changes)
+            except Exception as e:
+                self.logger.error(f"Error in threaded parameter changes: {e}")
+                result[0] = False
+        
+        thread = threading.Thread(target=run_changes)
+        thread.start()
+        thread.join()
+        
+        return result[0]
 
-    async def apply_parameter_changes(self, changes: Dict[str, Any]) -> bool:
+    def apply_parameter_changes(self, changes: Dict[str, Any]) -> bool:
         """
         Apply multiple parameter changes
         
@@ -1257,13 +1260,13 @@ class SolArkCloud:
             self.logger.info(f"Applying {len(changes)} parameter changes (dry_run={dry_run})")
             
             if not self.is_logged_in:
-                if not await self.login():
+                if not self.login():
                     return False
             
             
             # Get current parameters for backup
             if self.solark_config['parameter_changes']['backup_before_change']:
-                current_params = await self.get_parameters()
+                current_params = self.get_parameters()
                 backup_file = self.cache_dir / f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
                 with open(backup_file, 'w') as f:
                     json.dump(current_params, f, indent=2)
@@ -1276,14 +1279,14 @@ class SolArkCloud:
                     self.logger.info(f"DRY RUN: Would set {param_name} = {value}")
                     success_count += 1
                 else:
-                    if await self.set_parameter(param_name, value):
+                    if self.set_parameter(param_name, value):
                         success_count += 1
                     else:
                         self.logger.error(f"Failed to set parameter {param_name}")
             
             # Save changes if not dry run
             if not dry_run and success_count > 0:
-                if await self.save_parameters():
+                if self.save_parameters():
                     self.logger.info(f"Successfully applied {success_count}/{len(changes)} parameter changes")
                     return True
                 else:
@@ -1300,7 +1303,7 @@ class SolArkCloud:
 
 
 # Example usage and testing
-async def main():
+def main():
     """Example usage of SolArkCloud class"""
     import sys
     
@@ -1308,12 +1311,12 @@ async def main():
     
     try:
         # Initialize browser
-        if not await solark.initialize():
+        if not solark.initialize():
             print("Failed to initialize browser")
             return
         
         # Login
-        if not await solark.login():
+        if not solark.login():
             print("Login failed")
             return
         
@@ -1322,25 +1325,25 @@ async def main():
         print(f"Testing TOU toggle for inverter {test_inverter_id}")
         
         # Test enabling TOU
-        result = await solark.toggle_time_of_use(True, test_inverter_id)
+        result = solark.toggle_time_of_use(True, test_inverter_id)
         print(f"TOU enable result: {result}")
         
         # Test disabling TOU
-        result = await solark.toggle_time_of_use(False, test_inverter_id)
+        result = solark.toggle_time_of_use(False, test_inverter_id)
         print(f"TOU disable result: {result}")
         
         # Sync data
-        sync_result = await solark.sync_data()
+        sync_result = solark.sync_data()
         print(f"Sync result: {sync_result}")
         
     except Exception as e:
         print(f"Error: {e}")
     finally:
         try:
-            await solark.cleanup()
+            solark.cleanup()
         except Exception:
             pass  # Ignore cleanup errors
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
