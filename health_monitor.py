@@ -92,7 +92,7 @@ class HealthMonitor:
         
     def send_email_alert(self, level: str, message: str):
         """Send email alert."""
-        email_config = self.config.get('alerts.email', {})
+        email_config = self.config.get('alerts.email')
         if not email_config.get('enabled', False):
             return
             

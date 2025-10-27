@@ -24,10 +24,10 @@ class GPIOManager:
         self.gpio_available = GPIO_AVAILABLE
         
         # GPIO pin configuration
-        self.gpio_pin = self.config.get('hardware.gpio_pin', 17)
-        self.led_green = self.config.get('hardware.led_green', 18)
-        self.led_red = self.config.get('hardware.led_red', 27)
-        self.reset_button = self.config.get('hardware.reset_button', 22)
+        self.gpio_pin = self.config.get('hardware.gpio_pin')
+        self.led_green = self.config.get('hardware.led_green')
+        self.led_red = self.config.get('hardware.led_red')
+        self.reset_button = self.config.get('hardware.reset_button')
         
         self._setup_gpio()
     

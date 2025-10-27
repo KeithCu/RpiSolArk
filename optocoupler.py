@@ -276,8 +276,8 @@ class OptocouplerManager:
         if self.optocoupler_enabled:
             try:
                 # Check for secondary configuration
-                secondary_config = optocoupler_config.get('secondary', {})
-                secondary_pin = secondary_config.get('gpio_pin', -1)
+                secondary_config = optocoupler_config.get('secondary')
+                secondary_pin = secondary_config.get('gpio_pin')
             except KeyError as e:
                 raise KeyError(f"Missing required secondary optocoupler configuration key: {e}")
             
@@ -365,7 +365,7 @@ class OptocouplerManager:
             
             # Process primary optocoupler inverters
             primary_config = optocoupler_config['primary']
-            primary_inverters = primary_config.get('inverters', [])
+            primary_inverters = primary_config.get('inverters')
             
             # Handle backward compatibility - if old format exists, convert it
             if 'solark_inverter_id' in primary_config and primary_config['solark_inverter_id']:
@@ -389,7 +389,7 @@ class OptocouplerManager:
             # Process secondary optocoupler inverters (if dual mode)
             if self.dual_mode:
                 secondary_config = optocoupler_config['secondary']
-                secondary_inverters = secondary_config.get('inverters', [])
+                secondary_inverters = secondary_config.get('inverters')
                 
                 # Handle backward compatibility
                 if 'solark_inverter_id' in secondary_config and secondary_config['solark_inverter_id']:

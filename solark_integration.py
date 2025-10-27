@@ -89,7 +89,7 @@ class SolArkIntegration:
             
             # Check secondary optocoupler if enabled
             secondary_config = optocoupler_config['secondary']
-            secondary_gpio = secondary_config.get('gpio_pin', -1)
+            secondary_gpio = secondary_config.get('gpio_pin')
             
             if secondary_gpio != -1 and 'name' not in secondary_config:
                 raise ValueError("Secondary optocoupler missing 'name' field")
@@ -120,7 +120,7 @@ class SolArkIntegration:
             primary_name = primary_config['name']
             
             # Handle new multi-inverter format
-            primary_inverters = primary_config.get('inverters', [])
+            primary_inverters = primary_config.get('inverters')
             
             # Handle backward compatibility - if old format exists, convert it
             if 'solark_inverter_id' in primary_config and primary_config['solark_inverter_id']:
@@ -142,13 +142,13 @@ class SolArkIntegration:
             
             # Process secondary optocoupler (if enabled)
             secondary_config = optocoupler_config['secondary']
-            secondary_gpio = secondary_config.get('gpio_pin', -1)
+            secondary_gpio = secondary_config.get('gpio_pin')
             
             if secondary_gpio != -1:  # Secondary optocoupler is enabled
                 secondary_name = secondary_config['name']
                 
                 # Handle new multi-inverter format
-                secondary_inverters = secondary_config.get('inverters', [])
+                secondary_inverters = secondary_config.get('inverters')
                 
                 # Handle backward compatibility
                 if 'solark_inverter_id' in secondary_config and secondary_config['solark_inverter_id']:

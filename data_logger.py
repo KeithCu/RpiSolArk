@@ -162,7 +162,7 @@ class DataLogger:
         """Calculate confidence score for the classification."""
         try:
             # Get thresholds
-            thresholds = self.config.get('analysis.generator_thresholds', {})
+            thresholds = self.config.get('analysis.generator_thresholds')
             avar_thresh = thresholds.get('allan_variance', 1e-9)
             std_thresh = thresholds.get('std_dev', 0.05)
             kurt_thresh = thresholds.get('kurtosis', 0.5)

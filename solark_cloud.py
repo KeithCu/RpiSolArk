@@ -66,7 +66,7 @@ class SolArkCloud:
         self.retry_attempts = self.solark_config['retry_attempts']
         self.headless = self.solark_config['headless']
         self.cache_pages = self.solark_config['cache_pages']
-        self.cache_screenshots = self.solark_config.get('cache_screenshots', False)
+        self.cache_screenshots = self.solark_config.get('cache_screenshots')
         self.session_persistence = self.solark_config['session_persistence']
         self.session_file = self.solark_config['session_file']
         self.session_timeout = self.solark_config['session_timeout']

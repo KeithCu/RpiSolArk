@@ -822,8 +822,8 @@ class FrequencyMonitor:
         self.analyzer.hardware_manager = self.hardware
         
         # Initialize data buffers
-        sample_rate = self.config.get_float('sampling.sample_rate', 2.0)
-        buffer_duration = self.config.get_float('sampling.buffer_duration', 300)
+        sample_rate = self.config.get_float('sampling.sample_rate')
+        buffer_duration = self.config.get_float('sampling.buffer_duration')
         buffer_size = int(buffer_duration * sample_rate)
         
         self.freq_buffer = deque(maxlen=buffer_size)
@@ -837,7 +837,7 @@ class FrequencyMonitor:
             self.logger.info("Dual optocoupler mode enabled - tracking both primary and secondary frequencies")
         
         # Initialize power source classification buffer for U/G indicator
-        classification_window = self.config.get_float('display.classification_window', 300)  # 5 minutes default
+        classification_window = self.config.get_float('display.classification_window')  # 5 minutes default
         
         # Use smaller window in simulator mode for better testing
         if self.simulator_mode:
@@ -900,7 +900,7 @@ class FrequencyMonitor:
             
             # Create state machine for secondary optocoupler (if enabled)
             secondary_config = optocoupler_config['secondary']
-            secondary_gpio = secondary_config.get('gpio_pin', -1)
+            secondary_gpio = secondary_config.get('gpio_pin')
             
             if secondary_gpio != -1:  # Secondary optocoupler is enabled
                 secondary_name = secondary_config['name']
@@ -1006,7 +1006,7 @@ class FrequencyMonitor:
                     else:
                         # Single optocoupler mode
                         # Use measurement duration from config
-                        measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration', 2.0)
+                        measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
                         freq = self.analyzer.count_zero_crossings(duration=measurement_duration)
                         secondary_freq = None
 
@@ -1120,7 +1120,7 @@ class FrequencyMonitor:
                 current_states = {}
                 
                 # Update primary optocoupler state machine
-                primary_name = self.config.get('hardware.optocoupler.primary.name', 'Mechanical')
+                primary_name = self.config.get('hardware.optocoupler.primary.name')
                 if primary_name in self.state_machines:
                     current_states[primary_name] = self.state_machines[primary_name].update_state_with_confidence(
                         freq, source, confidence, self.zero_voltage_duration
@@ -1128,7 +1128,7 @@ class FrequencyMonitor:
                 
                 # Update secondary optocoupler state machine (if enabled and has frequency data)
                 if self.dual_mode and secondary_freq is not None:
-                    secondary_name = self.config.get('hardware.optocoupler.secondary.name', 'Lights')
+                    secondary_name = self.config.get('hardware.optocoupler.secondary.name')
                     if secondary_name in self.state_machines:
                         # Analyze secondary frequency separately
                         secondary_source, secondary_confidence = self._analyze_frequency_for_optocoupler(secondary_freq, secondary_name)
@@ -1167,7 +1167,7 @@ class FrequencyMonitor:
                 
                 # Update display and LEDs once per second
                 self.logger.debug("Checking display update...")
-                display_interval = self.config.get_float('app.display_update_interval', 1.0)
+                display_interval = self.config.get_float('app.display_update_interval')
                 
                 if current_time - self.last_display_time >= display_interval:
                     self.logger.debug("Updating display and LEDs...")
@@ -1175,8 +1175,8 @@ class FrequencyMonitor:
                     # Pass secondary frequency if in dual mode
                     secondary_freq = secondary_freq if self.dual_mode else None
                     # Pass both state machines for proper cycling display
-                    primary_name = self.config.get('hardware.optocoupler.primary.name', 'Mechanical')
-                    secondary_name = self.config.get('hardware.optocoupler.secondary.name', 'Lights')
+                    primary_name = self.config.get('hardware.optocoupler.primary.name')
+                    secondary_name = self.config.get('hardware.optocoupler.secondary.name')
                     primary_state_machine = self.state_machines.get(primary_name)
                     secondary_state_machine = self.state_machines.get(secondary_name) if self.dual_mode else None
                     
@@ -1242,7 +1242,7 @@ class FrequencyMonitor:
 
                 # Maintain sample rate
                 self.logger.debug("Maintaining sample rate...")
-                sample_rate = self.config.get_float('sampling.sample_rate', 2.0)
+                sample_rate = self.config.get_float('sampling.sample_rate')
 
                 # Simple sleep to maintain sample rate
                 sleep_time = 1.0 / sample_rate

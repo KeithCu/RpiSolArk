@@ -23,8 +23,8 @@ class RestartManager:
         self.logger = logger
         
         # Restart safety settings
-        self.restart_cooldown = config.get('restart.cooldown_seconds', 5)  # seconds
-        self.max_restarts_per_hour = config.get('restart.max_per_hour', 3)
+        self.restart_cooldown = config.get('restart.cooldown_seconds')  # seconds
+        self.max_restarts_per_hour = config.get('restart.max_per_hour')
         self.restart_count_current_hour = 0
         self.last_restart_timestamp = 0
         self.hourly_reset_timestamp = time.time()

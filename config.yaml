@@ -17,6 +17,9 @@ hardware:
   optocoupler:
     enabled: true       # Enable optocoupler falling edge detection
     measurement_method: "interrupt"  # Method for dual optocoupler measurement: "interrupt" (recommended) or "alternating" (fallback)
+    max_consecutive_errors: 5  # Max consecutive errors before recovery attempt
+    health_check_interval: 30.0  # Seconds between health checks
+    max_recovery_attempts: 3  # Max recovery attempts before giving up
     primary:
       gpio_pin: 26      # GPIO pin for primary optocoupler input (H11AA1)
       pulses_per_cycle: 1 # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
@@ -61,6 +64,10 @@ state_machine:
   transition_timeout: 30.0       # seconds - Max time in transitioning state before forcing off_grid
   zero_voltage_threshold: 1.0    # seconds - Time with no cycles before declaring off_grid
   unsteady_voltage_threshold: 0.1 # Hz - Standard deviation threshold for unsteady voltage
+  persistent_state_enabled: true # Enable persistent state across restarts
+  state_file: '/var/run/rpisolark_state.json'  # File to store persistent state
+  confidence_threshold_maintain: 0.6  # Confidence threshold to maintain current state
+  confidence_threshold_transition: 0.8  # Confidence threshold to transition to new state
 
 # Logging Configuration
 logging:
@@ -81,6 +88,7 @@ health:
   watchdog_timeout: 30.0    # seconds - restart if no activity
   memory_warning_threshold: 0.8  # fraction of available memory
   cpu_warning_threshold: 0.8     # fraction of CPU usage
+  watchdog_action: 'log'    # Action on watchdog timeout: 'log', 'restart', or 'reboot'
   memory_critical: 95       # Reboot if memory usage > 95%
   disk_critical: 5          # Reboot if disk space < 5%
   temp_critical: 85         # Reboot if CPU temp > 85°C
@@ -172,7 +180,9 @@ solark_cloud:
     backup_before_change: true # Backup current settings before changes
     time_of_use_enabled: true  # Enable TOU automation
 
-# Restart Configuration
+# Display Configuration
+display:
+  classification_window: 300  # seconds - Window for classification display
 restart:
   cooldown_seconds: 5       # Minimum time between restarts (seconds)
   max_per_hour: 3          # Maximum restarts allowed per hour

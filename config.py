@@ -46,8 +46,8 @@ class Config:
         """Validate critical configuration values."""
         # Check that all required top-level sections exist
         required_sections = [
-            'app', 'hardware', 'sampling', 'analysis', 'state_machine', 
-            'logging', 'health', 'memory', 'restart', 'display'
+            'hardware', 'sampling', 'analysis', 'state_machine', 
+            'logging', 'health', 'memory'
         ]
         
         for section in required_sections:

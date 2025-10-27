@@ -17,9 +17,9 @@ class ScheduledReboot:
     def __init__(self, config):
         self.config = config
         self.logger = logging.getLogger(__name__)
-        self.reboot_interval_days = config.get('reboot.interval_days', 30)
-        self.reboot_hour = config.get('reboot.hour', 3)  # 3 AM
-        self.reboot_minute = config.get('reboot.minute', 0)
+        self.reboot_interval_days = config.get('reboot.interval_days')
+        self.reboot_hour = config.get('reboot.hour')  # 3 AM
+        self.reboot_minute = config.get('reboot.minute')
         self.last_reboot_file = Path("last_reboot.txt")
         self.graceful_shutdown_timeout = 30  # seconds
         
