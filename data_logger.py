@@ -9,6 +9,7 @@ import logging
 import time
 import os
 import fcntl
+import glob
 from typing import Optional, Dict, Any
 
 
@@ -19,6 +20,10 @@ class DataLogger:
         self.config = config
         self.logger = logger
         self.hourly_log_file = config.get('logging.hourly_log_file')
+        
+        # CSV file size management
+        self.hourly_log_max_size = config.get('logging.hourly_log_max_size', 1048576)  # 1MB default
+        self.csv_backup_count = config.get('logging.csv_backup_count', 3)
         
         # Detailed logging configuration
         self.detailed_logging_enabled = config.get('logging.detailed_logging_enabled')
@@ -79,11 +84,60 @@ class DataLogger:
         except Exception as e:
             self.logger.error(f"Failed to initialize detailed log file: {e}")
     
+    def _rotate_csv_file_if_needed(self, filepath: str, max_size: int) -> None:
+        """Rotate CSV file if it exceeds max_size, keeping backup_count files."""
+        try:
+            if not os.path.exists(filepath):
+                return
+            
+            file_size = os.path.getsize(filepath)
+            if file_size < max_size:
+                return
+            
+            self.logger.info(f"CSV file {filepath} size ({file_size} bytes) exceeds limit ({max_size} bytes), rotating...")
+            
+            # Remove oldest backup files beyond backup_count
+            base_name = filepath.replace('.csv', '')
+            backup_pattern = f"{base_name}.csv.*"
+            backup_files = sorted(glob.glob(backup_pattern), reverse=True)
+            
+            # Remove excess backup files
+            for old_backup in backup_files[self.csv_backup_count - 1:]:
+                try:
+                    os.remove(old_backup)
+                    self.logger.debug(f"Removed old backup file: {old_backup}")
+                except OSError as e:
+                    self.logger.warning(f"Failed to remove old backup file {old_backup}: {e}")
+            
+            # Shift existing backup files
+            for i in range(min(len(backup_files), self.csv_backup_count - 1), 0, -1):
+                old_name = f"{base_name}.csv.{i}"
+                new_name = f"{base_name}.csv.{i + 1}"
+                if os.path.exists(old_name):
+                    try:
+                        os.rename(old_name, new_name)
+                    except OSError as e:
+                        self.logger.warning(f"Failed to rename backup file {old_name} to {new_name}: {e}")
+            
+            # Move current file to .1
+            backup_name = f"{base_name}.csv.1"
+            try:
+                os.rename(filepath, backup_name)
+                self.logger.info(f"Rotated CSV file: {filepath} -> {backup_name}")
+            except OSError as e:
+                self.logger.error(f"Failed to rotate CSV file {filepath}: {e}")
+                
+        except Exception as e:
+            self.logger.error(f"Error during CSV file rotation for {filepath}: {e}")
+    
     def log_hourly_status(self, timestamp: str, freq: float, source: str,
                          std_freq: Optional[float], kurtosis: Optional[float],
                          sample_count: int, state_info: Optional[Dict[str, Any]] = None):
         """Log hourly status to CSV using atomic writes."""
         try:
+            # Check if file rotation is needed before writing
+            self._rotate_csv_file_if_needed(self.hourly_log_file, self.hourly_log_max_size)
+            
             # Check if file exists to determine if we need headers
             file_exists = os.path.exists(self.hourly_log_file)
             

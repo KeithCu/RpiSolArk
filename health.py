@@ -12,6 +12,7 @@ import psutil
 import os
 import csv
 import fcntl
+import glob
 from collections import deque
 from pathlib import Path
 from typing import Dict, Any, Set, List
@@ -265,6 +266,10 @@ class MemoryMonitor:
         self.system_memory_warning = config.get('memory.system_warning_percent')  # %
         self.system_memory_critical = config.get('memory.system_critical_percent')  # %
         
+        # CSV file size management
+        self.memory_log_max_size = config.get('logging.memory_log_max_size')  # 1MB default
+        self.csv_backup_count = config.get('logging.csv_backup_count')
+        
         # Memory tracking
         self.memory_history = deque(maxlen=1000)  # Keep last 1000 measurements
         self.last_cleanup_time = time.time()
@@ -414,9 +419,58 @@ class MemoryMonitor:
             self.logger.error(f"Atomic write failed for {filepath}: {e}")
             raise
     
+    def _rotate_csv_file_if_needed(self, filepath: str, max_size: int) -> None:
+        """Rotate CSV file if it exceeds max_size, keeping backup_count files."""
+        try:
+            if not os.path.exists(filepath):
+                return
+            
+            file_size = os.path.getsize(filepath)
+            if file_size < max_size:
+                return
+            
+            self.logger.info(f"CSV file {filepath} size ({file_size} bytes) exceeds limit ({max_size} bytes), rotating...")
+            
+            # Remove oldest backup files beyond backup_count
+            base_name = filepath.replace('.csv', '')
+            backup_pattern = f"{base_name}.csv.*"
+            backup_files = sorted(glob.glob(backup_pattern), reverse=True)
+            
+            # Remove excess backup files
+            for old_backup in backup_files[self.csv_backup_count - 1:]:
+                try:
+                    os.remove(old_backup)
+                    self.logger.debug(f"Removed old backup file: {old_backup}")
+                except OSError as e:
+                    self.logger.warning(f"Failed to remove old backup file {old_backup}: {e}")
+            
+            # Shift existing backup files
+            for i in range(min(len(backup_files), self.csv_backup_count - 1), 0, -1):
+                old_name = f"{base_name}.csv.{i}"
+                new_name = f"{base_name}.csv.{i + 1}"
+                if os.path.exists(old_name):
+                    try:
+                        os.rename(old_name, new_name)
+                    except OSError as e:
+                        self.logger.warning(f"Failed to rename backup file {old_name} to {new_name}: {e}")
+            
+            # Move current file to .1
+            backup_name = f"{base_name}.csv.1"
+            try:
+                os.rename(filepath, backup_name)
+                self.logger.info(f"Rotated CSV file: {filepath} -> {backup_name}")
+            except OSError as e:
+                self.logger.error(f"Failed to rotate CSV file {filepath}: {e}")
+                
+        except Exception as e:
+            self.logger.error(f"Error during CSV file rotation for {filepath}: {e}")
+    
     def log_memory_to_csv(self, csv_file: str) -> None:
         """Log memory information to CSV file using atomic writes."""
         try:
+            # Check if file rotation is needed before writing
+            self._rotate_csv_file_if_needed(csv_file, self.memory_log_max_size)
+            
             memory_info = self.get_memory_info()
             if not memory_info:
                 return

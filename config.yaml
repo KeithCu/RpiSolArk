@@ -65,7 +65,7 @@ state_machine:
   zero_voltage_threshold: 1.0    # seconds - Time with no cycles before declaring off_grid
   unsteady_voltage_threshold: 0.1 # Hz - Standard deviation threshold for unsteady voltage
   persistent_state_enabled: true # Enable persistent state across restarts
-  state_file: '/var/run/rpisolark_state.json'  # File to store persistent state
+  state_file: 'rpisolark_state.json'  # File to store persistent state
   confidence_threshold_maintain: 0.6  # Confidence threshold to maintain current state
   confidence_threshold_transition: 0.8  # Confidence threshold to transition to new state
 
@@ -77,6 +77,11 @@ logging:
   log_file: "monitor.log"
   max_log_size: 10485760    # 10MB
   backup_count: 5
+  
+  # CSV file size limits (1MB max to prevent drive filling)
+  hourly_log_max_size: 1048576    # 1MB
+  memory_log_max_size: 1048576    # 1MB
+  csv_backup_count: 3              # Keep 3 backup files
   
   # Detailed Logging Mode - for debugging and analysis
   detailed_logging_enabled: false    # Enable detailed frequency logging
