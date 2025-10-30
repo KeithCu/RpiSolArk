@@ -358,9 +358,9 @@ graph TB
 ## 🎯 U/G Indicator Feature
 
 The U/G indicator shows the majority power source classification over a configurable time window (default: 5 minutes), providing stable indication:
-**U** - Utility Grid (majority of recent classifications)
-**G** - Generator (majority of recent classifications)  
-**?** - Unknown/Equal (insufficient data or tied classifications)
+- **U** - Utility Grid (majority of recent classifications)
+- **G** - Generator (majority of recent classifications)  
+- **?** - Unknown/Equal (insufficient data or tied classifications)
 
 **Configuration**: Set `display.classification_window` in `config.yaml` (default: 300 seconds)
 
@@ -371,11 +371,11 @@ The U/G indicator shows the majority power source classification over a configur
 ### 🎯 **What It Does**
 
 Automatically:
-**Logs into Sol-Ark Cloud** using your credentials
-**Finds your specific inverter** by serial number
-**Navigates to Parameters Setting** via dropdown menu
-**Toggles TOU switch** ON or OFF as needed
-**Saves changes** with verification
+- **Logs into Sol-Ark Cloud** using your credentials
+- **Finds your specific inverter** by serial number
+- **Navigates to Parameters Setting** via dropdown menu
+- **Toggles TOU switch** ON or OFF as needed
+- **Saves changes** with verification
 
 ### 🚀 **Quick Start**
 
