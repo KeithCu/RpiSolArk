@@ -53,8 +53,11 @@ class PowerStateMachine:
         self.optocoupler_name = optocoupler_name  # Name of the optocoupler this state machine manages
         
         # Persistent state configuration
-        self.state_file = config.get('state_machine.state_file')
+        self.state_file = f"/tmp/{config.get('state_machine.state_file')}"
         self.persistent_state_enabled = config.get('state_machine.persistent_state_enabled')
+
+        # Ensure /tmp directory exists (it should, but be safe)
+        os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
         
         # Initialize state variables
         self.current_state = PowerState.TRANSITIONING  # Default start state
@@ -118,6 +121,8 @@ class PowerStateMachine:
             self.confidence_history = deque(maxlen=10)
         
         self.confidence_history.append(confidence)
+        # Division by zero cannot happen here because we just appended to confidence_history,
+        # so len(self.confidence_history) is guaranteed to be >= 1
         avg_confidence = sum(self.confidence_history) / len(self.confidence_history)
         
         # Only transition if confidence is high enough
@@ -216,7 +221,14 @@ class PowerStateMachine:
             # Load state
             self.current_state = PowerState(state_data['current_state'])
             self.previous_state = PowerState(state_data['previous_state'])
-            self.state_entry_time = state_data['state_entry_time']
+
+            # Validate and convert state_entry_time to float
+            try:
+                self.state_entry_time = float(state_data['state_entry_time'])
+            except (ValueError, TypeError) as e:
+                self.logger.warning(f"Invalid state_entry_time value: {state_data['state_entry_time']}, starting fresh")
+                return
+
             self.last_action_taken = state_data.get('last_action_taken')
             
             # Calculate state duration
@@ -852,7 +864,7 @@ class FrequencyMonitor:
         self.last_display_time = 0
         self.sample_count = 0
         self.start_time = time.time()
-        self.zero_voltage_start_time = None  # Track when voltage went to zero
+        self.zero_voltage_start_time = None  # Track when voltage went to zero (absolute time)
         self.zero_voltage_duration = 0.0    # How long voltage has been zero
 
         # Reset button state tracking
@@ -1012,11 +1024,12 @@ class FrequencyMonitor:
 
                 # Track zero voltage duration
                 self.logger.debug("Tracking zero voltage duration...")
+                current_absolute_time = time.time()
                 if freq is None or freq == 0:
                     # No frequency detected - voltage is zero
                     if self.zero_voltage_start_time is None:
-                        self.zero_voltage_start_time = current_time
-                    self.zero_voltage_duration = current_time - self.zero_voltage_start_time
+                        self.zero_voltage_start_time = current_absolute_time
+                    self.zero_voltage_duration = current_absolute_time - self.zero_voltage_start_time
                 else:
                     # Frequency detected - reset zero voltage tracking
                     self.zero_voltage_start_time = None
@@ -1291,9 +1304,10 @@ class FrequencyMonitor:
                              f"quality={analysis_results.get('quality_score', 'N/A')}")
             
             # Log confidence history if available
-            if hasattr(self.state_machine, 'confidence_history') and len(self.state_machine.confidence_history) > 0:
-                avg_confidence = sum(self.state_machine.confidence_history) / len(self.state_machine.confidence_history)
-                self.logger.debug(f"Confidence History: avg={avg_confidence:.2f}, recent={list(self.state_machine.confidence_history)[-3:]}")
+            primary_name = self.config.get('hardware.optocoupler.primary.name')
+            if primary_name and primary_name in self.state_machines and hasattr(self.state_machines[primary_name], 'confidence_history') and len(self.state_machines[primary_name].confidence_history) > 0:
+                avg_confidence = sum(self.state_machines[primary_name].confidence_history) / len(self.state_machines[primary_name].confidence_history)
+                self.logger.debug(f"Confidence History: avg={avg_confidence:.2f}, recent={list(self.state_machines[primary_name].confidence_history)[-3:]}")
 
     def validate_buffers(self) -> bool:
         """Validate buffer integrity and detect corruption."""

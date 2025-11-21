@@ -169,9 +169,10 @@ class SingleOptocoupler:
             return None
         
         # Calculate frequency using correct libgpiod calculation for AC-into-DC-optocoupler
-        # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle
-        # libgpiod counts 4 edges per AC cycle (both edges of both transitions)
-        # So we need to divide by 4 to get frequency
+        # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
+        # libgpiod counts 4 edges per AC cycle (both edges of both positive/negative transitions)
+        # But negative half-cycle doesn't conduct, so only 2 edges are actually counted
+        # So we need to divide by 4 to get frequency (accounting for the 2 counted edges)
         frequency = pulse_count / (duration * 4)  # 4 edges per AC cycle
         
         self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {duration:.2f}s")
@@ -227,14 +228,18 @@ class SingleOptocoupler:
             self._setup_optocoupler()
             
             # Test with a short measurement
-            test_pulses = self.count_optocoupler_pulses(0.5)  # 0.5 second test
-            
-            if test_pulses >= 0:
-                self.consecutive_errors = 0
-                self.logger.info(f"{self.name} recovery successful: {test_pulses} pulses in test")
-                return True
-            else:
-                self.logger.warning(f"{self.name} recovery test failed: {test_pulses} pulses")
+            try:
+                test_pulses = self.count_optocoupler_pulses(0.5)  # 0.5 second test
+
+                if test_pulses >= 0:
+                    self.consecutive_errors = 0
+                    self.logger.info(f"{self.name} recovery successful: {test_pulses} pulses in test")
+                    return True
+                else:
+                    self.logger.warning(f"{self.name} recovery test failed: {test_pulses} pulses")
+                    return False
+            except Exception as e:
+                self.logger.error(f"{self.name} recovery test failed with exception: {e}")
                 return False
                 
         except Exception as e:

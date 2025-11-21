@@ -12,9 +12,8 @@ from LCD1602 import CharLCD1602
 lcd1602 = CharLCD1602()
 
 def get_cpu_temp():     # get CPU temperature from file "/sys/class/thermal/thermal_zone0/temp"
-    tmp = open('/sys/class/thermal/thermal_zone0/temp')
-    cpu = tmp.read()
-    tmp.close()
+    with open('/sys/class/thermal/thermal_zone0/temp') as tmp:
+        cpu = tmp.read()
     return '{:.2f}'.format( float(cpu)/1000 ) + ' C '
  
 def get_time_now():     # get system time

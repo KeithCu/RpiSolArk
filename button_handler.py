@@ -16,6 +16,13 @@ except ImportError:
     GPIO_AVAILABLE = False
     print("Warning: RPi.GPIO not available. Button functionality disabled.")
 
+# Import GPIO cleanup tracking from gpio_manager to prevent double cleanup
+try:
+    from gpio_manager import _gpio_cleanup_done
+except ImportError:
+    # Fallback if import fails
+    _gpio_cleanup_done = False
+
 class ButtonHandler:
     """Handles tactile push button for display control."""
     
@@ -121,9 +128,11 @@ class ButtonHandler:
     
     def cleanup(self):
         """Cleanup GPIO resources."""
-        if self.gpio_available:
+        global _gpio_cleanup_done
+        if self.gpio_available and not _gpio_cleanup_done:
             try:
                 GPIO.cleanup()
+                _gpio_cleanup_done = True
                 self.logger.info("Button GPIO cleanup completed")
             except Exception as e:
                 self.logger.error(f"Button cleanup error: {e}")

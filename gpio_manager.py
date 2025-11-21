@@ -14,6 +14,9 @@ except (ImportError, RuntimeError) as e:
     GPIO_AVAILABLE = False
     print(f"Warning: RPi.GPIO not available ({e}). Running in simulation mode.")
 
+# Global GPIO cleanup tracking to prevent double cleanup
+_gpio_cleanup_done = False
+
 
 class GPIOManager:
     """Manages GPIO operations with graceful degradation."""
@@ -77,9 +80,11 @@ class GPIOManager:
     
     def cleanup(self):
         """Cleanup GPIO resources."""
-        if self.gpio_available:
+        global _gpio_cleanup_done
+        if self.gpio_available and not _gpio_cleanup_done:
             try:
                 GPIO.cleanup()
+                _gpio_cleanup_done = True
                 self.logger.info("GPIO cleanup completed")
             except Exception as e:
                 self.logger.error(f"GPIO cleanup error: {e}")
