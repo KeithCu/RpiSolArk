@@ -64,21 +64,8 @@ class RestartManager:
         self.restart_count_current_hour += 1
         self.last_restart_timestamp = time.time()
         
-        # Attempt to gracefully restart the application
-        try:
-            self.logger.info(f"Restarting process: {sys.executable} {' '.join(sys.argv)}")
-            os.execv(sys.executable, ['python'] + sys.argv)
-        except Exception as e:
-            self.logger.critical(f"Failed to restart application using os.execv: {e}")
-            # Fallback: if execv fails, try a system reboot (more drastic)
-            try:
-                self.logger.critical("Attempting system reboot as fallback for application restart.")
-                subprocess.run(['sudo', 'reboot'], check=True)
-            except Exception as reboot_e:
-                self.logger.critical(f"Failed to trigger system reboot: {reboot_e}. System may be in an unrecoverable state.")
-                sys.exit(1)  # Exit if even reboot fails
-        
-        return True
+        self.logger.info("Exiting process to trigger systemd restart")
+        sys.exit(1)
     
     def start_update_monitor(self):
         """

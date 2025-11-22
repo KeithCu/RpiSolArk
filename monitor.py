@@ -14,6 +14,7 @@ import random
 import signal
 import sys
 import time
+import socket
 from collections import deque
 from typing import Optional, Tuple, List, Dict, Any
 from enum import Enum
@@ -792,6 +793,23 @@ class FrequencyAnalyzer:
 class FrequencyMonitor:
     """Main frequency monitoring class."""
     
+    def _sd_notify(self, state):
+        """Notify systemd of status updates."""
+        notify_socket = os.getenv('NOTIFY_SOCKET')
+        if not notify_socket:
+            return
+            
+        if notify_socket.startswith('@'):
+            notify_socket = '\0' + notify_socket[1:]
+            
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            sock.connect(notify_socket)
+            sock.sendall(state.encode('utf-8'))
+            sock.close()
+        except Exception as e:
+            self.logger.debug(f"Failed to send systemd notification: {e}")
+
     def __init__(self):
         self.config = Config("config.yaml")
         self.logger_setup = Logger(self.config)
@@ -842,7 +860,7 @@ class FrequencyMonitor:
         self.time_buffer = deque(maxlen=buffer_size)
         
         # Initialize dual optocoupler buffers if dual mode is enabled
-        self.dual_mode = (hasattr(self.hardware, 'is_dual_optocoupler_mode') and 
+        self.dual_mode = (hasattr(self.hardware, 'is_dual_optocoupler_mode') and
                          self.hardware.is_dual_optocoupler_mode())
         if self.dual_mode:
             self.secondary_freq_buffer = deque(maxlen=buffer_size)
@@ -881,6 +899,9 @@ class FrequencyMonitor:
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         self.logger.info("Frequency monitor initialized")
+        
+        # Notify systemd that we are ready
+        self._sd_notify("READY=1")
         
         # Start tuning data collection if enabled
         if self.tuning_collector.enabled:
@@ -1002,6 +1023,7 @@ class FrequencyMonitor:
         
         try:
             while self.running:
+                loop_start_time = time.perf_counter()
                 current_time = time.time() - self.start_time
                 
                 # Get frequency reading(s)
@@ -1010,7 +1032,7 @@ class FrequencyMonitor:
                     secondary_freq = None  # No secondary in simulator mode
                 else:
                     # Check if dual optocoupler mode is enabled
-                    if (hasattr(self.hardware, 'is_dual_optocoupler_mode') and 
+                    if (hasattr(self.hardware, 'is_dual_optocoupler_mode') and
                         self.hardware.is_dual_optocoupler_mode()):
                         # Get dual frequency readings
                         freq, secondary_freq = self.analyzer.get_dual_frequencies(duration=2.0)
@@ -1072,6 +1094,9 @@ class FrequencyMonitor:
                 if self.sample_count - self.last_buffer_validation >= self.buffer_validation_interval:
                     self.validate_buffers()
                     self.last_buffer_validation = self.sample_count
+
+                # Pet the systemd watchdog
+                self._sd_notify("WATCHDOG=1")
 
                 self.logger.debug("Updating health monitor...")
                 self.health_monitor.update_activity()
@@ -1253,14 +1278,21 @@ class FrequencyMonitor:
 
                     self.last_log_time = current_time
 
-                # Maintain sample rate
+                # Maintain sample rate with drift correction
                 self.logger.debug("Maintaining sample rate...")
                 sample_rate = self.config.get_float('sampling.sample_rate')
+                target_interval = 1.0 / sample_rate
 
-                # Simple sleep to maintain sample rate
-                sleep_time = 1.0 / sample_rate
-                self.logger.debug(f"Sleeping for {sleep_time:.3f} seconds")
-                time.sleep(sleep_time)
+                # Calculate sleep time based on loop start
+                elapsed = time.perf_counter() - loop_start_time
+                sleep_time = target_interval - elapsed
+                
+                if sleep_time > 0:
+                    self.logger.debug(f"Sleeping for {sleep_time:.3f} seconds (drift correction)")
+                    time.sleep(sleep_time)
+                else:
+                    self.logger.warning(f"Loop overrun by {-sleep_time:.3f}s - processing took too long")
+                
                 self.logger.debug("Main loop iteration complete")
                 
         except Exception as e:
@@ -1388,9 +1420,8 @@ class FrequencyMonitor:
 
         # Restart the application
         import sys
-        import os
-        self.logger.info("Restarting application now")
-        os.execv(sys.executable, ['python'] + sys.argv)
+        self.logger.info("Exiting application to trigger systemd restart")
+        sys.exit(1)
 
     def cleanup(self):
         """Cleanup resources with verification."""

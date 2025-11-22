@@ -55,9 +55,9 @@ class DataLogger:
                 for row in data_rows:
                     writer.writerow(row)
                 
-                # Flush and sync to disk
+                # Flush to disk (let OS handle sync for better SD card life)
                 f.flush()
-                os.fsync(f.fileno())
+                # os.fsync(f.fileno()) - Removed to reduce SD card wear
             
             # Atomic rename
             os.rename(temp_file, filepath)

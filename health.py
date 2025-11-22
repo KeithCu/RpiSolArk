@@ -123,26 +123,19 @@ class HealthMonitor:
             self.logger.error(f"Error executing watchdog action '{self.watchdog_action}': {e}")
     
     def _restart_application(self):
-        """Restart the application."""
-        try:
-            import sys
-            import os
-            self.logger.critical("Restarting application due to watchdog timeout")
-            os.execv(sys.executable, ['python'] + sys.argv)
-        except Exception as e:
-            self.logger.critical(f"Failed to restart application: {e}")
-            # Fallback to system reboot
-            self._reboot_system()
+        """Restart the application by exiting with error code."""
+        import sys
+        self.logger.critical("Exiting application due to watchdog timeout (systemd will restart)")
+        sys.exit(1)
     
     def _reboot_system(self):
         """Reboot the system."""
+        import subprocess
+        self.logger.critical("Rebooting system due to watchdog timeout")
         try:
-            import subprocess
-            self.logger.critical("Rebooting system due to watchdog timeout")
             subprocess.run(['sudo', 'reboot'], check=True)
         except Exception as e:
             self.logger.critical(f"Failed to reboot system: {e}")
-            # Last resort - exit the process
             self.logger.critical("Exiting process as last resort")
             os._exit(1)
     
@@ -404,9 +397,9 @@ class MemoryMonitor:
                 for row in data_rows:
                     writer.writerow(row)
                 
-                # Flush and sync to disk
+                # Flush to disk (let OS handle sync for better SD card life)
                 f.flush()
-                os.fsync(f.fileno())
+                # os.fsync(f.fileno()) - Removed to reduce SD card wear
             
             # Atomic rename
             os.rename(temp_file, filepath)
