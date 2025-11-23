@@ -139,8 +139,19 @@ class Config:
             print(f"Configuration validation failed: {e}")
             return False
     
-    def get(self, key_path: str):
-        """Get configuration value using dot notation (e.g., 'hardware.gpio_pin')."""
+    def get(self, key_path: str, default=None):
+        """Get configuration value using dot notation (e.g., 'hardware.gpio_pin').
+        
+        Args:
+            key_path: Dot-separated path to configuration value (e.g., 'hardware.gpio_pin')
+            default: Optional default value to return if key is not found
+            
+        Returns:
+            Configuration value, or default if key not found and default is provided
+            
+        Raises:
+            KeyError: If key not found and no default provided
+        """
         keys = key_path.split('.')
         value = self.config
         try:
@@ -148,6 +159,8 @@ class Config:
                 value = value[key]
             return value
         except (KeyError, TypeError) as e:
+            if default is not None:
+                return default
             raise KeyError(f"Configuration key '{key_path}' not found. Please check your config.yaml file. Error: {e}")
     
     def get_float(self, key_path: str) -> float:

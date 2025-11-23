@@ -48,7 +48,6 @@ This document provides comprehensive guidance for new developers joining the Rpi
 - `PowerStateMachine`: Persistent state management for power system.
 
 **Key Features**:
-- **Dual Optocoupler Support**: Manages separate state machines for primary and secondary optocouplers.
 - **Upgrade Lock**: Prevents automatic system upgrades (`unattended-upgrades`) during Off-Grid or Generator states to ensure system availability.
 - **Drift Correction**: Main loop calculates sleep time to maintain precise sample rates.
 - **Reliability**: Persistent state storage (JSON), buffer corruption detection, and atomic file operations.
@@ -75,7 +74,6 @@ This document provides comprehensive guidance for new developers joining the Rpi
 - `DisplayManager`: LCD and LED control.
 
 **Key Features**:
-- **Dual Display Cycling**: Cycles between primary and secondary optocoupler readings every 2 seconds.
 - **Smart Timeout**: Turns off display after inactivity unless in emergency state (Off-Grid/Generator).
 - **Driver Support**: Supports both original `LCD1602` and `RPLCD` libraries.
 - **Emergency State Handling**: Forces display ON during power events.
@@ -85,13 +83,12 @@ This document provides comprehensive guidance for new developers joining the Rpi
 **Purpose**: High-accuracy frequency measurement using `libgpiod` interrupts (GIL-safe).
 
 **Key Classes**:
-- `OptocouplerManager`: Manages one or more optocouplers (Single or Dual mode).
+- `OptocouplerManager`: Manages the optocoupler hardware.
 - `SingleOptocoupler`: Individual optocoupler management with recovery mechanisms.
 
 **Key Features**:
 - **GIL-free Counting**: Uses `gpio_event_counter` C extension (via `libgpiod`) for accurate interrupt counting.
 - **Health Monitoring**: Tracks consecutive errors and attempts automatic recovery (re-initialization).
-- **Dual Optocoupler**: Simultaneous measurement from two sources.
 - **Frequency Calculation**: Configurable pulse counting logic.
 
 ### 5. solark_cloud.py & solark_integration.py - Cloud Automation
@@ -209,9 +206,6 @@ hardware:
         - id: "2207079903"
           name: "Main Inverter"
           enabled: true
-    secondary:
-      gpio_pin: -1  # -1 to disable
-      name: "Lights"
 
 # Sol-Ark Cloud Integration
 solark_cloud:
