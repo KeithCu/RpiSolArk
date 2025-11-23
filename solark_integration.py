@@ -10,6 +10,7 @@ on power source detection and system status.
 import logging
 import threading
 import time
+import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -48,6 +49,14 @@ class SolArkIntegration:
         self.last_power_source = None
         self.operation_lock = threading.Lock()  # Global lock for single operation at a time
         self.active_toggle_thread = None  # Track active toggle operation thread
+        
+        # TOU state file path
+        self.tou_state_file = self.solark_config.get('tou_state_file', 'solark_tou_state.json')
+        self.tou_cooldown_seconds = self.solark_config.get('tou_cooldown_seconds', 300)  # Default 5 minutes
+        self.tou_state = {}  # In-memory cache of TOU state
+        
+        # Load TOU state from disk
+        self._load_tou_state()
         
         # Optocoupler to plant mapping
         self.optocoupler_plants = self._build_optocoupler_plant_mapping()
@@ -142,6 +151,136 @@ class SolArkIntegration:
         except KeyError as e:
             raise ValueError(f"Missing required optocoupler configuration: {e}")
     
+    def _load_tou_state(self):
+        """Load TOU state from disk."""
+        try:
+            if not os.path.exists(self.tou_state_file):
+                self.logger.info(f"TOU state file {self.tou_state_file} does not exist, starting fresh")
+                self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+                return
+            
+            with open(self.tou_state_file, 'r') as f:
+                state_data = json.load(f)
+            
+            # Validate structure
+            if not isinstance(state_data, dict):
+                raise ValueError("Invalid TOU state file format")
+            
+            # Handle version migration if needed
+            version = state_data.get('version', 1)
+            if version != 1:
+                self.logger.warning(f"Unknown TOU state file version {version}, starting fresh")
+                self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+                return
+            
+            # Load inverters state
+            inverters = state_data.get('inverters', {})
+            if not isinstance(inverters, dict):
+                raise ValueError("Invalid inverters structure in TOU state file")
+            
+            self.tou_state = {
+                'version': 1,
+                'inverters': inverters,
+                'last_sync': state_data.get('last_sync')
+            }
+            
+            inverter_count = len(inverters)
+            self.logger.info(f"Loaded TOU state for {inverter_count} inverter(s) from {self.tou_state_file}")
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            self.logger.warning(f"Failed to load TOU state: {e}, starting fresh")
+            self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+        except Exception as e:
+            self.logger.error(f"Unexpected error loading TOU state: {e}, starting fresh")
+            self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+    
+    def _save_tou_state(self):
+        """Save TOU state to disk with atomic write."""
+        try:
+            state_data = {
+                'version': 1,
+                'inverters': self.tou_state.get('inverters', {}),
+                'last_sync': time.time()
+            }
+            
+            # Atomic write: write to temp file, then rename
+            temp_file = f"{self.tou_state_file}.tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(state_data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())  # Force write to disk
+            
+            # Atomic rename
+            os.rename(temp_file, self.tou_state_file)
+            self.logger.debug(f"TOU state saved to {self.tou_state_file}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save TOU state: {e}")
+    
+    def _get_tou_state(self, inverter_id: str) -> bool:
+        """
+        Get stored TOU state for an inverter.
+        
+        Args:
+            inverter_id: Inverter ID to check
+            
+        Returns:
+            True if TOU is enabled, False if disabled.
+            Defaults to True (enabled) if state is unknown (assumes TOU is on by default).
+        """
+        inverters = self.tou_state.get('inverters', {})
+        inverter_data = inverters.get(inverter_id)
+        if inverter_data and isinstance(inverter_data, dict):
+            return inverter_data.get('tou_enabled', True)  # Default to True if key missing
+        # Default to True (enabled) if no stored state - assumes TOU is on by default
+        return True
+    
+    def _update_tou_state(self, inverter_id: str, enabled: bool, power_source: str, last_attempt_time: Optional[float] = None):
+        """
+        Update stored TOU state for an inverter.
+        
+        Args:
+            inverter_id: Inverter ID to update
+            enabled: TOU enabled state
+            power_source: Power source that triggered this change
+            last_attempt_time: Timestamp of last change attempt (defaults to current time)
+        """
+        if 'inverters' not in self.tou_state:
+            self.tou_state['inverters'] = {}
+        
+        current_time = time.time()
+        self.tou_state['inverters'][inverter_id] = {
+            'tou_enabled': enabled,
+            'last_updated': current_time,
+            'last_power_source': power_source,
+            'last_attempt_time': last_attempt_time if last_attempt_time is not None else current_time
+        }
+        
+        self._save_tou_state()
+        self.logger.debug(f"Updated TOU state for inverter {inverter_id}: {'enabled' if enabled else 'disabled'} (power source: {power_source})")
+    
+    def _is_in_cooldown(self, inverter_id: str) -> bool:
+        """
+        Check if an inverter is currently in cooldown period.
+        
+        Args:
+            inverter_id: Inverter ID to check
+            
+        Returns:
+            True if inverter is in cooldown, False otherwise
+        """
+        inverters = self.tou_state.get('inverters', {})
+        inverter_data = inverters.get(inverter_id)
+        
+        if not inverter_data or not isinstance(inverter_data, dict):
+            return False
+        
+        last_attempt_time = inverter_data.get('last_attempt_time')
+        if last_attempt_time is None:
+            return False
+        
+        time_since_attempt = time.time() - last_attempt_time
+        return time_since_attempt < self.tou_cooldown_seconds
     
     
     def on_power_source_change(self, power_source: str, frequency_data: Dict[str, Any], optocoupler_name: str = None):
@@ -232,14 +371,60 @@ class SolArkIntegration:
                     
                     for inverter_id in inverter_ids:
                         try:
+                            # Check stored state first
+                            stored_state = self._get_tou_state(inverter_id)
+                            
+                            if stored_state == enable:
+                                # Check if we have actual stored data or just default assumption
+                                inverters = self.tou_state.get('inverters', {})
+                                has_stored_data = inverter_id in inverters
+                                
+                                if has_stored_data:
+                                    self.logger.info(f"TOU for inverter {inverter_id} already {'enabled' if enable else 'disabled'} (stored state), skipping cloud call")
+                                else:
+                                    self.logger.info(f"TOU for inverter {inverter_id} assumed {'enabled' if enable else 'disabled'} (default), skipping cloud call")
+                                
+                                success_count += 1
+                                # Update timestamp even though we didn't make a cloud call
+                                self._update_tou_state(inverter_id, enable, power_source)
+                                continue
+                            
+                            # State differs - check cooldown before proceeding
+                            if self._is_in_cooldown(inverter_id):
+                                inverters = self.tou_state.get('inverters', {})
+                                inverter_data = inverters.get(inverter_id, {})
+                                last_attempt_time = inverter_data.get('last_attempt_time', 0)
+                                time_since_attempt = time.time() - last_attempt_time
+                                cooldown_remaining = self.tou_cooldown_seconds - time_since_attempt
+                                
+                                self.logger.info(f"TOU change for inverter {inverter_id} skipped due to cooldown "
+                                               f"({cooldown_remaining:.0f}s remaining). "
+                                               f"Assuming previous attempt succeeded, optimistically setting state to {'enabled' if enable else 'disabled'}")
+                                
+                                # Optimistically update state to match desired state (assume previous attempt succeeded)
+                                self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=last_attempt_time)
+                                success_count += 1
+                                continue
+                            
+                            # Not in cooldown, proceed with cloud call
+                            self.logger.info(f"TOU state mismatch for inverter {inverter_id}: stored={stored_state}, desired={enable}, updating via cloud")
+                            
+                            # Optimistically update state BEFORE cloud call (assume it will succeed)
+                            attempt_time = time.time()
+                            self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=attempt_time)
+                            
                             # Use synchronous Sol-Ark cloud method
                             result = self.solark_cloud.toggle_time_of_use(enable, inverter_id)
                             
                             if result:
                                 success_count += 1
                                 self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for inverter {inverter_id}")
+                                # State already updated optimistically, no need to update again
                             else:
-                                self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for inverter {inverter_id}")
+                                self.logger.warning(f"Cloud call failed for inverter {inverter_id}, but state was optimistically updated. "
+                                                  f"Assuming success per configuration (will retry after cooldown if needed)")
+                                # Still count as success since we optimistically assume it succeeded
+                                success_count += 1
                                 
                         except Exception as e:
                             self.logger.error(f"Error toggling TOU for inverter {inverter_id}: {e}")

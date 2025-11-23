@@ -163,6 +163,8 @@ solark_cloud:
   session_persistence: true # Save login session to avoid repeated logins
   session_file: "solark_session.json" # File to store session data
   session_timeout: 15768000   # Session timeout in seconds (6 months)
+  tou_state_file: "solark_tou_state.json" # File to store TOU state for inverters
+  tou_cooldown_seconds: 300  # Cooldown period in seconds before retrying TOU changes (5 minutes)
   parameter_changes:
     enabled: true           # Enable automatic parameter changes
     dry_run: false          # Set to true to log changes without applying
