@@ -33,6 +33,9 @@
 - [x] **AC-into-DC-optocoupler documented** - Hardware setup and edge counting behavior documented
 - [x] **No outlier filtering** - Preserves ability to detect generator instability patterns
 
+### LCD Display Implementation Notes
+- [ ] **RPLCD Library**: The RPLCD library version (`lcd_rplcd.py`) was attempted but never got working properly. Currently using `CharLCD1602` (original LCD1602.py) which is the working version. If RPLCD support is needed in the future, it will require debugging the initialization and display update methods.
+
 ### 3) Multiple H1AA1 modules working concurrently  
 - [ ] Add multi-H1AA1 input support to GPIO and pulse counter
 - [ ] Extend config schema to define multiple H1AA1 channels

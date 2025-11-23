@@ -11,16 +11,9 @@ from datetime import datetime, timedelta
 from typing import Optional, Deque
 from collections import deque
 
-# Global flag to switch between LCD implementations
-USE_RPLCD = False  # Set to True to use RPLCD, False to use original LCD1602.py
-
-# Hardware imports
-if USE_RPLCD:
-    from lcd_rplcd import LCD1602_RPLCD
-    LCD_AVAILABLE = True
-else:
-    from LCD1602 import CharLCD1602
-    LCD_AVAILABLE = True
+# Hardware imports - using CharLCD1602 (working version)
+from LCD1602 import CharLCD1602
+LCD_AVAILABLE = True
 
 
 def format_duration(seconds: float) -> str:
@@ -74,8 +67,9 @@ class DisplayManager:
         self.config = config
         self.logger = logger
         self.hardware_manager = hardware_manager
-        self.lcd_available = LCD_AVAILABLE
-        self.lcd = None
+        
+        # Flag to track if we should use simulated display (set automatically if hardware fails)
+        self._use_simulated_display = False
         
         # Smart display management
         try:
@@ -94,6 +88,7 @@ class DisplayManager:
         self.button_handler = None
         self._setup_button()
         
+        # Try to initialize hardware (will fall back to simulated if it fails)
         self._setup_display()
     
     def __enter__(self):
@@ -106,70 +101,42 @@ class DisplayManager:
         return False  # Don't suppress exceptions
     
     def _setup_display(self):
-        """Setup LCD display."""
-        self.logger.info(f"LCD available: {self.lcd_available}")
+        """Setup LCD display - try hardware first, fall back to simulated if it fails."""
+        # Try to initialize real hardware using CharLCD1602
+        self.lcd_available = LCD_AVAILABLE
+        self.lcd = None
         
-        if self.lcd_available:
+        try:
+            self.logger.info("Attempting to initialize CharLCD1602...")
+            
+            # Get LCD configuration from config.yaml
             try:
-                if USE_RPLCD:
-                    self.logger.info("Creating LCD1602_RPLCD object...")
-                    
-                    # Get LCD configuration from config.yaml
-                    try:
-                        lcd_address = self.config['hardware']['lcd_address']
-                        lcd_port = self.config['hardware']['lcd_port']
-                        lcd_cols = self.config['hardware']['lcd_cols']
-                        lcd_rows = self.config['hardware']['lcd_rows']
-                    except KeyError as e:
-                        raise KeyError(f"Missing required hardware configuration key: {e}")
-                    
-                    self.logger.info(f"LCD config: address=0x{lcd_address:02x}, port={lcd_port}, cols={lcd_cols}, rows={lcd_rows}")
-                    
-                    # Initialize with configured settings
-                    self.lcd = LCD1602_RPLCD(
-                        address=lcd_address,
-                        port=lcd_port,
-                        cols=lcd_cols,
-                        rows=lcd_rows,
-                        backlight_enabled=True
-                    )
-                    self.logger.info("LCD1602_RPLCD object created successfully")
-                else:
-                    self.logger.info("Creating original LCD1602 object...")
-                    
-                    # Get LCD configuration from config.yaml
-                    try:
-                        lcd_address = self.config['hardware']['lcd_address']
-                    except KeyError as e:
-                        raise KeyError(f"Missing required hardware configuration key: {e}")
-                    
-                    self.logger.info(f"LCD config: address=0x{lcd_address:02x}")
-                    
-                    # Initialize with the old working method
-                    self.lcd = CharLCD1602()
-                    init_result = self.lcd.init_lcd(addr=lcd_address, bl=0)
-                    
-                    if init_result:
-                        self.logger.info("Original LCD1602 initialized successfully")
-                    else:
-                        self.logger.error("LCD init_lcd() returned False - initialization failed")
-                        self.lcd_available = False
-                        self.lcd = None
-                        return
+                lcd_address = self.config['hardware']['lcd_address']
+            except KeyError as e:
+                raise KeyError(f"Missing required hardware configuration key: {e}")
+            
+            self.logger.info(f"LCD config: address=0x{lcd_address:02x}")
+            
+            # Initialize with CharLCD1602 (working version)
+            self.lcd = CharLCD1602()
+            init_result = self.lcd.init_lcd(addr=lcd_address, bl=0)
+            
+            if not init_result:
+                raise RuntimeError("LCD init_lcd() returned False - initialization failed")
+            
+            # Ensure backlight is on at startup
+            self.lcd.set_backlight(True)
+            self.logger.info("CharLCD1602 initialized successfully - using real hardware")
+            self._use_simulated_display = False
                 
-                self.logger.info("LCD hardware initialized successfully")
-                # Ensure backlight is on at startup
-                if self.lcd:
-                    self.lcd.set_backlight(True)
-                    self.logger.info("Display backlight turned on at startup")
-            except Exception as e:
-                self.logger.error(f"Failed to initialize LCD: {e}")
-                import traceback
-                self.logger.error(f"LCD initialization traceback: {traceback.format_exc()}")
-                self.lcd_available = False
-                self.lcd = None
-        else:
-            self.logger.info("LCD not available, skipping LCD setup")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize LCD hardware: {e}")
+            self.logger.info("Automatically falling back to simulated LCD display")
+            import traceback
+            self.logger.debug(f"LCD initialization traceback: {traceback.format_exc()}")
+            self.lcd_available = False
+            self.lcd = None
+            self._use_simulated_display = True
     
     def _setup_button(self):
         """Setup button handler for display control."""
@@ -194,30 +161,33 @@ class DisplayManager:
     
     def update_display(self, line1: str, line2: str):
         """Update LCD display with smart timeout management."""
+        # Use simulated display if hardware failed
+        if self._use_simulated_display:
+            self._simulate_display(line1, line2)
+            return
+        
         # Check if display should be turned on due to timeout
         self._check_display_timeout()
         
         # Try to use real LCD if available and display is on
-        if self.lcd_available and self.lcd and self.display_on:
-            self.logger.debug("Updating real LCD display")
+        if not self.display_on:
+            self.logger.debug("Display is off due to timeout")
+            return
+        
+        if self.lcd_available and self.lcd:
             try:
                 self.lcd.clear()
-                self.lcd.write(0, 0, line1)  # Write to line 1, column 0
-                self.lcd.write(0, 1, line2)  # Write to line 2, column 0
-                self.logger.debug(f"LCD updated successfully: '{line1}' | '{line2}'")
+                self.lcd.write(0, 0, line1)
+                self.lcd.write(0, 1, line2)
+                self.logger.debug(f"LCD updated: '{line1}' | '{line2}'")
             except Exception as e:
-                self.logger.error(f"Failed to update LCD display: {e}")
-                import traceback
-                self.logger.error(f"Display update traceback: {traceback.format_exc()}")
-                # Fallback to console display
-                self.logger.info("Falling back to console display")
+                self.logger.error(f"Failed to update LCD: {e}")
+                # Automatically fallback to simulated display on error
+                self._use_simulated_display = True
                 self._simulate_display(line1, line2)
-        elif not self.display_on:
-            # Display is off due to timeout
-            self.logger.debug("Display is off due to timeout")
         else:
-            # No LCD available, use console display
-            self.logger.debug("No LCD available, using console display")
+            # No LCD available, automatically use simulated display
+            self._use_simulated_display = True
             self._simulate_display(line1, line2)
     
     def _simulate_display(self, line1: str, line2: str):
@@ -422,9 +392,6 @@ class DisplayManager:
         if self.lcd_available and self.lcd:
             try:
                 self.lcd.clear()
-                # Only call close() if it's the RPLCD version (has close method)
-                if USE_RPLCD and hasattr(self.lcd, 'close'):
-                    self.lcd.close()
                 self.logger.info("LCD cleanup completed")
             except Exception as e:
                 self.logger.error(f"LCD cleanup error: {e}")

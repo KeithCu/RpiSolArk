@@ -1354,8 +1354,6 @@ def main():
                        help='Run with real hardware')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable verbose logging')
-    parser.add_argument('--no-display-sim', action='store_true',
-                       help='Disable LCD display simulation')
     parser.add_argument('--tuning', '-t', action='store_true',
                        help='Enable tuning data collection mode')
     parser.add_argument('--tuning-duration', type=int, default=3600,
@@ -1401,10 +1399,6 @@ def main():
         # Override log level if verbose or debug logging
         if args.verbose or args.debug_logging:
             logging.getLogger().setLevel(logging.DEBUG)
-        
-        # Override display simulation setting
-        if args.no_display_sim:
-            monitor.config.config['app']['simulate_display'] = False
         
         # Override tuning settings
         if args.tuning:
