@@ -22,7 +22,7 @@ hardware:
     primary:
       gpio_pin: 26      # GPIO pin for optocoupler input (H11AA1)
       pulses_per_cycle: 1 # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
-      measurement_duration: 5.0  # Duration in seconds for frequency measurement (longer = more stable)
+      measurement_duration: 2.0  # Duration in seconds for frequency measurement (longer = more stable) - Reduced for simulator testing
       name: "Mechanical"   # Display name for optocoupler
       # Multiple inverters can be connected to one optocoupler (supports up to 3 inverters)
       inverters:
@@ -38,7 +38,7 @@ hardware:
 
 # Sampling Configuration
 sampling:
-  sample_rate: 2.0      # Hz (samples per second) - Optimal for generator detection
+  sample_rate: 2.0      # Hz (samples per second) - DEPRECATED: Used only for buffer sizing. Primary timing is measurement_duration (5.0s)
   buffer_duration: 300  # seconds (5 minutes) - Captures generator hunting cycles
   min_freq: 30.0        # Minimum valid frequency (Hz) - Accounts for generator drops and optocoupler readings
   max_freq: 80.0        # Maximum valid frequency (Hz) - Accounts for generator overspeed and optocoupler readings
@@ -47,10 +47,9 @@ sampling:
 analysis:
   allan_variance_tau: 10.0  # seconds for Allan variance calculation - Matches generator cycles
   generator_thresholds:
-    # Based on real-world generator data analysis - Optimized for better detection
+    # Based on real-world generator data analysis - Simplified (kurtosis removed)
     allan_variance: 0.0001  # More sensitive for hunting pattern detection (was 0.001)
     std_dev: 0.6            # Perfect balance - keep as is
-    kurtosis: 1.5           # Optimized for pattern recognition (was 2.0)
 
 # State Machine Configuration
 state_machine:
@@ -66,7 +65,7 @@ state_machine:
 logging:
   hourly_log_file: "hourly_status.csv"
   memory_log_file: "memory_usage.csv"
-  log_level: "INFO"         # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: "DEBUG"         # DEBUG, INFO, WARNING, ERROR, CRITICAL
   log_file: "monitor.log"
   max_log_size: 10485760    # 10MB
   backup_count: 5
@@ -174,7 +173,7 @@ solark_cloud:
 
 # Display Configuration
 display:
-  classification_window: 300  # seconds - Window for classification display
+  # Note: classification_window removed - display uses current classification directly (updated once per second)
 restart:
   cooldown_seconds: 5       # Minimum time between restarts (seconds)
   max_per_hour: 3          # Maximum restarts allowed per hour

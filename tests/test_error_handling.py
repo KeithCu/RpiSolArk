@@ -295,18 +295,15 @@ class TestSystemIntegrationErrorHandling:
         monitor = FrequencyMonitor.__new__(FrequencyMonitor)
         monitor.freq_buffer = deque(maxlen=2)  # Very small buffer
         monitor.time_buffer = deque(maxlen=2)
-        monitor.classification_buffer = deque(maxlen=2)
 
         # Fill buffers beyond capacity
         for i in range(10):
             monitor.freq_buffer.append(60.0 + i * 0.1)
             monitor.time_buffer.append(i)
-            monitor.classification_buffer.append("Utility Grid")
 
         # Buffers should have maintained only the most recent items
         assert len(monitor.freq_buffer) == 2
         assert len(monitor.time_buffer) == 2
-        assert len(monitor.classification_buffer) == 2
 
     def test_concurrent_access_simulation(self, config, logger):
         """Test system handles concurrent access scenarios."""

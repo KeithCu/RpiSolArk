@@ -97,10 +97,8 @@ def test_frequency_monitor_initialization(mock_offline, mock_restart, mock_tunin
     # Verify data buffers were initialized
     assert hasattr(monitor, 'freq_buffer')
     assert hasattr(monitor, 'time_buffer')
-    assert hasattr(monitor, 'classification_buffer')
     assert isinstance(monitor.freq_buffer, deque)
     assert isinstance(monitor.time_buffer, deque)
-    assert isinstance(monitor.classification_buffer, deque)
 
     # Verify state variables
     assert monitor.running == True
@@ -137,16 +135,9 @@ def test_frequency_monitor_buffer_sizes(mock_offline, mock_restart, mock_tuning,
     buffer_duration = config.get_float('sampling.buffer_duration', 300)
     expected_freq_buffer_size = int(buffer_duration * sample_rate)
 
-    classification_window = config.get_float('display.classification_window', 300)
-    # In simulator mode, classification window is capped at 10 seconds
-    if config['app']['simulator_mode']:
-        classification_window = min(classification_window, 10)
-    expected_class_buffer_size = int(classification_window * sample_rate)
-
     assert len(monitor.freq_buffer) == 0  # Should start empty
     assert monitor.freq_buffer.maxlen == expected_freq_buffer_size
     assert monitor.time_buffer.maxlen == expected_freq_buffer_size
-    assert monitor.classification_buffer.maxlen == expected_class_buffer_size
 
 
 @patch('monitor.HardwareManager')
@@ -174,10 +165,7 @@ def test_frequency_monitor_simulator_mode(mock_offline, mock_restart, mock_tunin
     config.config['app'] = {'simulator_mode': True}
     monitor_sim = FrequencyMonitor()
 
-    # Should have smaller classification window in simulator mode
-    classification_window = config.get_float('display.classification_window', 300)
-    expected_size = min(classification_window, 10) * config.get_float('sampling.sample_rate', 2.0)
-    assert monitor_sim.classification_buffer.maxlen == int(expected_size)
+    # Classification buffer removed - display uses current classification directly
 
 
 @patch('monitor.HardwareManager')

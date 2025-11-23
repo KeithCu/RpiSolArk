@@ -22,7 +22,6 @@ from enum import Enum
 # Third-party imports
 import numpy as np
 import allantools
-from scipy import stats
 
 # Local imports
 from config import Config, Logger
@@ -66,6 +65,11 @@ class PowerStateMachine:
         self.state_entry_time = time.time()
         self.last_action_taken = None  # Track last action to prevent duplicates
         
+        # Simple debouncing for state transitions
+        self.pending_state = None
+        self.pending_state_time = None
+        self.debounce_seconds = 5.0  # Require state to be consistent for 5 seconds before transitioning
+        
         # Load persistent state if enabled
         if self.persistent_state_enabled:
             self._load_persistent_state()
@@ -92,7 +96,7 @@ class PowerStateMachine:
     def update_state(self, frequency: Optional[float], power_source: str,
                     zero_voltage_duration: float) -> PowerState:
         """
-        Update state based on current conditions using existing frequency analysis.
+        Update state based on current conditions with simple debouncing.
 
         Args:
             frequency: Current frequency reading (None if no signal)
@@ -101,57 +105,34 @@ class PowerStateMachine:
         """
         new_state = self._determine_state(frequency, power_source, zero_voltage_duration)
 
-        # Check if state changed
+        # Simple debouncing: require state to be consistent for debounce_seconds before transitioning
         if new_state != self.current_state:
-            self._transition_to_state(new_state)
-
-        # Check for transition timeout
-        elif self.current_state == PowerState.TRANSITIONING:
-            if time.time() - self.state_entry_time > self.transition_timeout:
-                self.logger.warning(f"Transition timeout exceeded, forcing to OFF_GRID")
-                self._transition_to_state(PowerState.OFF_GRID)
-
-        return self.current_state
-    
-    def update_state_with_confidence(self, frequency: Optional[float], power_source: str, 
-                                   confidence: float, zero_voltage_duration: float) -> PowerState:
-        """Update state with confidence-based logic for maximum accuracy."""
-        
-        # Add confidence tracking to state machine
-        if not hasattr(self, 'confidence_history'):
-            self.confidence_history = deque(maxlen=10)
-        
-        self.confidence_history.append(confidence)
-        # Division by zero cannot happen here because we just appended to confidence_history,
-        # so len(self.confidence_history) is guaranteed to be >= 1
-        avg_confidence = sum(self.confidence_history) / len(self.confidence_history)
-        
-        # Only transition if confidence is high enough
-        if avg_confidence < 0.5:
-            self.logger.debug(f"Low confidence ({avg_confidence:.2f}), maintaining current state")
-            return self.current_state
-        
-        # Enhanced state determination with confidence
-        if zero_voltage_duration >= self.zero_voltage_threshold:
-            new_state = PowerState.OFF_GRID
-        elif frequency is None:
-            new_state = PowerState.TRANSITIONING
-        elif power_source == "Utility Grid" and avg_confidence >= 0.7:
-            new_state = PowerState.GRID
-        elif power_source == "Generac Generator" and avg_confidence >= 0.7:
-            new_state = PowerState.GENERATOR
+            current_time = time.time()
+            
+            # If this is a new pending state, start the timer
+            if self.pending_state != new_state:
+                self.pending_state = new_state
+                self.pending_state_time = current_time
+                self.logger.debug(f"State change pending: {self.current_state.value} -> {new_state.value} (debouncing for {self.debounce_seconds}s)")
+            
+            # If pending state has been consistent long enough, transition
+            elif self.pending_state_time and (current_time - self.pending_state_time) >= self.debounce_seconds:
+                # Get monitor reference from config if available (passed during initialization)
+                monitor = getattr(self, '_monitor_ref', None)
+                self._transition_to_state(new_state, monitor)
+                self.pending_state = None
+                self.pending_state_time = None
         else:
-            new_state = PowerState.TRANSITIONING
-        
-        # Check if state changed
-        if new_state != self.current_state:
-            self._transition_to_state(new_state)
+            # State is consistent, clear any pending state
+            self.pending_state = None
+            self.pending_state_time = None
 
         # Check for transition timeout
-        elif self.current_state == PowerState.TRANSITIONING:
+        if self.current_state == PowerState.TRANSITIONING:
             if time.time() - self.state_entry_time > self.transition_timeout:
                 self.logger.warning(f"Transition timeout exceeded, forcing to OFF_GRID")
-                self._transition_to_state(PowerState.OFF_GRID)
+                monitor = getattr(self, '_monitor_ref', None)
+                self._transition_to_state(PowerState.OFF_GRID, monitor)
 
         return self.current_state
 
@@ -175,7 +156,7 @@ class PowerStateMachine:
         else:  # "Unknown" or any other classification
             return PowerState.TRANSITIONING
 
-    def _transition_to_state(self, new_state: PowerState):
+    def _transition_to_state(self, new_state: PowerState, monitor=None):
         """Handle state transition."""
         old_state = self.current_state
         self.previous_state = old_state
@@ -183,6 +164,15 @@ class PowerStateMachine:
         self.state_entry_time = time.time()
 
         self.logger.info(f"Power state transition: {old_state.value} -> {new_state.value}")
+
+        # Clear buffers when transitioning between major power states to avoid contamination
+        # This ensures fresh analysis for the new state without old data from previous state
+        major_states = [PowerState.GRID, PowerState.GENERATOR, PowerState.OFF_GRID]
+        if (old_state != new_state and 
+            (old_state == PowerState.TRANSITIONING or new_state in major_states or old_state in major_states)):
+            if monitor:
+                monitor._clear_buffers()
+                self.logger.info(f"Buffers cleared on state transition: {old_state.value} -> {new_state.value}")
 
         # Save persistent state after transition
         if self.persistent_state_enabled:
@@ -542,36 +532,40 @@ class FrequencyAnalyzer:
         return float(freq)  # Ensure we return a Python float
     
     def _simulate_frequency(self) -> Optional[float]:
-        """Simulate power state cycling: grid (8s) -> off-grid (6s) -> generator (8s) -> grid (6s)."""
+        """Simulate power state cycling: grid (10s) -> off-grid (10s) -> generator (10s) -> grid (10s).
+        
+        With measurement_duration seconds per measurement, each state gets multiple measurements.
+        Total cycle: 40 seconds.
+        """
         current_time = time.time()
 
         # Initialize simulator start time
         if self.simulator_start_time is None:
             self.simulator_start_time = current_time
 
-        # Calculate elapsed time and current phase (0-28 seconds cycle)
+        # Calculate elapsed time and current phase (60 second cycle: longer grid periods for testing)
         elapsed = current_time - self.simulator_start_time
-        cycle_time = elapsed % 28.0  # 28 second cycle: 8s grid + 6s off + 8s gen + 6s grid
+        cycle_time = elapsed % 60.0  # 60 second cycle: 20s grid + 10s off + 20s gen + 10s grid
 
         # Determine current state based on cycle time
-        if cycle_time < 8.0:
-            # Grid power (0-8s): very stable 60 Hz - gives time for detection
+        if cycle_time < 20.0:
+            # Grid power (0-20s): very stable 60 Hz
             self.simulator_state = "grid"
             base_freq = 60.0
             noise = random.gauss(0, 0.005)  # Very small stable noise
             return float(base_freq + noise)
 
-        elif cycle_time < 14.0:
-            # Off-grid power (8-14s): no frequency (None) - longer than 5s threshold
+        elif cycle_time < 30.0:
+            # Off-grid power (20-30s): no frequency (None)
             self.simulator_state = "off_grid"
             return None  # No signal
 
-        elif cycle_time < 22.0:
-            # Generator power (14-22s): variable frequency with hunting - gives time for detection
+        elif cycle_time < 50.0:
+            # Generator power (30-50s): variable frequency with hunting
             self.simulator_state = "generator"
-            # Simulate generator hunting: alternating high/low every 2 seconds
-            phase_in_cycle = (cycle_time - 14.0) % 4.0
-            if phase_in_cycle < 2.0:
+            # Simulate generator hunting: alternating high/low
+            phase_in_cycle = (cycle_time - 30.0) % 2.0
+            if phase_in_cycle < 1.0:
                 base_freq = 58.5 + random.uniform(-0.5, 1.0)  # Low range
             else:
                 base_freq = 61.0 + random.uniform(-1.0, 0.5)  # High range
@@ -579,56 +573,59 @@ class FrequencyAnalyzer:
             return float(base_freq + noise)
 
         else:
-            # Back to grid power (22-28s): stable 60 Hz - final grid period
+            # Back to grid power (50-60s): stable 60 Hz
             self.simulator_state = "grid"
             base_freq = 60.0
             noise = random.gauss(0, 0.005)  # Very small stable noise
             return float(base_freq + noise)
     
-    def analyze_stability(self, frac_freq: np.ndarray) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-        """Compute Allan variance and statistical metrics."""
+    def analyze_stability(self, frac_freq: np.ndarray) -> Tuple[Optional[float], Optional[float]]:
+        """Compute Allan variance and standard deviation (simplified - kurtosis removed)."""
         # Check for None input first
         if frac_freq is None:
             self.logger.error("frac_freq is None. Cannot perform analysis.")
-            return None, None, None
+            return None, None
         
-        if len(frac_freq) < 10:
-            return None, None, None
+        # In simulator mode, allow analysis with fewer samples for faster state transitions
+        min_samples = 3 if hasattr(self, 'simulator_mode') and getattr(self, 'simulator_mode', False) else 5
+        if len(frac_freq) < min_samples:
+            return None, None
         
         try:
             # Validate input data type - must be numeric
             if not isinstance(frac_freq, (np.ndarray, list, tuple)):
                 self.logger.error(f"Invalid data type for frac_freq: {type(frac_freq)}. Expected numpy array, list, or tuple.")
-                return None, None, None
+                return None, None
             
             # Convert to numpy array and validate all elements are numeric
             try:
                 frac_freq_array = np.array(frac_freq)
             except (ValueError, TypeError) as e:
                 self.logger.error(f"Failed to convert frac_freq to numpy array: {e}. Data contains non-numeric values.")
-                return None, None, None
+                return None, None
             
             # Check if all elements are numeric (not strings, etc.)
-            # First check if the dtype is numeric before using np.issubdtype
             if frac_freq_array.dtype.kind in ['U', 'S', 'O']:  # Unicode, byte string, or object
                 self.logger.error(f"frac_freq contains non-numeric data. Dtype: {frac_freq_array.dtype}")
-                return None, None, None
+                return None, None
             
-            # Now safe to use np.issubdtype
             if not np.issubdtype(frac_freq_array.dtype, np.number):
                 self.logger.error(f"frac_freq contains non-numeric data. Dtype: {frac_freq_array.dtype}")
-                return None, None, None
+                return None, None
             
             # Check for NaN or infinite values
             if np.any(np.isnan(frac_freq_array)) or np.any(np.isinf(frac_freq_array)):
                 self.logger.error("frac_freq contains NaN or infinite values")
-                return None, None, None
+                return None, None
             
             try:
-                sample_rate = self.config['sampling']['sample_rate']
+                # Calculate sample rate from measurement_duration (samples per second)
+                measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
+                sample_rate = 1.0 / measurement_duration
                 tau_target = self.config['analysis']['allan_variance_tau']
             except KeyError as e:
                 raise KeyError(f"Missing required configuration key: {e}")
+            
             # Use allantools.adev for Allan deviation calculation
             taus_out, adev, _, _ = allantools.adev(frac_freq_array, rate=sample_rate, data_type='freq')
             if taus_out.size > 0 and adev.size > 0:
@@ -637,56 +634,34 @@ class FrequencyAnalyzer:
                 avar_10s = 0.0
             
             std_freq = float(np.std(frac_freq_array * 60.0))
-            kurtosis = float(stats.kurtosis(frac_freq_array))
             
-            return avar_10s, std_freq, kurtosis
+            return avar_10s, std_freq
         except Exception as e:
             self.logger.error(f"Error in stability analysis: {e}")
-            return None, None, None
+            return None, None
     
-    def analyze_signal_quality(self, freq_data: List[float]) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
-        """Enhanced signal quality analysis for maximum accuracy."""
-        if len(freq_data) < 10:
-            return None, None, None, None
+    def analyze_signal_quality(self, freq_data: List[float]) -> Tuple[Optional[float], Optional[float]]:
+        """Simplified signal analysis - returns Allan variance and standard deviation only."""
+        # In simulator mode, allow analysis with fewer samples for faster state transitions
+        min_samples = 3 if hasattr(self, 'simulator_mode') and getattr(self, 'simulator_mode', False) else 10
+        if len(freq_data) < min_samples:
+            return None, None
         
         freq_array = np.array(freq_data)
-        
-        # Standard metrics
         frac_freq = (freq_array - 60.0) / 60.0
-        avar_10s, std_freq, kurtosis = self.analyze_stability(frac_freq)
+        avar_10s, std_freq = self.analyze_stability(frac_freq)
         
-        # Additional accuracy metrics
-        freq_range = np.max(freq_array) - np.min(freq_array)
-        freq_trend = np.polyfit(range(len(freq_array)), freq_array, 1)[0]  # Linear trend
-        
-        # Signal quality score (0-1, higher is better)
-        quality_score = self._calculate_signal_quality(freq_array, std_freq, freq_range)
-        
-        return avar_10s, std_freq, kurtosis, quality_score
+        return avar_10s, std_freq
     
-    def _calculate_signal_quality(self, freq_array: np.ndarray, std_freq: float, freq_range: float) -> float:
-        """Calculate signal quality score for accuracy assessment."""
-        # Utility grid should have low std dev and small range
-        if std_freq < 0.1 and freq_range < 0.5:
-            return 1.0  # Excellent signal quality
-        elif std_freq < 0.5 and freq_range < 2.0:
-            return 0.8  # Good signal quality
-        elif std_freq < 1.0 and freq_range < 5.0:
-            return 0.6  # Fair signal quality
-        else:
-            return 0.3  # Poor signal quality
-    
-    def classify_power_source(self, avar_10s: Optional[float], std_freq: Optional[float], 
-                            kurtosis: Optional[float]) -> str:
-        """Classify as Generac generator or utility."""
-        if any(x is None for x in [avar_10s, std_freq, kurtosis]):
+    def classify_power_source(self, avar_10s: Optional[float], std_freq: Optional[float]) -> str:
+        """Classify as Generac generator or utility using simplified OR logic (std_dev OR allan_variance)."""
+        if any(x is None for x in [avar_10s, std_freq]):
             return "Unknown"
         
         # Get thresholds and ensure they are numeric
         try:
             avar_thresh = self.thresholds['allan_variance']
             std_thresh = self.thresholds['std_dev']
-            kurt_thresh = self.thresholds['kurtosis']
         except KeyError as e:
             raise KeyError(f"Missing required threshold configuration key: {e}")
         
@@ -694,50 +669,14 @@ class FrequencyAnalyzer:
         try:
             avar_thresh = float(avar_thresh)
             std_thresh = float(std_thresh)
-            kurt_thresh = float(kurt_thresh)
         except (ValueError, TypeError) as e:
-            self.logger.error(f"Invalid threshold values: avar={avar_thresh}, std={std_thresh}, kurt={kurt_thresh}. Error: {e}")
+            self.logger.error(f"Invalid threshold values: avar={avar_thresh}, std={std_thresh}. Error: {e}")
             return "Unknown"
         
-        if avar_10s > avar_thresh or std_freq > std_thresh or kurtosis > kurt_thresh:
+        # Simple OR logic: if EITHER metric exceeds threshold → generator
+        if avar_10s > avar_thresh or std_freq > std_thresh:
             return "Generac Generator"
         return "Utility Grid"
-    
-    def classify_power_source_with_confidence(self, avar_10s: Optional[float], std_freq: Optional[float], 
-                                            kurtosis: Optional[float], quality_score: Optional[float]) -> Tuple[str, float]:
-        """Classify power source with confidence scoring for maximum accuracy."""
-        if any(x is None for x in [avar_10s, std_freq, kurtosis]):
-            return "Unknown", 0.0
-        
-        # Get thresholds
-        try:
-            avar_thresh = self.thresholds['allan_variance']
-            std_thresh = self.thresholds['std_dev']
-            kurt_thresh = self.thresholds['kurtosis']
-        except KeyError as e:
-            raise KeyError(f"Missing required threshold configuration key: {e}")
-        
-        # Calculate confidence based on how far values are from thresholds
-        avar_confidence = min(1.0, avar_10s / avar_thresh) if avar_10s > avar_thresh else 0.0
-        std_confidence = min(1.0, std_freq / std_thresh) if std_freq > std_thresh else 0.0
-        kurt_confidence = min(1.0, kurtosis / kurt_thresh) if kurtosis > kurt_thresh else 0.0
-        
-        # Weight by signal quality
-        quality_weight = quality_score if quality_score else 0.5
-        
-        # Generator indicators
-        generator_indicators = [avar_confidence, std_confidence, kurt_confidence]
-        max_confidence = max(generator_indicators)
-        
-        # Apply quality weighting
-        final_confidence = max_confidence * quality_weight
-        
-        if final_confidence > 0.7:
-            return "Generac Generator", final_confidence
-        elif final_confidence < 0.3:
-            return "Utility Grid", 1.0 - final_confidence
-        else:
-            return "Unknown", 0.5
 
 
 class FrequencyMonitor:
@@ -780,6 +719,8 @@ class FrequencyMonitor:
             self.logger.info("Real mode: Using real hardware for frequency data")
         
         self.analyzer = FrequencyAnalyzer(self.config, self.logger)
+        # Set simulator mode on analyzer so it can use reduced sample requirements
+        self.analyzer.simulator_mode = self.simulator_mode
         
         # Initialize Sol-Ark integration (with graceful handling if disabled)
         try:
@@ -802,22 +743,23 @@ class FrequencyMonitor:
         self.analyzer.hardware_manager = self.hardware
         
         # Initialize data buffers
-        sample_rate = self.config.get_float('sampling.sample_rate')
+        # Use measurement_duration as the primary timing parameter
+        measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
         buffer_duration = self.config.get_float('sampling.buffer_duration')
-        buffer_size = int(buffer_duration * sample_rate)
+        
+        # Buffer size: store enough samples to cover buffer_duration
+        # Each measurement takes measurement_duration seconds, so samples per second = 1/measurement_duration
+        samples_per_second = 1.0 / measurement_duration
+        buffer_size = int(buffer_duration * samples_per_second)
+        # Ensure buffer can hold at least a few samples
+        buffer_size = max(buffer_size, 10)
         
         self.freq_buffer = deque(maxlen=buffer_size)
         self.time_buffer = deque(maxlen=buffer_size)
         
-        # Initialize power source classification buffer for U/G indicator
-        classification_window = self.config.get_float('display.classification_window')  # 5 minutes default
-        
-        # Use smaller window in simulator mode for better testing
-        if self.simulator_mode:
-            classification_window = min(classification_window, 10)  # Max 10 seconds in simulator
-        
-        classification_buffer_size = int(classification_window * sample_rate)
-        self.classification_buffer = deque(maxlen=classification_buffer_size)
+        # Clear buffers on startup to ensure fresh analysis
+        self._clear_buffers()
+        self.logger.info("Buffers cleared on startup for fresh analysis")
         
         # State variables
         self.running = True
@@ -868,10 +810,13 @@ class FrequencyMonitor:
             # Create state machine for primary optocoupler
             primary_config = optocoupler_config['primary']
             primary_name = primary_config['name']
-            state_machines[primary_name] = PowerStateMachine(
+            state_machine = PowerStateMachine(
                 self.config, self.logger, self.hardware.display, 
                 self.solark_integration, primary_name
             )
+            # Store monitor reference for buffer clearing on state transitions
+            state_machine._monitor_ref = self
+            state_machines[primary_name] = state_machine
             self.logger.info(f"Created state machine for optocoupler: {primary_name}")
             
             self.logger.info(f"Created {len(state_machines)} optocoupler state machine")
@@ -880,45 +825,36 @@ class FrequencyMonitor:
         except KeyError as e:
             raise KeyError(f"Missing required optocoupler configuration: {e}")
     
-    def _analyze_frequency_for_optocoupler(self, freq: Optional[float], optocoupler_name: str) -> Tuple[str, float]:
+    def _analyze_frequency_for_optocoupler(self, freq: Optional[float], optocoupler_name: str) -> str:
         """
-        Analyze frequency for a specific optocoupler
+        Analyze frequency for a specific optocoupler (simplified - no confidence)
         
         Args:
             freq: Frequency reading
             optocoupler_name: Name of the optocoupler
             
         Returns:
-            Tuple of (power_source, confidence)
+            power_source classification string
         """
         if freq is None:
-            return "Unknown", 0.0
+            return "Unknown"
         
         # Use the same analysis logic as the main loop
-        if len(self.freq_buffer) >= 10:
-            # Full analysis with 10+ samples
-            avar_10s, std_freq, kurtosis, quality_score = self.analyzer.analyze_signal_quality(list(self.freq_buffer))
-            source, confidence = self.analyzer.classify_power_source_with_confidence(avar_10s, std_freq, kurtosis, quality_score)
-        elif len(self.freq_buffer) >= 3:
-            # Quick detection with fewer samples
-            recent_freqs = list(self.freq_buffer)[-3:]
-            avg_freq = sum(recent_freqs) / len(recent_freqs)
-            variation = max(recent_freqs) - min(recent_freqs)
-            
-            if variation < 0.1 and 59.9 <= avg_freq <= 60.1:
-                source = "Utility Grid"
-                confidence = 0.9
-            elif variation > 2.0:
-                source = "Generac Generator"
-                confidence = 0.8
-            else:
-                source = "Unknown"
-                confidence = 0.3
-        else:
-            source = "Unknown"
-            confidence = 0.0
+        measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
+        samples_needed = 1  # Minimum: 1 sample (covers measurement_duration seconds)
+        samples_for_analysis = max(1, min(len(self.freq_buffer), max(3, len(self.freq_buffer))))
         
-        return source, confidence
+        if len(self.freq_buffer) >= samples_needed:
+            # Full analysis with measurement_duration worth of data
+            samples_to_use = samples_for_analysis
+            recent_data = list(self.freq_buffer)[-samples_to_use:]
+            avar_10s, std_freq = self.analyzer.analyze_signal_quality(recent_data)
+            source = self.analyzer.classify_power_source(avar_10s, std_freq)
+        else:
+            # Not enough data - stay in Unknown state
+            source = "Unknown"
+        
+        return source
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -947,22 +883,26 @@ class FrequencyMonitor:
         if self.hardware is not None:
             self.hardware.update_display("Starting...", "Please wait...")
 
-        # For simulator mode, set up auto-exit after 20 seconds
+        # For simulator mode, set up auto-exit after 60 seconds (one full cycle)
         if simulator_mode:
-            self.simulator_exit_time = time.time() + 20.0
-            self.logger.info("Simulator mode: will auto-exit after 20 seconds (28s power cycle)")
+            self.simulator_exit_time = time.time() + 60.0
+            self.logger.info("Simulator mode: will auto-exit after 60 seconds (one full cycle: 20s grid -> 10s off-grid -> 20s generator -> 10s grid)")
         
         try:
+            # Get measurement duration once at start
+            measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
+            
             while self.running:
-                loop_start_time = time.perf_counter()
                 current_time = time.time() - self.start_time
                 
-                # Get frequency reading
+                # Get frequency reading - always measure for full measurement_duration
                 if simulator_mode:
+                    # In simulator, generate a reading but simulate the 5-second measurement time
                     freq = self.analyzer._simulate_frequency()
+                    # Simulate the measurement duration by sleeping
+                    time.sleep(measurement_duration)
                 else:
-                    # Use measurement duration from config
-                    measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
+                    # Real hardware: measure for full duration (blocks for measurement_duration seconds)
                     freq = self.analyzer.count_zero_crossings(duration=measurement_duration)
 
                 # Track zero voltage duration
@@ -981,7 +921,7 @@ class FrequencyMonitor:
                 # Validate frequency reading with enhanced accuracy checks
                 self.logger.debug("Validating frequency reading...")
                 if freq is None:
-                    self.logger.warning(f"No frequency reading (zero voltage duration: {self.zero_voltage_duration:.1f}s)")
+                    self.logger.info(f"No frequency reading (zero voltage duration: {self.zero_voltage_duration:.1f}s)")
                     # Continue processing even with no frequency for state machine updates
                 elif not isinstance(freq, (int, float)):
                     self.logger.error(f"Invalid frequency data type: {type(freq)}. Expected number, got {freq}")
@@ -992,7 +932,7 @@ class FrequencyMonitor:
                 else:
                     # Enhanced validation for accuracy
                     pulse_count = getattr(self, 'last_pulse_count', 0)  # Get from optocoupler if available
-                    validated_freq = self.analyzer.validate_frequency_reading(freq, pulse_count, 2.0)
+                    validated_freq = self.analyzer.validate_frequency_reading(freq, pulse_count, measurement_duration)
                     if validated_freq is None:
                         self.logger.warning(f"Frequency reading failed validation: {freq:.2f}Hz")
                         continue
@@ -1014,67 +954,55 @@ class FrequencyMonitor:
                 # Pet the systemd watchdog
                 self._sd_notify("WATCHDOG=1")
 
-                # Analyze data only if we have enough samples
+                # Analyze data only if we have enough data
+                # Since each measurement is measurement_duration seconds, we need at least 1 sample
+                # Use enough samples to cover measurement_duration seconds for analysis
                 self.logger.debug("Analyzing data...")
                 confidence = 0.0
+                
+                # Calculate how many samples we need for analysis
+                # Since we measure every measurement_duration seconds, 1 sample = measurement_duration seconds
+                # For robust statistical analysis, use multiple samples if available (prefer 3+)
+                samples_needed = 1  # Minimum: 1 sample (covers measurement_duration seconds)
+                # Use all available samples for better statistics (minimum 1, prefer 3+)
+                samples_for_analysis = max(1, min(len(self.freq_buffer), max(3, len(self.freq_buffer))))
+                
                 if freq is None:
                     # No frequency reading - classify as Unknown
                     self.logger.debug("No frequency reading - classifying as Unknown")
                     source = "Unknown"
                     avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
+                elif len(self.freq_buffer) >= samples_needed:
+                    # We have enough data - use available samples for analysis
+                    self.logger.debug(f"Full analysis with {len(self.freq_buffer)} samples (using {samples_for_analysis} samples, each covering {measurement_duration}s)")
+                    # Use available samples for analysis (prefer multiple for better statistics)
+                    samples_to_use = samples_for_analysis
+                    recent_data = list(self.freq_buffer)[-samples_to_use:]
                     
-                    # Clear classification buffer when signal is lost to show "?" immediately
-                    if len(self.classification_buffer) > 0:
-                        self.logger.debug("Clearing classification buffer due to signal loss")
-                        self.classification_buffer.clear()
-                elif len(self.freq_buffer) >= 10:
-                    self.logger.debug("Full analysis with 10+ samples")
-                    # Use enhanced signal quality analysis
-                    avar_10s, std_freq, kurtosis, quality_score = self.analyzer.analyze_signal_quality(list(self.freq_buffer))
-                    source, confidence = self.analyzer.classify_power_source_with_confidence(avar_10s, std_freq, kurtosis, quality_score)
+                    # Simplified signal analysis (std_dev + allan_variance only)
+                    avar_10s, std_freq = self.analyzer.analyze_signal_quality(recent_data)
+                    source = self.analyzer.classify_power_source(avar_10s, std_freq)
                     
-                    # Debug logging for classification with confidence
-                    self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, kurtosis={kurtosis}, quality={quality_score}, source={source}, confidence={confidence:.2f}")
-                    if len(self.freq_buffer) >= 5:
-                        recent_freqs = list(self.freq_buffer)[-5:]
-                        freq_range = max(recent_freqs) - min(recent_freqs)
-                        self.logger.debug(f"Recent frequency range: {freq_range:.2f} Hz (min: {min(recent_freqs):.2f}, max: {max(recent_freqs):.2f})")
-                elif len(self.freq_buffer) >= 3:
-                    self.logger.debug("Quick analysis with 3+ samples")
-                    # Quick detection with fewer samples for better UX
-                    recent_freqs = list(self.freq_buffer)[-3:]  # Last 3 readings
-                    avg_freq = sum(recent_freqs) / len(recent_freqs)
-                    variation = max(recent_freqs) - min(recent_freqs)
-
-                    if variation < 0.1 and 59.9 <= avg_freq <= 60.1:
-                        source = "Utility Grid"  # Quick stable detection
-                        confidence = 0.9
-                    elif variation > 2.0:  # Increased threshold for utility power (was 0.5)
-                        source = "Generac Generator"  # Quick unstable detection
-                        confidence = 0.8
-                    else:
-                        source = "Unknown"  # Default to Unknown for moderate variation
-                        confidence = 0.3
-                    avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
+                    # Debug logging for classification
+                    self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, source={source}")
+                    if len(recent_data) >= 2:
+                        freq_range = max(recent_data) - min(recent_data)
+                        self.logger.debug(f"Recent frequency range: {freq_range:.2f} Hz (min: {min(recent_data):.2f}, max: {max(recent_data):.2f})")
                 else:
-                    self.logger.debug("Not enough samples for analysis")
-                    # Not enough data for analysis yet
-                    avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
+                    self.logger.debug(f"Not enough samples for analysis (have {len(self.freq_buffer)}, need {samples_needed} sample(s), each covering {measurement_duration}s)")
+                    # Not enough data for analysis yet - stay in Unknown state
+                    avar_10s, std_freq = None, None
                     source = "Unknown"
-                    confidence = 0.0
 
-                # Update classification buffer immediately after analysis
-                self.classification_buffer.append(source)
-                
                 # Update state machines for each optocoupler
                 self.logger.debug("Updating state machines...")
                 current_states = {}
                 
-                # Update optocoupler state machine
+                # Update optocoupler state machine (simplified - no confidence)
                 primary_name = self.config.get('hardware.optocoupler.primary.name')
                 if primary_name in self.state_machines:
-                    current_states[primary_name] = self.state_machines[primary_name].update_state_with_confidence(
-                        freq, source, confidence, self.zero_voltage_duration
+                    current_states[primary_name] = self.state_machines[primary_name].update_state(
+                        freq, source, self.zero_voltage_duration
                     )
                 
                 # Collect tuning data if enabled
@@ -1082,8 +1010,7 @@ class FrequencyMonitor:
                 if self.tuning_collector.enabled:
                     analysis_results = {
                         'allan_variance': avar_10s,
-                        'std_deviation': std_freq,
-                        'kurtosis': kurtosis
+                        'std_deviation': std_freq
                     }
                     self.tuning_collector.collect_frequency_sample(freq, analysis_results, source)
                     self.tuning_collector.collect_analysis_results(analysis_results, source, len(self.freq_buffer))
@@ -1092,10 +1019,7 @@ class FrequencyMonitor:
                 self.logger.debug("Logging detailed frequency data...")
                 analysis_results = {
                     'allan_variance': avar_10s,
-                    'std_deviation': std_freq,
-                    'kurtosis': kurtosis,
-                    'quality_score': quality_score,
-                    'confidence': confidence
+                    'std_deviation': std_freq
                 }
                 self.data_logger.log_detailed_frequency_data(
                     freq, analysis_results, source, self.sample_count, 
@@ -1103,7 +1027,7 @@ class FrequencyMonitor:
                 )
                 
                 # Log accuracy metrics for debugging
-                self.log_accuracy_metrics(freq, source, confidence, analysis_results)
+                self.log_accuracy_metrics(freq, source, analysis_results)
                 
                 # Update display and LEDs once per second
                 self.logger.debug("Checking display update...")
@@ -1111,7 +1035,7 @@ class FrequencyMonitor:
                 
                 if current_time - self.last_display_time >= display_interval:
                     self.logger.debug("Updating display and LEDs...")
-                    ug_indicator = self._get_current_power_source_indicator()
+                    ug_indicator = self._get_power_source_indicator(source)
                     primary_name = self.config.get('hardware.optocoupler.primary.name')
                     primary_state_machine = self.state_machines.get(primary_name)
                     
@@ -1159,7 +1083,7 @@ class FrequencyMonitor:
                     for optocoupler_name, state_machine in self.state_machines.items():
                         all_state_info[optocoupler_name] = state_machine.get_state_info()
                     
-                    self.data_logger.log_hourly_status(timestamp, freq, source, std_freq, kurtosis, self.sample_count,
+                    self.data_logger.log_hourly_status(timestamp, freq, source, std_freq, None, self.sample_count,
                                                      state_info=all_state_info)
 
                     # Log memory information to CSV
@@ -1175,21 +1099,8 @@ class FrequencyMonitor:
 
                     self.last_log_time = current_time
 
-                # Maintain sample rate with drift correction
-                self.logger.debug("Maintaining sample rate...")
-                sample_rate = self.config.get_float('sampling.sample_rate')
-                target_interval = 1.0 / sample_rate
-
-                # Calculate sleep time based on loop start
-                elapsed = time.perf_counter() - loop_start_time
-                sleep_time = target_interval - elapsed
-                
-                if sleep_time > 0:
-                    self.logger.debug(f"Sleeping for {sleep_time:.3f} seconds (drift correction)")
-                    time.sleep(sleep_time)
-                else:
-                    self.logger.warning(f"Loop overrun by {-sleep_time:.3f}s - processing took too long")
-                
+                # No sleep needed - measurement already took measurement_duration seconds
+                # Loop will naturally run at rate: measurement_duration + processing time
                 self.logger.debug("Main loop iteration complete")
                 
         except Exception as e:
@@ -1197,46 +1108,28 @@ class FrequencyMonitor:
         finally:
             self.cleanup()
     
-    def _get_current_power_source_indicator(self) -> str:
-        """Get U/G indicator based on recent power source classifications."""
-        if not self.classification_buffer:
-            return "?"
-        
-        # Count recent classifications
-        utility_count = sum(1 for source in self.classification_buffer if source == "Utility Grid")
-        generator_count = sum(1 for source in self.classification_buffer if source == "Generac Generator")
-        total_count = len(self.classification_buffer)
-        
-        # Determine majority classification
-        if utility_count > generator_count:
-            indicator = "Util"  # Utility
-        elif generator_count > utility_count:
-            indicator = "Gen"   # Generator
+    def _get_power_source_indicator(self, source: str) -> str:
+        """Convert power source classification to U/G indicator."""
+        if source == "Utility Grid":
+            return "Util"
+        elif source == "Generac Generator":
+            return "Gen"
         else:
-            indicator = ""    # Unknown/Equal
-        
-        # Log classification details for debugging (only occasionally to avoid spam)
-        if total_count % 5 == 0:  # Log every 5th update for more frequent debugging
-            self.logger.debug(f"Power Source Indicator: {indicator} (U:{utility_count}, G:{generator_count}, Total:{total_count})")
-            # Show recent classifications for debugging
-            recent_classifications = list(self.classification_buffer)[-10:] if len(self.classification_buffer) >= 10 else list(self.classification_buffer)
-            self.logger.debug(f"Recent classifications: {recent_classifications}")
-        
-        return indicator
+            return "?"  # Unknown
 
-    def log_accuracy_metrics(self, freq: Optional[float], source: str, confidence: float, analysis_results: Dict[str, Any]):
-        """Log detailed accuracy metrics for debugging."""
+    def _clear_buffers(self):
+        """Clear frequency and time buffers to ensure fresh analysis."""
+        self.freq_buffer.clear()
+        self.time_buffer.clear()
+        self.logger.debug("Frequency and time buffers cleared")
+
+    def log_accuracy_metrics(self, freq: Optional[float], source: str, analysis_results: Dict[str, Any]):
+        """Log detailed accuracy metrics for debugging (simplified - no confidence)."""
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug(f"Accuracy Metrics: freq={freq:.3f}Hz, source={source}, "
-                             f"confidence={confidence:.2f}, avar={analysis_results.get('allan_variance', 'N/A')}, "
-                             f"std={analysis_results.get('std_deviation', 'N/A')}, "
-                             f"quality={analysis_results.get('quality_score', 'N/A')}")
-            
-            # Log confidence history if available
-            primary_name = self.config.get('hardware.optocoupler.primary.name')
-            if primary_name and primary_name in self.state_machines and hasattr(self.state_machines[primary_name], 'confidence_history') and len(self.state_machines[primary_name].confidence_history) > 0:
-                avg_confidence = sum(self.state_machines[primary_name].confidence_history) / len(self.state_machines[primary_name].confidence_history)
-                self.logger.debug(f"Confidence History: avg={avg_confidence:.2f}, recent={list(self.state_machines[primary_name].confidence_history)[-3:]}")
+            freq_str = f"{freq:.3f}Hz" if freq is not None else "N/A"
+            self.logger.debug(f"Accuracy Metrics: freq={freq_str}, source={source}, "
+                             f"avar={analysis_results.get('allan_variance', 'N/A')}, "
+                             f"std={analysis_results.get('std_deviation', 'N/A')}")
 
     def validate_buffers(self) -> bool:
         """Validate buffer integrity and detect corruption."""
@@ -1278,7 +1171,6 @@ class FrequencyMonitor:
                 # Clear all buffers
                 self.freq_buffer.clear()
                 self.time_buffer.clear()
-                self.classification_buffer.clear()
                 
                 # Log corruption event
                 self.logger.critical(f"Buffer corruption event #{self.buffer_corruption_count} - all buffers cleared")

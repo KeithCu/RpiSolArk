@@ -31,9 +31,9 @@ This document provides comprehensive guidance for new developers joining the Rpi
 ### Data Flow
 
 1. **Input**: AC line frequency via optocoupler (H11AA1) using `libgpiod` interrupts.
-2. **Processing**: Real-time frequency analysis using Allan variance, standard deviation, and kurtosis.
+2. **Processing**: Real-time frequency analysis using standard deviation and Allan variance (simplified OR logic).
 3. **Classification**: Power source detection (Utility Grid vs Generac Generator).
-4. **State Management**: Power state machine with confidence-based transitions and persistence.
+4. **State Management**: Power state machine with simple debouncing (5-second consistency requirement) and persistence.
 5. **Output**: LCD display, LED indicators, logging, and **Sol-Ark Cloud automation** (Time of Use toggling).
 
 ## Core Components
@@ -44,13 +44,14 @@ This document provides comprehensive guidance for new developers joining the Rpi
 
 **Key Classes**:
 - `FrequencyMonitor`: Main application controller with resource tracking.
-- `FrequencyAnalyzer`: Frequency analysis and classification.
-- `PowerStateMachine`: Persistent state management for power system.
+- `FrequencyAnalyzer`: Simplified frequency analysis using std_dev + Allan variance (OR logic).
+- `PowerStateMachine`: Persistent state management with simple debouncing (5-second consistency requirement).
 
 **Key Features**:
 - **Upgrade Lock**: Prevents automatic system upgrades (`unattended-upgrades`) during Off-Grid or Generator states to ensure system availability.
 - **Drift Correction**: Main loop calculates sleep time to maintain precise sample rates.
 - **Reliability**: Persistent state storage (JSON), buffer corruption detection, and atomic file operations.
+- **Simplified Detection**: Uses only std_dev + Allan variance (removed kurtosis and confidence complexity for maintainability).
 
 **Dependencies**: All other components.
 
@@ -154,12 +155,16 @@ This document provides comprehensive guidance for new developers joining the Rpi
 
 ### Frequency Analysis & Power Source Detection
 
-The system uses three complementary analysis methods:
-1. **Allan Variance**: Detects short-term frequency instability (hunting).
-2. **Standard Deviation**: Measures overall frequency spread.
-3. **Kurtosis**: Analyzes distribution shape.
+The system uses **two complementary analysis methods** (simplified for reliability and maintainability):
 
-**Generator Detection**: Generators exhibit "hunting" patterns (oscillations around 60Hz). Utility grid is typically very stable.
+1. **Standard Deviation**: Measures overall frequency spread (100% detection rate - catches all generator instability patterns).
+2. **Allan Variance**: Detects short-term frequency instability and temporal hunting patterns (75% detection rate - catches temporal patterns std dev might miss).
+
+**Generator Detection**: Generators exhibit "hunting" patterns (oscillations around 60Hz). Utility grid is typically very stable. 
+
+**Simplified OR Logic**: The system uses simple OR logic: if EITHER metric exceeds threshold → generator detected. This maintains 100% accuracy while keeping the code simple and maintainable.
+
+**Note**: Kurtosis was removed (only 25% effective) and confidence scoring was simplified to simple debouncing. See [SIMPLIFICATION_PROPOSAL.md](SIMPLIFICATION_PROPOSAL.md) for details.
 
 ### Power State Machine
 
@@ -167,7 +172,7 @@ The system uses three complementary analysis methods:
 
 **Features**:
 - **Persistence**: Saves state to JSON to survive restarts.
-- **Confidence Scoring**: Requires high confidence (>0.8) to transition states.
+- **Simple Debouncing**: Requires state to be consistent for 5 seconds before transitioning (prevents rapid state changes).
 - **Upgrade Lock**: Creates `/var/run/unattended-upgrades.lock` during Off-Grid/Generator states to prevent system updates from causing downtime when power is critical.
 
 ### Sol-Ark Cloud Automation
@@ -250,6 +255,9 @@ solark_cloud:
 
 4. **Run**:
    ```bash
+   # Activate virtual environment first
+   source .venv/bin/activate  # or: . .venv/bin/activate
+   
    # Simulator
    python monitor.py --simulator
    
@@ -337,7 +345,7 @@ If the system falsely detects Generator power (False Positive) or misses it (Fal
       generator_thresholds:
         allan_variance: 0.0001  # Typical range: 0.00005 - 0.0005
         std_dev: 0.6            # Typical range: 0.3 - 1.0
-        kurtosis: 1.5           # Typical range: 1.0 - 3.0
+        # Note: Kurtosis removed - simplified to std_dev + allan_variance only
     ```
 
 ### Add New Sol-Ark Parameter
