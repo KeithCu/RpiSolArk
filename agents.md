@@ -20,15 +20,21 @@ This document provides comprehensive guidance for new developers joining the Rpi
                        │  & Health       │    │  LED Control    │
                        │  Monitoring     │    │                 │
                        └─────────────────┘    └─────────────────┘
+                                │                        │
+                                ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐
+                       │  Sol-Ark Cloud  │◀───│  System Updates │
+                       │  Integration    │    │  & OS Tuning    │
+                       └─────────────────┘    └─────────────────┘
 ```
 
 ### Data Flow
 
-1. **Input**: AC line frequency via optocoupler (H11AA1)
-2. **Processing**: Real-time frequency analysis using Allan variance, standard deviation, and kurtosis
-3. **Classification**: Power source detection (Utility Grid vs Generac Generator)
-4. **State Management**: Power state machine with confidence-based transitions
-5. **Output**: LCD display, LED indicators, logging, and optional Sol-Ark integration
+1. **Input**: AC line frequency via optocoupler (H11AA1) using `libgpiod` interrupts.
+2. **Processing**: Real-time frequency analysis using Allan variance, standard deviation, and kurtosis.
+3. **Classification**: Power source detection (Utility Grid vs Generac Generator).
+4. **State Management**: Power state machine with confidence-based transitions and persistence.
+5. **Output**: LCD display, LED indicators, logging, and **Sol-Ark Cloud automation** (Time of Use toggling).
 
 ## Core Components
 
@@ -37,470 +43,231 @@ This document provides comprehensive guidance for new developers joining the Rpi
 **Purpose**: Central coordinator that orchestrates all system components with comprehensive reliability features.
 
 **Key Classes**:
-- `FrequencyMonitor`: Main application controller with resource tracking
-- `FrequencyAnalyzer`: Frequency analysis and classification
-- `PowerStateMachine`: Persistent state management for power system
+- `FrequencyMonitor`: Main application controller with resource tracking.
+- `FrequencyAnalyzer`: Frequency analysis and classification.
+- `PowerStateMachine`: Persistent state management for power system.
 
-**Key Methods**:
-- `run()`: Main monitoring loop with buffer validation
-- `_signal_handler()`: Graceful shutdown handling
-- `cleanup()`: Resource cleanup with verification
-- `validate_buffers()`: Periodic buffer corruption detection
+**Key Features**:
+- **Dual Optocoupler Support**: Manages separate state machines for primary and secondary optocouplers.
+- **Upgrade Lock**: Prevents automatic system upgrades (`unattended-upgrades`) during Off-Grid or Generator states to ensure system availability.
+- **Drift Correction**: Main loop calculates sleep time to maintain precise sample rates.
+- **Reliability**: Persistent state storage (JSON), buffer corruption detection, and atomic file operations.
 
-**Reliability Features**:
-- Persistent state management with JSON storage
-- Buffer corruption detection and recovery
-- Resource leak prevention and verification
-- Atomic file operations for data integrity
-
-**Dependencies**: All other components
+**Dependencies**: All other components.
 
 ### 2. hardware.py - Hardware Abstraction Layer
 
 **Purpose**: Provides unified interface to all hardware components with graceful degradation.
 
 **Key Classes**:
-- `HardwareManager`: Main hardware coordinator
+- `HardwareManager`: Main hardware coordinator.
 
 **Key Features**:
-- Delegates to specialized component managers
-- Graceful degradation when hardware unavailable
-- Backward compatibility for existing code
-
-**Dependencies**: `display.py`, `gpio_manager.py`, `optocoupler.py`
+- Delegates to specialized component managers (`gpio`, `optocoupler`, `display`).
+- Graceful degradation when hardware (GPIO, LCD) is unavailable.
+- **Thread Priority**: Sets high process priority and CPU affinity (Core 3) for stable timing.
 
 ### 3. display.py - Display and LED Management
 
 **Purpose**: Manages LCD display, LED indicators, and display logic.
 
 **Key Classes**:
-- `DisplayManager`: LCD and LED control
+- `DisplayManager`: LCD and LED control.
 
 **Key Features**:
-- Smart backlight timeout management
-- Dual optocoupler cycling display
-- LCD driver selection (original LCD1602 vs RPLCD)
-- Emergency state handling (keeps display on during power events)
-
-**Configuration**: Set `USE_RPLCD = True` in display.py to use RPLCD library
+- **Dual Display Cycling**: Cycles between primary and secondary optocoupler readings every 2 seconds.
+- **Smart Timeout**: Turns off display after inactivity unless in emergency state (Off-Grid/Generator).
+- **Driver Support**: Supports both original `LCD1602` and `RPLCD` libraries.
+- **Emergency State Handling**: Forces display ON during power events.
 
 ### 4. optocoupler.py - Frequency Measurement
 
-**Purpose**: High-accuracy frequency measurement using libgpiod interrupts with comprehensive error recovery.
+**Purpose**: High-accuracy frequency measurement using `libgpiod` interrupts (GIL-safe).
 
 **Key Classes**:
-- `OptocouplerManager`: Manages one or more optocouplers with health monitoring
-- `SingleOptocoupler`: Individual optocoupler management with recovery mechanisms
+- `OptocouplerManager`: Manages one or more optocouplers (Single or Dual mode).
+- `SingleOptocoupler`: Individual optocoupler management with recovery mechanisms.
 
 **Key Features**:
-- GIL-free interrupt counting via libgpiod
-- Dual optocoupler support
-- CPU affinity optimization for consistent timing
-- High-priority threading for accuracy
-- **Health checks and automatic recovery**
-- **Configurable error thresholds and recovery attempts**
-- **Context manager support for proper cleanup**
-- **Hardware status monitoring and reporting**
+- **GIL-free Counting**: Uses `gpio_event_counter` C extension (via `libgpiod`) for accurate interrupt counting.
+- **Health Monitoring**: Tracks consecutive errors and attempts automatic recovery (re-initialization).
+- **Dual Optocoupler**: Simultaneous measurement from two sources.
+- **Frequency Calculation**: Configurable pulse counting logic.
 
-**AC-into-DC-Optocoupler Configuration**:
-- **Hardware Setup**: H11AA1 DC optocoupler receiving AC input WITHOUT rectifier
-- **Signal Behavior**: 
-  - Positive AC half-cycle: optocoupler conducts → produces pulse
-  - Negative AC half-cycle: reverse-biased → no output
-  - Result: 1 pulse per AC cycle (not 2 like with rectifier)
-- **Frequency Calculation**: `frequency = pulse_count / (duration * 2)`
-  - libgpiod counts both edges: 2 edges per pulse
-  - H11AA1 produces 1 pulse per AC cycle
-  - Total: 2 edges per AC cycle
-- **Noise Considerations**: AC signal may produce edge noise; outlier filtering applied
+### 5. solark_cloud.py & solark_integration.py - Cloud Automation
 
-**Dependencies**: `gpio_event_counter.py` (C extension)
+**Purpose**: Automates Sol-Ark inverter settings via the cloud portal using **Playwright**.
 
-### 5. gpio_manager.py - GPIO Operations
-
-**Purpose**: Low-level GPIO control for LEDs and buttons.
+**Key Classes**:
+- `SolArkCloud`: Low-level browser automation (Login, Navigation, TOU Toggling).
+- `SolArkIntegration`: High-level logic mapping power states to inverter settings.
 
 **Key Features**:
-- LED control (green/red for power source indication)
-- Reset button handling (active LOW with pull-up)
-- Graceful degradation when GPIO unavailable
+- **Browser Automation**: Uses Playwright (Chromium) to interact with the Sol-Ark web portal.
+- **Session Persistence**: Saves/loads cookies and local storage to avoid repeated logins.
+- **Time of Use (TOU) Toggling**: Automatically enables TOU on Grid and disables on Generator/Off-Grid.
+- **Multi-Inverter Support**: Can control multiple inverters mapped to specific optocouplers.
+- **Resilience**: Handles redirects, login expirations, and network timeouts.
 
-### 6. button_handler.py - Display Button Control
+### 6. rpisolark_optimize_writes.py - SD Card Preservation
 
-**Purpose**: Handles tactile push button for manual display activation.
+**Purpose**: System tuning script to reduce MicroSD card wear for 24/7 operation.
 
 **Key Features**:
-- Manual display activation (5-minute timeout)
-- Debounced button detection
-- Polling-based detection (more reliable than edge detection)
+- **Journald in RAM**: Sets `Storage=volatile` for system logs.
+- **Disable Periodic Tasks**: Disables APT daily update timers.
+- **Mount Options**: Applies `noatime` to filesystems.
+- **Tmpfs**: Mounts `/tmp` in RAM.
+- **Idempotent**: Can be run multiple times safely (`apply`, `revert`, `status` modes).
 
 ### 7. config.py - Configuration Management
 
-**Purpose**: YAML configuration loading and access helpers with comprehensive validation.
+**Purpose**: YAML configuration loading with strict validation.
 
 **Key Features**:
-- Hierarchical configuration access
-- Type conversion helpers
-- **Comprehensive validation** with type checking and range validation
-- **Fail-fast startup** with clear error messages
-- **No default values** - requires complete config.yaml file
-- **Clear error messages** for missing or invalid configuration
+- **Fail-fast Validation**: Prevents startup if critical config is missing.
+- **Type Checking**: Ensures numeric values are within valid ranges.
 
 ### 8. health.py - System Monitoring
 
-**Purpose**: Monitors system health and memory usage with comprehensive resource tracking.
+**Purpose**: Monitors system health (CPU, RAM) and Watchdog.
 
 **Key Classes**:
-- `HealthMonitor`: System health tracking with resource management
-- `MemoryMonitor`: Memory usage monitoring with atomic writes
+- `HealthMonitor`: Watchdog timer and resource tracking.
+- `MemoryMonitor`: Tracks process memory and triggers GC if needed.
 
 **Key Features**:
-- CPU and memory threshold monitoring
-- **Configurable watchdog recovery actions** (log, restart, reboot)
-- **Resource leak detection and cleanup verification**
-- **Thread and file handle tracking**
-- **Loop rate monitoring and slowdown detection**
-- **Atomic CSV writes for data integrity**
-- Memory cleanup automation
+- **Watchdog**: Can log, restart app, or reboot system if loop hangs.
+- **Atomic CSV Logging**: Uses `fcntl` locking for safe log writes.
+- **Leak Detection**: Tracks open file handles and active threads.
 
-### 9. data_logger.py - Data Persistence
+### 9. setup_zero_code_updates.sh - Auto-Update System
 
-**Purpose**: Handles all data logging operations with atomic writes for data integrity.
+**Purpose**: User-friendly script to set up automatic code updates.
 
-**Key Features**:
-- Hourly status logging with atomic writes
-- Detailed frequency logging (configurable)
-- **Atomic CSV operations** with file locking
-- **Power-loss safe writes** using temporary files
-- CSV output with comprehensive metadata
-- Confidence scoring for classifications
+**Options**:
+- Systemd Timer (Recommended)
+- Cron Job
+- GitHub Actions
+- Watchman / Inotify
 
-### 10. tuning_collector.py - Data Collection for Tuning
-
-**Purpose**: High-frequency data collection for threshold optimization.
-
-**Key Features**:
-- 10Hz sampling rate
-- Comprehensive analysis data export
-- Automatic collection duration
-- Multiple export formats (CSV, JSON)
-
-### 11. offline_analyzer.py - Post-Processing Analysis
-
-**Purpose**: Analyzes collected data to recommend optimal thresholds.
-
-**Key Features**:
-- Statistical analysis of frequency data
-- Threshold recommendations
-- Pattern recognition
-- Performance metrics
-
-### 12. restart_manager.py - Application Restart Logic
-
-**Purpose**: Handles application restart with safety checks.
-
-**Key Features**:
-- Cooldown periods between restarts
-- Safety checks before restart
-- Rate limiting (max restarts per hour)
-
-## Supporting Components
-
-### dashboard.py - Web Health Monitoring
-
-**Purpose**: Separate Flask-based web dashboard for system monitoring.
-
-**Features**:
-- System status API
-- Monitor process tracking
-- Log viewing
-- Temperature monitoring
-
-**Usage**: `python dashboard.py` (runs on port 5000)
-
-**Note**: This is a separate application, not integrated with the main monitor loop.
-
-### solark_integration.py - Sol-Ark Cloud Integration
-
-**Purpose**: Integrates with Sol-Ark cloud platform for parameter updates.
-
-**Status**: Available but needs integration work. Not currently connected to main monitor loop.
-
-**Features**:
-- Automatic parameter changes based on power source
-- Cloud synchronization
-- Session persistence
-
-### solark_cloud.py - Sol-Ark Cloud API Client
-
-**Purpose**: Low-level Sol-Ark cloud API client using Playwright.
-
-**Features**:
-- Web automation for cloud platform
-- Parameter change application
-- Data synchronization
+---
 
 ## Key Concepts
 
 ### Frequency Analysis & Power Source Detection
 
 The system uses three complementary analysis methods:
+1. **Allan Variance**: Detects short-term frequency instability (hunting).
+2. **Standard Deviation**: Measures overall frequency spread.
+3. **Kurtosis**: Analyzes distribution shape.
 
-1. **Allan Variance**: Detects short-term frequency instability and hunting patterns
-2. **Standard Deviation**: Measures overall frequency spread
-3. **Kurtosis**: Analyzes distribution shape to identify hunting vs random noise
-
-**Generator Detection**: Generators exhibit characteristic "hunting" patterns where frequency oscillates around 60Hz due to mechanical governor response.
+**Generator Detection**: Generators exhibit "hunting" patterns (oscillations around 60Hz). Utility grid is typically very stable.
 
 ### Power State Machine
 
-**States**:
-- `OFF_GRID`: No voltage detected for extended period
-- `GRID`: Stable utility power detected
-- `GENERATOR`: Backup generator power detected  
-- `TRANSITIONING`: Unclear state, waiting for classification
+**States**: `OFF_GRID`, `GRID`, `GENERATOR`, `TRANSITIONING`.
 
 **Features**:
-- Confidence-based transitions
-- Emergency state handling (prevents system upgrades, forces display on)
-- Timeout protection against stuck states
-- **Persistent state management** with JSON storage
-- **Duplicate action prevention** across restarts
-- **State validation** with automatic fallback
+- **Persistence**: Saves state to JSON to survive restarts.
+- **Confidence Scoring**: Requires high confidence (>0.8) to transition states.
+- **Upgrade Lock**: Creates `/var/run/unattended-upgrades.lock` during Off-Grid/Generator states to prevent system updates from causing downtime when power is critical.
 
-### Graceful Degradation
+### Sol-Ark Cloud Automation
 
-The system is designed to continue operating even when hardware components fail:
+- **Goal**: Optimize battery usage based on power source.
+- **Logic**:
+    - **Grid**: Enable Time of Use (TOU) to use battery for peak shaving/arbitrage.
+    - **Generator/Off-Grid**: Disable TOU to prioritize battery charging/preservation.
+- **Implementation**: Headless browser automation fills gaps in the official API.
 
-- **LCD Failure**: Falls back to console display
-- **GPIO Failure**: Continues with simulated LEDs
-- **Optocoupler Failure**: Uses simulator mode
-- **Network Failure**: Continues local operation
-
-### Dual Optocoupler Support
-
-- Simultaneous frequency measurement from two sources
-- Cycling display between readings (2-second intervals)
-- Configurable via GPIO pins in config.yaml
-- Useful for comparing different measurement points
-
-## Reliability Improvements
-
-### Long-Term Operation Features
-
-The system has been enhanced for **5+ years of continuous operation** with comprehensive reliability improvements:
-
-### 1. Persistent State Management
-- **JSON-based state persistence** survives restarts and power outages
-- **Atomic file writes** prevent corruption during power loss
-- **Duplicate action prevention** avoids redundant operations after restart
-- **State validation** with automatic fallback to safe defaults
-
-### 2. Resource Leak Prevention
-- **Comprehensive resource tracking** monitors threads and file handles
-- **Context manager support** ensures proper cleanup of all hardware components
-- **Cleanup verification** detects and logs resource leaks
-- **Automatic garbage collection** prevents memory accumulation
-
-### 3. Hardware Error Recovery
-- **Optocoupler health checks** with automatic recovery mechanisms
-- **Counter reset and re-initialization** on hardware failures
-- **Configurable error thresholds** with graceful degradation
-- **Hardware status monitoring** with detailed health reporting
-
-### 4. Data Integrity Protection
-- **Buffer corruption detection** identifies and clears invalid data
-- **Periodic validation** checks for NaN/inf values and monotonic time
-- **Atomic CSV writes** with file locking for concurrent access
-- **Power-loss safe operations** using temporary files and atomic renames
-
-### 5. Automated Recovery Systems
-- **Configurable watchdog actions**: log, restart application, or reboot system
-- **Loop rate monitoring** detects system slowdowns
-- **Recovery detection** tracks system responsiveness
-- **Fallback mechanisms** for failed recovery attempts
-
-### 6. Robust Configuration
-- **Comprehensive validation** with type checking and range validation
-- **Fail-fast startup** with clear error messages for missing configuration
-- **No default values** - requires complete config.yaml file
-- **Clear error messages** for missing or invalid configuration
+---
 
 ## Configuration
 
-### config.yaml Structure
+### config.yaml Structure (Updated)
 
 ```yaml
 # Hardware Configuration
 hardware:
-  gpio_pin: 17          # Main GPIO input pin
-  led_green: 19         # Green LED for Utility
-  led_red: 27           # Red LED for Generator
-  reset_button: 22      # Reset button input
-  button_pin: 18        # Display control button
-  lcd_address: 0x27     # I2C address for LCD
+  gpio_pin: 17
+  led_green: 19
+  led_red: 27
+  reset_button: 22
+  button_pin: 18
+  lcd_address: 0x27
+  display_timeout_seconds: 300
   optocoupler:
     enabled: true
     primary:
       gpio_pin: 26
       name: "Mechanical"
+      pulses_per_cycle: 2
+      measurement_duration: 2.0
+      # List of inverters controlled by this source
+      inverters:
+        - id: "2207079903"
+          name: "Main Inverter"
+          enabled: true
     secondary:
-      gpio_pin: -1      # -1 for single mode
+      gpio_pin: -1  # -1 to disable
       name: "Lights"
 
-# Sampling Configuration
-sampling:
-  sample_rate: 2.0      # Hz - Optimal for generator detection
-  buffer_duration: 300  # seconds - Captures hunting cycles
-  min_freq: 30.0        # Hz - Accounts for generator drops
-  max_freq: 80.0        # Hz - Accounts for overspeed
-
-# Analysis Configuration
-analysis:
-  allan_variance_tau: 10.0  # seconds for Allan variance
-  generator_thresholds:
-    allan_variance: 0.0001  # Hunting detection threshold
-    std_dev: 0.6           # Frequency spread threshold
-    kurtosis: 1.5           # Distribution shape threshold
-
-# State Machine Configuration
-state_machine:
-  transition_timeout: 30.0       # Max time in transitioning
-  zero_voltage_threshold: 1.0    # Time before off-grid
-  unsteady_voltage_threshold: 0.1 # Hz variation threshold
-  persistent_state_enabled: true # Enable persistent state storage
-  state_file: '/var/run/rpisolark_state.json' # State file location
-  confidence_threshold_maintain: 0.6  # Confidence to maintain state
-  confidence_threshold_transition: 0.8 # Confidence to transition state
-
-# Logging Configuration
-logging:
-  detailed_logging_enabled: false
-  detailed_log_interval: 1.0
-  detailed_log_file: "detailed_frequency_data.csv"
-
-# Health Monitoring
-health:
-  watchdog_timeout: 30.0
-  memory_warning_threshold: 0.8
-  cpu_warning_threshold: 0.8
-  watchdog_action: 'log'  # 'log', 'restart', or 'reboot'
-
-# Hardware Error Recovery
-hardware:
-  optocoupler:
-    max_consecutive_errors: 5    # Errors before recovery attempt
-    health_check_interval: 30.0  # Seconds between health checks
-    max_recovery_attempts: 3     # Max recovery attempts before giving up
-
-# Sol-Ark Cloud (Work in Progress)
+# Sol-Ark Cloud Integration
 solark_cloud:
   enabled: true
-  username: ""
-  password: ""
+  username: "your_email@example.com"
+  password: "your_password"
+  base_url: "https://www.solarkcloud.com"
+  cache_dir: "solark_cache"
+  headless: true
+  timeout: 30
+  retry_attempts: 3
+  session_persistence: true
+  session_file: "solark_session.json"
+  session_timeout: 3600
+  cache_pages: false
   sync_interval: 300
+  parameter_changes:
+    enabled: true
+    time_of_use_enabled: true
+
+# Analysis, State Machine, Logging, Health... (same as before)
 ```
 
 ## Development Workflow
 
 ### Getting Started
 
-1. **Clone Repository**:
+1. **Clone & Install**:
    ```bash
-   git clone <repository-url>
-   cd RpiSolArk
-   ```
-
-2. **Install Dependencies**:
-   ```bash
+   git clone <repo>
    pip install -r requirements.txt
+   playwright install chromium  # Required for Sol-Ark integration
    ```
 
-3. **Configure Hardware**:
-   - Edit `config.yaml` with your GPIO pin assignments
-   - Enable I2C: `sudo raspi-config` → Interfacing Options → I2C
-   - Check I2C address: `i2cdetect -y 1`
-
-4. **Test in Simulator Mode**:
+2. **Optimize OS (Recommended)**:
    ```bash
+   sudo python3 rpisolark_optimize_writes.py apply
+   ```
+
+3. **Configure**:
+   Copy `config.yaml.example` to `config.yaml` and edit.
+
+4. **Run**:
+   ```bash
+   # Simulator
    python monitor.py --simulator
-   ```
-
-5. **Run with Hardware**:
-   ```bash
+   
+   # Real Hardware
    python monitor.py --real
    ```
 
 ### Testing
 
-**Unit Tests**:
-```bash
-# Run all tests
-python -m pytest tests/
-
-# Run specific test
-python -m pytest tests/test_monitor.py -v
-
-# Run with coverage
-python -m pytest tests/ --cov=.
-```
-
-**Hardware Tests**:
-```bash
-# Test GPIO components
-python tests/quick_gpio_test.py
-
-# Test LCD display
-python tests/test_lcd_compatibility.py
-
-# Test optocoupler
-python tests/test_optocoupler.py
-```
-
-### Debugging
-
-**Verbose Logging**:
-```bash
-python monitor.py --verbose
-```
-
-**Remote Debugging**:
-```bash
-python monitor.py --debug --debug-port 5678
-# Connect with VS Code or PyCharm debugger
-```
-
-**Detailed Frequency Logging**:
-```bash
-python monitor.py --detailed-logging --log-interval 0.5
-```
-
-**Check Logs**:
-```bash
-tail -f monitor.log
-cat hourly_status.csv
-```
-
-### Tuning Thresholds
-
-1. **Collect Data**:
-   ```bash
-   python monitor.py --tuning --tuning-duration 3600
-   ```
-
-2. **Analyze Data**:
-   ```bash
-   python monitor.py --analyze-offline --input-file tuning_data.csv
-   ```
-
-3. **Update Thresholds**:
-   - Edit `config.yaml` with recommended values
-   - Test with `--verbose` logging
-
-4. **Validate Changes**:
-   ```bash
-   python monitor.py --real --verbose
-   ```
+- **Unit Tests**: `pytest tests/`
+- **Sol-Ark Integration**: `python solark_cloud.py` (Runs a test login/TOU toggle check)
+- **Hardware**: `python tests/test_optocoupler.py`
 
 ## Raspberry Pi Specifics
 
@@ -509,371 +276,123 @@ cat hourly_status.csv
 - **Platform**: Raspberry Pi (tested on RPi 4B)
 - **OS**: Latest Debian (Raspberry Pi OS)
 - **Python**: 3.8+
-- **GPIO Library**: libgpiod via gpio_event_counter (C extension)
+- **GPIO Library**: `libgpiod` via `gpio_event_counter` (C extension)
 
-### GPIO Library Details
+### Performance Optimizations
 
-**libgpiod Integration**:
-- GIL-free interrupt counting for maximum accuracy
-- High-priority threading with CPU affinity
-- Optimized for consistent timing on RPi 4B
-
-**Performance Optimizations**:
-- CPU affinity to core 3 (avoids system process interference)
-- High-priority process scheduling
-- Thread priority optimization
+1.  **CPU Affinity**: The `HardwareManager` attempts to pin the process to **Core 3** (via `psutil`). This isolates the monitoring loop from system processes typically running on Core 0/1, ensuring consistent timing for frequency analysis.
+2.  **Process Priority**: Sets "high" process priority (`nice -5`) to reduce scheduling latency.
+3.  **MicroSD Wear**: The `rpisolark_optimize_writes.py` script reduces write amplification by moving logs to RAM and disabling unnecessary background updates.
 
 ### LCD Options
 
-**Original LCD1602.py** (Default):
-- Tested and reliable
-- Direct I2C communication
-- Custom character support
+- **LCD1602 (Default)**: Uses direct I2C communication. Fast and simple.
+- **RPLCD (Alternative)**: Enable by setting `USE_RPLCD = True` in `display.py`. Provides a more robust driver if the default one has compatibility issues.
 
-**RPLCD Library** (Alternative):
-- Set `USE_RPLCD = True` in display.py
-- More features but less tested
-- Better error handling
-
-### System Integration
-
-**Systemd Service**:
-```bash
-# Enable service
-sudo systemctl enable rpisolkark-monitor
-
-# Start service
-sudo systemctl start rpisolkark-monitor
-
-# Check status
-sudo systemctl status rpisolkark-monitor
-```
-
-**Auto-Updates**:
-```bash
-# Setup system-level auto-updates
-./setup_zero_code_updates.sh
-```
-
-**Scheduled Reboots**:
-- Configured in config.yaml
-- Prevents memory leaks and system degradation
-- Graceful shutdown with cleanup
-
-### MicroSD wear reduction (moderate)
-- Keep app’s hourly write; curb OS writes.
-- Apply:
-  - `Storage=volatile` in /etc/systemd/journald.conf; restart journald
-  - Disable rsyslog (optional)
-  - Disable APT timers; add /etc/apt/apt.conf.d/02periodic-disable
-  - Add `noatime` to / and /boot in /etc/fstab
-  - Ensure `/tmp` is tmpfs
-- Verify with `findmnt` and `systemctl show systemd-journald -p Storage`.
-
-## File Organization
-
-```
-/home/keith/RpiSolArk/
-├── monitor.py              # Main application
-├── config.yaml             # Configuration
-├── hardware.py               # Hardware abstraction
-├── display.py                # Display management
-├── optocoupler.py            # Frequency measurement
-├── gpio_manager.py           # GPIO operations
-├── button_handler.py         # Button handling
-├── config.py                 # Config loading
-├── health.py                 # Health monitoring
-├── data_logger.py            # Data logging
-├── tuning_collector.py       # Tuning data collection
-├── offline_analyzer.py       # Offline analysis
-├── restart_manager.py        # Restart management
-├── LCD1602.py                # LCD driver (original)
-├── lcd_rplcd.py              # LCD driver (RPLCD)
-├── dashboard.py              # Web dashboard (separate)
-├── solark_cloud.py           # Sol-Ark API (WIP)
-├── solark_integration.py     # Sol-Ark integration (WIP)
-├── requirements.txt          # Python dependencies
-├── setup_*.sh                # Setup scripts
-└── tests/                    # Test files
-    ├── test_*.py            # Unit tests
-    ├── test_backlight_control.py
-    ├── test_power_state_backlight.py
-    ├── test_simple_backlight.py
-    └── *.csv                # Test data files
-```
+---
 
 ## Common Tasks
 
 ### Add New GPIO Device
 
-1. **Update Configuration**:
-   ```yaml
-   hardware:
-     new_device_pin: 23
-   ```
+To add control for a new hardware component (e.g., a relay or buzzer):
 
-2. **Add Setup in gpio_manager.py**:
-   ```python
-   def setup_new_device(self):
-       GPIO.setup(self.new_device_pin, GPIO.OUT)
-   ```
+1.  **Update Configuration**:
+    Add the pin number to `config.yaml`:
+    ```yaml
+    hardware:
+      new_device_pin: 23
+    ```
 
-3. **Add Control Methods in HardwareManager**:
-   ```python
-   def control_new_device(self, state):
-       self.gpio.set_new_device(state)
-   ```
+2.  **Update `gpio_manager.py`**:
+    Initialize the pin in `_setup_gpio()`:
+    ```python
+    def _setup_gpio(self):
+        # ... existing setup ...
+        if 'new_device_pin' in self.config['hardware']:
+            pin = self.config['hardware']['new_device_pin']
+            self.gpio.setup(pin, self.gpio.OUT)
+            self.gpio.output(pin, self.gpio.LOW)
+    ```
 
-4. **Test with Hardware**:
-   ```bash
-   python tests/quick_gpio_test.py
-   ```
+3.  **Add Control Method**:
+    Add a method to `GPIOManager`:
+    ```python
+    def set_new_device(self, state: bool):
+        pin = self.config['hardware'].get('new_device_pin')
+        if pin:
+            self.gpio.output(pin, state)
+    ```
 
 ### Adjust Detection Thresholds
 
-1. **Collect Baseline Data**:
-   ```bash
-   python monitor.py --tuning --tuning-duration 1800
-   ```
+If the system falsely detects Generator power (False Positive) or misses it (False Negative):
 
-2. **Analyze Patterns**:
-   ```bash
-   python monitor.py --analyze-offline
-   ```
+1.  **Collect Data**:
+    Run in tuning mode to capture raw frequency data during the event:
+    ```bash
+    python monitor.py --tuning --tuning-duration 1800
+    ```
 
-3. **Update Thresholds**:
-   ```yaml
-   analysis:
-     generator_thresholds:
-       allan_variance: 0.0001  # Based on analysis
-       std_dev: 0.6           # Based on analysis
-       kurtosis: 1.5          # Based on analysis
-   ```
+2.  **Update `config.yaml`**:
+    *   **False Generator**: Increase thresholds (make it less sensitive).
+    *   **Missed Generator**: Decrease thresholds (make it more sensitive).
 
-4. **Validate Changes**:
-   ```bash
-   python monitor.py --real --verbose
-   ```
+    ```yaml
+    analysis:
+      generator_thresholds:
+        allan_variance: 0.0001  # Typical range: 0.00005 - 0.0005
+        std_dev: 0.6            # Typical range: 0.3 - 1.0
+        kurtosis: 1.5           # Typical range: 1.0 - 3.0
+    ```
 
-### Add New Display Mode
+### Add New Sol-Ark Parameter
 
-1. **Update DisplayManager**:
-   ```python
-   def update_display_and_leds(self, freq, ug_indicator, state_machine, zero_voltage_duration, secondary_freq=None):
-       # Add new display logic
-       if self.new_display_mode:
-           line1, line2 = self._format_new_display(freq, ug_indicator)
-           self.update_display(line1, line2)
-   ```
+To automate a new setting (e.g., "Battery Charge Current"):
 
-2. **Add Display Logic**:
-   ```python
-   def _format_new_display(self, freq, ug_indicator):
-       # Custom formatting logic
-       return line1, line2
-   ```
+1.  **Update `solark_cloud.py`**:
+    Add a method to navigate to and toggle the specific setting using Playwright selectors. Use `self.page.click()` and `self.page.fill()`.
 
-3. **Test on LCD Hardware**:
-   ```bash
-   python tests/test_lcd_compatibility.py
-   ```
-
-## Troubleshooting
-
-### No Frequency Reading
-
-**Symptoms**: No frequency data, "No pulses detected" messages
-
-**Solutions**:
-1. Check optocoupler wiring (H11AA1 pinout)
-2. Verify GPIO pin in config.yaml
-3. Check libgpiod permissions: `sudo usermod -a -G gpio pi`
-4. Test with simulator mode: `python monitor.py --simulator`
-5. Check optocoupler with multimeter
-
-### LCD Not Working
-
-**Symptoms**: Blank LCD display, "LCD not available" messages
-
-**Solutions**:
-1. Check I2C address: `i2cdetect -y 1`
-2. Verify LCD configuration in config.yaml
-3. Enable I2C: `sudo raspi-config` → Interfacing Options → I2C
-4. Check wiring (SDA/SCL connections)
-5. Try RPLCD library: Set `USE_RPLCD = True` in display.py
-6. Fall back to simulator display
-
-### High CPU Usage
-
-**Symptoms**: High CPU usage, system slowdown
-
-**Solutions**:
-1. Check sample_rate in config.yaml (lower = less CPU)
-2. Verify CPU affinity settings
-3. Check for tight loops in logs
-4. Monitor with: `htop` or `top`
-5. Adjust buffer_duration if too short
-
-### Memory Issues
-
-**Symptoms**: Memory warnings, system instability
-
-**Solutions**:
-1. Check memory_usage.csv logs
-2. Adjust cleanup_interval in config.yaml
-3. Review buffer_duration settings
-4. Monitor with: `free -h`
-5. Enable automatic cleanup
-
-### False Generator Detection
-
-**Symptoms**: Utility power classified as generator
-
-**Solutions**:
-1. Increase thresholds in config.yaml:
-   ```yaml
-   analysis:
-     generator_thresholds:
-       allan_variance: 0.001  # Increase sensitivity
-       std_dev: 0.8          # Increase tolerance
-       kurtosis: 2.0         # Increase threshold
-   ```
-2. Use tuning mode to collect utility data
-3. Analyze with offline analyzer
-4. Adjust based on recommendations
-
-### Missed Generator Detection
-
-**Symptoms**: Generator power classified as utility
-
-**Solutions**:
-1. Decrease thresholds in config.yaml:
-   ```yaml
-   analysis:
-     generator_thresholds:
-       allan_variance: 0.0001  # Decrease sensitivity
-       std_dev: 0.4           # Decrease tolerance
-       kurtosis: 1.0         # Decrease threshold
-   ```
-2. Use tuning mode to collect generator data
-3. Analyze with offline analyzer
-4. Adjust based on recommendations
-
-### Sol-Ark Integration Issues
-
-**Symptoms**: Sol-Ark cloud sync failures, parameter changes not applied
-
-**Solutions**:
-1. Check credentials in config.yaml
-2. Verify network connectivity
-3. Test with: `python test_solark_cloud.py`
-4. Check browser dependencies: `playwright install chromium`
-5. Review solark_cache/ directory for cached pages
-
-### Dashboard Not Working
-
-**Symptoms**: Web dashboard not accessible, Flask errors
-
-**Solutions**:
-1. Install Flask: `pip install flask`
-2. Check port 5000 availability
-3. Run dashboard: `python dashboard.py`
-4. Check firewall settings
-5. Verify monitor process is running
-
-## Performance Optimization
-
-### Raspberry Pi 4B Optimizations
-
-1. **CPU Affinity**: Process pinned to core 3
-2. **Thread Priority**: High priority for optocoupler measurements
-3. **Memory Management**: Automatic cleanup every hour
-4. **Buffer Sizing**: Optimized for 5-minute analysis windows
-
-### Memory Management
-
-1. **Automatic Cleanup**: Garbage collection every hour
-2. **Buffer Limits**: Fixed-size buffers prevent memory growth
-3. **Log Rotation**: Automatic log file rotation
-4. **Process Monitoring**: Memory usage tracking and alerts
-
-### Network Optimization
-
-1. **Sol-Ark Caching**: Local cache of cloud pages
-2. **Session Persistence**: Avoid repeated logins
-3. **Timeout Handling**: Graceful network failure handling
-4. **Retry Logic**: Exponential backoff for failed requests
-
-## Security Considerations
-
-### System Security
-
-1. **GPIO Permissions**: Proper GPIO group membership
-2. **File Permissions**: Secure log file access
-3. **Network Security**: HTTPS for Sol-Ark communication
-4. **Process Isolation**: Limited system access
-
-### Data Security
-
-1. **Credential Storage**: Secure configuration file handling
-2. **Log Sanitization**: No sensitive data in logs
-3. **Session Security**: Secure session management
-4. **Data Encryption**: Optional data encryption for sensitive logs
-
-## Contributing
-
-### Code Style
-
-- Follow PEP 8 Python style guidelines
-- Use type hints where appropriate
-- Document all public methods
-- Add unit tests for new features
-
-### Testing Requirements
-
-- All new code must have unit tests
-- Hardware-specific tests require actual GPIO
-- Integration tests for new components
-- Performance tests for critical paths
-
-### Documentation
-
-- Update this agents.md for architectural changes
-- Document new configuration options
-- Add troubleshooting entries for new issues
-- Update README.md for user-facing changes
-
-## Support and Resources
-
-### Documentation
-
-- This agents.md file
-- README.md for user documentation
-- Inline code documentation
-- Configuration file comments
-
-### Testing
-
-- Unit tests in tests/ directory
-- Hardware tests for GPIO components
-- Integration tests for full system
-- Performance tests for optimization
-
-### Debugging Tools
-
-- Verbose logging with --verbose flag
-- Remote debugging with --debug flag
-- Detailed frequency logging
-- Memory usage monitoring
-- System health monitoring
-
-### Community
-
-- GitHub issues for bug reports
-- Pull requests for contributions
-- Discussion forums for questions
-- Documentation updates welcome
+2.  **Update `solark_integration.py`**:
+    Map the power state (`grid`/`generator`) to the desired parameter value in `on_power_source_change`.
 
 ---
 
-This guide should provide new developers with everything they need to understand, modify, and extend the RpiSolArk system. For additional help, refer to the inline code documentation and test files.
+## Troubleshooting
+
+### Sol-Ark Integration Issues
+
+**Symptoms**: Logs show "Element not found" or "Login failed".
+
+**Solutions**:
+1.  **Check Dependencies**: Run `playwright install chromium`.
+2.  **Headless Mode**: Try running with `headless: false` in `config.yaml` to watch the browser automation and see where it fails.
+3.  **Cache**: Clear the `solark_session.json` file to force a fresh login.
+4.  **Selectors**: Sol-Ark may have updated their UI. Check `solark_cloud.py` selectors against the actual website HTML.
+
+### No Frequency Reading
+
+**Symptoms**: "No pulses detected" or 0Hz reading.
+
+**Solutions**:
+1.  **Optocoupler Wiring**: Verify H11AA1 pinout. Input side needs AC, output side needs pull-up resistor.
+2.  **GPIO Permissions**: Ensure user has access: `sudo usermod -a -G gpio pi`.
+3.  **Simulator**: Test with `python monitor.py --simulator` to verify software logic.
+
+### High CPU Usage
+
+**Symptoms**: System becomes sluggish.
+
+**Solutions**:
+1.  **Sample Rate**: Reduce `sampling.sample_rate` in `config.yaml`.
+2.  **Logging**: Disable `detailed_logging` if enabled.
+3.  **Browser**: Ensure Playwright isn't spawning "zombie" processes. The `SolArkCloud` class should clean these up, but check `htop` for stuck `chrome` or `node` processes.
+
+### Memory Issues
+
+**Symptoms**: Application crashes with Out of Memory.
+
+**Solutions**:
+1.  **Memory Monitor**: Check `memory_usage.csv`.
+2.  **Buffer Size**: Reduce `sampling.buffer_duration`.
+3.  **Browser Leaks**: Browser automation is heavy. Ensure `solark_cloud` is only instantiating the browser when needed or properly closing contexts.
