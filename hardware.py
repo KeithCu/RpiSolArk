@@ -49,14 +49,6 @@ class HardwareManager:
         """Calculate AC frequency from pulse count."""
         return self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration, optocoupler_name)
     
-    def get_dual_frequencies(self, duration: float = None, debounce_time: float = 0.0) -> Tuple[Optional[float], Optional[float]]:
-        """Get frequency readings from both optocouplers simultaneously."""
-        return self.optocoupler.get_dual_frequencies(duration, debounce_time)
-    
-    def is_dual_optocoupler_mode(self) -> bool:
-        """Check if dual optocoupler mode is enabled."""
-        return self.optocoupler.is_dual_mode()
-    
     def get_available_optocouplers(self) -> list:
         """Get list of available optocoupler names."""
         return self.optocoupler.get_available_optocouplers()

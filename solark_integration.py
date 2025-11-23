@@ -88,13 +88,6 @@ class SolArkIntegration:
             if 'name' not in primary_config:
                 raise ValueError("Primary optocoupler missing 'name' field")
             
-            # Check secondary optocoupler if enabled
-            secondary_config = optocoupler_config['secondary']
-            secondary_gpio = secondary_config.get('gpio_pin')
-            
-            if secondary_gpio != -1 and 'name' not in secondary_config:
-                raise ValueError("Secondary optocoupler missing 'name' field")
-            
             self.logger.info("Configuration validation passed")
             return True
             
@@ -140,33 +133,6 @@ class SolArkIntegration:
             
             if primary_inverter_ids:
                 mapping[primary_name] = primary_inverter_ids
-            
-            # Process secondary optocoupler (if enabled)
-            secondary_config = optocoupler_config['secondary']
-            secondary_gpio = secondary_config.get('gpio_pin')
-            
-            if secondary_gpio != -1:  # Secondary optocoupler is enabled
-                secondary_name = secondary_config['name']
-                
-                # Handle new multi-inverter format
-                secondary_inverters = secondary_config.get('inverters')
-                
-                # Handle backward compatibility
-                if 'solark_inverter_id' in secondary_config and secondary_config['solark_inverter_id']:
-                    secondary_inverters = [{
-                        'id': secondary_config['solark_inverter_id'],
-                        'name': f"{secondary_name} Inverter",
-                        'enabled': True
-                    }]
-                
-                secondary_inverter_ids = []
-                for inverter in secondary_inverters:
-                    if inverter.get('id') and inverter.get('enabled', True):
-                        secondary_inverter_ids.append(inverter['id'])
-                        self.logger.info(f"Mapped optocoupler '{secondary_name}' to inverter ID '{inverter['id']}' ({inverter.get('name', 'Unnamed')})")
-                
-                if secondary_inverter_ids:
-                    mapping[secondary_name] = secondary_inverter_ids
             
             if not mapping:
                 self.logger.warning("No optocoupler-to-inverter mappings configured")

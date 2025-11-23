@@ -464,25 +464,6 @@ class FrequencyAnalyzer:
         
         return freq
     
-    def get_dual_frequencies(self, duration: float = 2.0) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Get frequency readings from both optocouplers simultaneously.
-        Returns tuple of (primary_frequency, secondary_frequency).
-        """
-        if not hasattr(self, 'hardware_manager'):
-            # In simulator mode, return simulated frequencies
-            primary_freq = self._simulate_frequency()
-            secondary_freq = self._simulate_frequency()
-            return primary_freq, secondary_freq
-        
-        # Check if dual optocoupler mode is enabled
-        if (hasattr(self.hardware_manager, 'is_dual_optocoupler_mode') and 
-            self.hardware_manager.is_dual_optocoupler_mode()):
-            return self._count_dual_optocoupler_frequencies(duration)
-        
-        # Fall back to single optocoupler mode
-        primary_freq = self._count_optocoupler_frequency(duration)
-        return primary_freq, None
     
     def _count_optocoupler_frequency(self, duration: float = 2.0) -> Optional[float]:
         """
@@ -521,37 +502,6 @@ class FrequencyAnalyzer:
         except Exception as e:
             self.logger.error(f"Error in optocoupler frequency measurement: {e}")
             return None
-    
-    def _count_dual_optocoupler_frequencies(self, duration: float = 2.0) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Get frequency readings from both optocouplers simultaneously.
-        Returns tuple of (primary_frequency, secondary_frequency).
-        """
-        try:
-            # Use hardware manager's dual frequency method
-            primary_freq, secondary_freq = self.hardware_manager.get_dual_frequencies(duration, debounce_time=0.0)
-            
-            # Validate frequency ranges for both readings
-            try:
-                min_freq = self.config['sampling']['min_freq']
-                max_freq = self.config['sampling']['max_freq']
-            except KeyError as e:
-                raise KeyError(f"Missing required sampling configuration key: {e}")
-            
-            if primary_freq is not None and (primary_freq < min_freq or primary_freq > max_freq):
-                self.logger.warning(f"Invalid primary frequency reading: {primary_freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
-                primary_freq = None
-            
-            if secondary_freq is not None and (secondary_freq < min_freq or secondary_freq > max_freq):
-                self.logger.warning(f"Invalid secondary frequency reading: {secondary_freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
-                secondary_freq = None
-            
-            self.logger.debug(f"Dual optocoupler frequencies: Primary={primary_freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
-            return primary_freq, secondary_freq
-            
-        except Exception as e:
-            self.logger.error(f"Error in dual optocoupler frequency measurement: {e}")
-            return None, None
     
     def _count_zero_crossings_original(self, duration: float = 0.5) -> Optional[float]:
         """Original zero-crossing counting method (fallback)."""
@@ -859,13 +809,6 @@ class FrequencyMonitor:
         self.freq_buffer = deque(maxlen=buffer_size)
         self.time_buffer = deque(maxlen=buffer_size)
         
-        # Initialize dual optocoupler buffers if dual mode is enabled
-        self.dual_mode = (hasattr(self.hardware, 'is_dual_optocoupler_mode') and
-                         self.hardware.is_dual_optocoupler_mode())
-        if self.dual_mode:
-            self.secondary_freq_buffer = deque(maxlen=buffer_size)
-            self.logger.info("Dual optocoupler mode enabled - tracking both primary and secondary frequencies")
-        
         # Initialize power source classification buffer for U/G indicator
         classification_window = self.config.get_float('display.classification_window')  # 5 minutes default
         
@@ -884,10 +827,6 @@ class FrequencyMonitor:
         self.start_time = time.time()
         self.zero_voltage_start_time = None  # Track when voltage went to zero (absolute time)
         self.zero_voltage_duration = 0.0    # How long voltage has been zero
-        
-        # Secondary optocoupler zero voltage tracking (for dual mode)
-        self.secondary_zero_voltage_start_time = None  # Track when secondary voltage went to zero (absolute time)
-        self.secondary_zero_voltage_duration = 0.0    # How long secondary voltage has been zero
 
         # Reset button state tracking
         self.reset_button_pressed = False
@@ -933,21 +872,9 @@ class FrequencyMonitor:
                 self.config, self.logger, self.hardware.display, 
                 self.solark_integration, primary_name
             )
-            self.logger.info(f"Created state machine for primary optocoupler: {primary_name}")
+            self.logger.info(f"Created state machine for optocoupler: {primary_name}")
             
-            # Create state machine for secondary optocoupler (if enabled)
-            secondary_config = optocoupler_config['secondary']
-            secondary_gpio = secondary_config.get('gpio_pin')
-            
-            if secondary_gpio != -1:  # Secondary optocoupler is enabled
-                secondary_name = secondary_config['name']
-                state_machines[secondary_name] = PowerStateMachine(
-                    self.config, self.logger, self.hardware.display,
-                    self.solark_integration, secondary_name
-                )
-                self.logger.info(f"Created state machine for secondary optocoupler: {secondary_name}")
-            
-            self.logger.info(f"Created {len(state_machines)} optocoupler state machines")
+            self.logger.info(f"Created {len(state_machines)} optocoupler state machine")
             return state_machines
             
         except KeyError as e:
@@ -1030,23 +957,13 @@ class FrequencyMonitor:
                 loop_start_time = time.perf_counter()
                 current_time = time.time() - self.start_time
                 
-                # Get frequency reading(s)
+                # Get frequency reading
                 if simulator_mode:
                     freq = self.analyzer._simulate_frequency()
-                    secondary_freq = None  # No secondary in simulator mode
                 else:
-                    # Check if dual optocoupler mode is enabled
-                    if (hasattr(self.hardware, 'is_dual_optocoupler_mode') and
-                        self.hardware.is_dual_optocoupler_mode()):
-                        # Get dual frequency readings
-                        freq, secondary_freq = self.analyzer.get_dual_frequencies(duration=2.0)
-                        self.logger.debug(f"Dual optocoupler readings: Primary={freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
-                    else:
-                        # Single optocoupler mode
-                        # Use measurement duration from config
-                        measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
-                        freq = self.analyzer.count_zero_crossings(duration=measurement_duration)
-                        secondary_freq = None
+                    # Use measurement duration from config
+                    measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
+                    freq = self.analyzer.count_zero_crossings(duration=measurement_duration)
 
                 # Track zero voltage duration
                 self.logger.debug("Tracking zero voltage duration...")
@@ -1060,18 +977,6 @@ class FrequencyMonitor:
                     # Frequency detected - reset zero voltage tracking
                     self.zero_voltage_start_time = None
                     self.zero_voltage_duration = 0.0
-                
-                # Track secondary optocoupler zero voltage duration independently (if in dual mode)
-                if self.dual_mode:
-                    if secondary_freq is None or secondary_freq == 0:
-                        # No secondary frequency detected - secondary voltage is zero
-                        if self.secondary_zero_voltage_start_time is None:
-                            self.secondary_zero_voltage_start_time = current_absolute_time
-                        self.secondary_zero_voltage_duration = current_absolute_time - self.secondary_zero_voltage_start_time
-                    else:
-                        # Secondary frequency detected - reset secondary zero voltage tracking
-                        self.secondary_zero_voltage_start_time = None
-                        self.secondary_zero_voltage_duration = 0.0
 
                 # Validate frequency reading with enhanced accuracy checks
                 self.logger.debug("Validating frequency reading...")
@@ -1100,11 +1005,6 @@ class FrequencyMonitor:
                     self.freq_buffer.append(freq)
                     self.time_buffer.append(current_time)
                     self.sample_count += 1
-                    
-                    # Update secondary frequency buffer if in dual mode
-                    if self.dual_mode and secondary_freq is not None:
-                        self.secondary_freq_buffer.append(secondary_freq)
-                        self.logger.debug(f"Updated dual frequency buffers: Primary={freq:.2f} Hz, Secondary={secondary_freq:.2f} Hz")
 
                 # Validate buffers periodically
                 if self.sample_count - self.last_buffer_validation >= self.buffer_validation_interval:
@@ -1170,27 +1070,12 @@ class FrequencyMonitor:
                 self.logger.debug("Updating state machines...")
                 current_states = {}
                 
-                # Update primary optocoupler state machine
+                # Update optocoupler state machine
                 primary_name = self.config.get('hardware.optocoupler.primary.name')
                 if primary_name in self.state_machines:
                     current_states[primary_name] = self.state_machines[primary_name].update_state_with_confidence(
                         freq, source, confidence, self.zero_voltage_duration
                     )
-                
-                # Update secondary optocoupler state machine (if enabled)
-                if self.dual_mode:
-                    secondary_name = self.config.get('hardware.optocoupler.secondary.name')
-                    if secondary_name in self.state_machines:
-                        # Analyze secondary frequency separately (if available)
-                        if secondary_freq is not None:
-                            secondary_source, secondary_confidence = self._analyze_frequency_for_optocoupler(secondary_freq, secondary_name)
-                        else:
-                            secondary_source = "Unknown"
-                            secondary_confidence = 0.0
-                        # Use tracked secondary zero voltage duration
-                        current_states[secondary_name] = self.state_machines[secondary_name].update_state_with_confidence(
-                            secondary_freq, secondary_source, secondary_confidence, self.secondary_zero_voltage_duration
-                        )
                 
                 # Collect tuning data if enabled
                 self.logger.debug("Collecting tuning data...")
@@ -1227,18 +1112,13 @@ class FrequencyMonitor:
                 if current_time - self.last_display_time >= display_interval:
                     self.logger.debug("Updating display and LEDs...")
                     ug_indicator = self._get_current_power_source_indicator()
-                    # Pass secondary frequency if in dual mode
-                    secondary_freq = secondary_freq if self.dual_mode else None
-                    # Pass both state machines for proper cycling display
                     primary_name = self.config.get('hardware.optocoupler.primary.name')
-                    secondary_name = self.config.get('hardware.optocoupler.secondary.name')
                     primary_state_machine = self.state_machines.get(primary_name)
-                    secondary_state_machine = self.state_machines.get(secondary_name) if self.dual_mode else None
                     
                     if primary_state_machine:
-                        self.hardware.display.update_display_and_leds_with_state_machines(
-                            freq, ug_indicator, primary_state_machine, secondary_state_machine, 
-                            self.zero_voltage_duration, secondary_freq
+                        self.hardware.display.update_display_and_leds(
+                            freq, ug_indicator, primary_state_machine, 
+                            self.zero_voltage_duration
                         )
                     self.last_display_time = current_time
                 
@@ -1390,15 +1270,6 @@ class FrequencyMonitor:
                         corruption_detected = True
                         break
             
-            # Check secondary frequency buffer if in dual mode
-            if self.dual_mode and len(self.secondary_freq_buffer) > 0:
-                secondary_list = list(self.secondary_freq_buffer)
-                for i, freq in enumerate(secondary_list):
-                    if freq is not None and (np.isnan(freq) or np.isinf(freq)):
-                        self.logger.error(f"Secondary buffer corruption detected: NaN/inf value at index {i}: {freq}")
-                        corruption_detected = True
-                        break
-            
             # Clear buffers if corruption detected
             if corruption_detected:
                 self.buffer_corruption_count += 1
@@ -1408,8 +1279,6 @@ class FrequencyMonitor:
                 self.freq_buffer.clear()
                 self.time_buffer.clear()
                 self.classification_buffer.clear()
-                if self.dual_mode:
-                    self.secondary_freq_buffer.clear()
                 
                 # Log corruption event
                 self.logger.critical(f"Buffer corruption event #{self.buffer_corruption_count} - all buffers cleared")

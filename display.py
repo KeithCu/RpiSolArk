@@ -77,12 +77,6 @@ class DisplayManager:
         self.lcd_available = LCD_AVAILABLE
         self.lcd = None
         
-        # Cycling display state for dual optocoupler mode
-        self.dual_mode = False
-        self.current_display_optocoupler = 'primary'  # 'primary' or 'secondary'
-        self.last_cycle_time = 0
-        self.cycle_interval = 2.0  # Switch every 2 seconds
-        
         # Smart display management
         try:
             self.display_timeout_seconds = self.config['hardware']['display_timeout_seconds']
@@ -254,8 +248,7 @@ class DisplayManager:
         print()
     
     def update_display_and_leds(self, freq: Optional[float], ug_indicator: str, 
-                               state_machine, zero_voltage_duration: float = 0.0,
-                               secondary_freq: Optional[float] = None):
+                               state_machine, zero_voltage_duration: float = 0.0):
         """Update LCD display and LED indicators."""
         
         # Get state machine status
@@ -265,23 +258,15 @@ class DisplayManager:
         # Show time and frequency with power source indicator, updated once per second
         current_time = time.strftime("%H:%M:%S")
         
-        # Check if we have dual optocoupler readings
-        if secondary_freq is not None:
-            # Dual optocoupler mode - cycle between the two
-            self.dual_mode = True
-            self._cycle_dual_display(freq, secondary_freq, ug_indicator, state_machine, None, zero_voltage_duration, current_time)
+        line1 = f"{current_time}"
+        if freq is not None:
+            line2 = f"{freq:.2f} Hz {ug_indicator}"
         else:
-            # Single optocoupler mode - original display
-            self.dual_mode = False
-            line1 = f"{current_time}"
-            if freq is not None:
-                line2 = f"{freq:.2f} Hz {ug_indicator}"
-            else:
-                formatted_duration = format_duration(zero_voltage_duration)
-                line2 = f"0V {formatted_duration} {ug_indicator}"
-            
-            # Update display
-            self.update_display(line1, line2)
+            formatted_duration = format_duration(zero_voltage_duration)
+            line2 = f"0V {formatted_duration} {ug_indicator}"
+        
+        # Update display
+        self.update_display(line1, line2)
 
         # Update LEDs based on state machine state
         self.update_leds_for_state(current_state)
@@ -291,99 +276,6 @@ class DisplayManager:
         
         # Check if we're in an emergency state that should keep display on
         self._check_emergency_state(current_state)
-    
-    def update_display_and_leds_with_state_machines(self, freq: Optional[float], ug_indicator: str, 
-                                                   primary_state_machine, secondary_state_machine=None,
-                                                   zero_voltage_duration: float = 0.0,
-                                                   secondary_freq: Optional[float] = None):
-        """Update LCD display and LED indicators with separate state machines for each optocoupler."""
-        
-        # Check if we have dual optocoupler readings
-        if secondary_freq is not None and secondary_state_machine is not None:
-            # Dual optocoupler mode - cycle between the two
-            self.dual_mode = True
-            self._cycle_dual_display(freq, secondary_freq, ug_indicator, 
-                                   primary_state_machine, secondary_state_machine,
-                                   zero_voltage_duration)
-        else:
-            # Single optocoupler mode - original display
-            self.dual_mode = False
-            self.update_display_and_leds(freq, ug_indicator, primary_state_machine, zero_voltage_duration, secondary_freq)
-    
-    def _cycle_dual_display(self, primary_freq: Optional[float], secondary_freq: Optional[float], 
-                           ug_indicator: str, primary_state_machine, secondary_state_machine,
-                           zero_voltage_duration: float):
-        """Cycle between primary and secondary optocoupler displays with separate state machines."""
-        current_time_float = time.time()
-        
-        # Check if it's time to cycle to the next optocoupler
-        if current_time_float - self.last_cycle_time >= self.cycle_interval:
-            # Switch to the other optocoupler
-            if self.current_display_optocoupler == 'primary':
-                self.current_display_optocoupler = 'secondary'
-            else:
-                self.current_display_optocoupler = 'primary'
-            self.last_cycle_time = current_time_float
-        
-        # Get optocoupler names from configuration
-        primary_name = self._get_optocoupler_name('primary')
-        secondary_name = self._get_optocoupler_name('secondary')
-        
-        # Display the current optocoupler with its state machine
-        if self.current_display_optocoupler == 'primary':
-            # Show primary optocoupler
-            current_time = time.strftime("%H:%M:%S")
-            line1 = f"{current_time}"
-            if primary_freq is not None:
-                line2 = f"{primary_name}: {primary_freq:.1f}Hz {ug_indicator}"
-            else:
-                line2 = f"{primary_name}: 0V {ug_indicator}"
-            
-            # Update display
-            self.update_display(line1, line2)
-            
-            # Update LEDs based on primary state machine
-            primary_state_info = primary_state_machine.get_state_info()
-            self.update_leds_for_state(primary_state_info['current_state'])
-            
-            # Check for emergency state
-            self._check_emergency_state(primary_state_info['current_state'])
-        else:
-            # Show secondary optocoupler
-            current_time = time.strftime("%H:%M:%S")
-            line1 = f"{current_time}"
-            if secondary_freq is not None:
-                line2 = f"{secondary_name}: {secondary_freq:.1f}Hz {ug_indicator}"
-            else:
-                line2 = f"{secondary_name}: 0V {ug_indicator}"
-            
-            # Update display
-            self.update_display(line1, line2)
-            
-            # Update LEDs based on secondary state machine
-            secondary_state_info = secondary_state_machine.get_state_info()
-            self.update_leds_for_state(secondary_state_info['current_state'])
-            
-            # Check for emergency state
-            self._check_emergency_state(secondary_state_info['current_state'])
-    
-    
-    def _get_optocoupler_name(self, optocoupler_type: str) -> str:
-        """Get the display name for an optocoupler from configuration."""
-        try:
-            if hasattr(self.hardware_manager, 'config'):
-                config = self.hardware_manager.config
-                if hasattr(config, 'get'):
-                    try:
-                        name = config[f'hardware']['optocoupler'][optocoupler_type]['name']
-                        return name
-                    except KeyError:
-                        return optocoupler_type.capitalize()
-        except Exception as e:
-            self.logger.debug(f"Could not get optocoupler name: {e}")
-        
-        # Fallback to default names
-        return "Mechanical" if optocoupler_type == 'primary' else "Lights"
     
     def get_state_display_code(self, state: str) -> str:
         """Get display code for power state."""

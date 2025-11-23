@@ -16,15 +16,14 @@ hardware:
   # Optocoupler Configuration
   optocoupler:
     enabled: true       # Enable optocoupler falling edge detection
-    measurement_method: "interrupt"  # Method for dual optocoupler measurement: "interrupt" (recommended) or "alternating" (fallback)
     max_consecutive_errors: 5  # Max consecutive errors before recovery attempt
     health_check_interval: 30.0  # Seconds between health checks
     max_recovery_attempts: 3  # Max recovery attempts before giving up
     primary:
-      gpio_pin: 26      # GPIO pin for primary optocoupler input (H11AA1)
+      gpio_pin: 26      # GPIO pin for optocoupler input (H11AA1)
       pulses_per_cycle: 1 # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
       measurement_duration: 5.0  # Duration in seconds for frequency measurement (longer = more stable)
-      name: "Mechanical"   # Display name for primary optocoupler
+      name: "Mechanical"   # Display name for optocoupler
       # Multiple inverters can be connected to one optocoupler (supports up to 3 inverters)
       inverters:
         - id: "2207079903"  # Sol-Ark inverter ID
@@ -36,15 +35,6 @@ hardware:
         - id: "2207079905"  # Third inverter ID (example)
           name: "Auxiliary Inverter"  # Display name for this inverter
           enabled: true  # Enable control for this inverter
-    secondary:
-      gpio_pin: -1      # GPIO pin for secondary optocoupler input (H11AA1), set to -1 for single optocoupler mode
-      pulses_per_cycle: 1 # GPIO event counter detects FALLING edges only = 1 pulse per AC cycle
-      measurement_duration: 1.0  # Duration in seconds for frequency measurement
-      name: "Lights" # Display name for secondary optocoupler
-      inverters:
-        - id: ""  # Sol-Ark inverter ID (set to "" to disable)
-          name: "Secondary Inverter"
-          enabled: false
 
 # Sampling Configuration
 sampling:
