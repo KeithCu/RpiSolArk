@@ -653,9 +653,12 @@ class FrequencyAnalyzer:
         
         return avar_10s, std_freq
     
-    def classify_power_source(self, avar_10s: Optional[float], std_freq: Optional[float]) -> str:
-        """Classify as Generac generator or utility using simplified OR logic (std_dev OR allan_variance)."""
-        if any(x is None for x in [avar_10s, std_freq]):
+    def classify_power_source(self, avar_10s: Optional[float], std_freq: Optional[float], sample_count: int = None) -> str:
+        """Classify as Generac generator or utility using simplified OR logic (std_dev OR allan_variance).
+        
+        For small sample sizes (< 5), only use std_dev as Allan variance is too noisy.
+        """
+        if std_freq is None:
             return "Unknown"
         
         # Get thresholds and ensure they are numeric
@@ -673,7 +676,21 @@ class FrequencyAnalyzer:
             self.logger.error(f"Invalid threshold values: avar={avar_thresh}, std={std_thresh}. Error: {e}")
             return "Unknown"
         
-        # Simple OR logic: if EITHER metric exceeds threshold → generator
+        # For small sample sizes (< 5), only use std_dev as Allan variance is too noisy
+        # This prevents false positives from unstable Allan variance calculations
+        if sample_count is not None and sample_count < 5:
+            # Only use std_dev for small sample sizes
+            if std_freq > std_thresh:
+                return "Generac Generator"
+            return "Utility Grid"
+        
+        # For larger sample sizes, use OR logic: if EITHER metric exceeds threshold → generator
+        if avar_10s is None:
+            # Fallback to std_dev only if Allan variance not available
+            if std_freq > std_thresh:
+                return "Generac Generator"
+            return "Utility Grid"
+        
         if avar_10s > avar_thresh or std_freq > std_thresh:
             return "Generac Generator"
         return "Utility Grid"
@@ -745,12 +762,17 @@ class FrequencyMonitor:
         # Initialize data buffers
         # Use measurement_duration as the primary timing parameter
         measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
-        buffer_duration = self.config.get_float('sampling.buffer_duration')
         
-        # Buffer size: store enough samples to cover buffer_duration
-        # Each measurement takes measurement_duration seconds, so samples per second = 1/measurement_duration
-        samples_per_second = 1.0 / measurement_duration
-        buffer_size = int(buffer_duration * samples_per_second)
+        # Buffer size: use analysis_window_seconds to determine both buffer size and analysis window
+        # This ensures we only store what we actually use for analysis
+        try:
+            analysis_window_seconds = self.config.get_float('analysis.analysis_window_seconds')
+        except (KeyError, ValueError):
+            analysis_window_seconds = 30.0  # Default fallback
+        
+        # Calculate buffer size based on analysis window
+        # Each measurement takes measurement_duration seconds
+        buffer_size = int(analysis_window_seconds / measurement_duration)
         # Ensure buffer can hold at least a few samples
         buffer_size = max(buffer_size, 10)
         
@@ -839,17 +861,21 @@ class FrequencyMonitor:
         if freq is None:
             return "Unknown"
         
-        # Use the same analysis logic as the main loop
+        # Use the same analysis logic as the main loop: configurable analysis window
         measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
-        samples_needed = 1  # Minimum: 1 sample (covers measurement_duration seconds)
-        samples_for_analysis = max(1, min(len(self.freq_buffer), max(3, len(self.freq_buffer))))
+        try:
+            analysis_window_seconds = self.config.get_float('analysis.analysis_window_seconds')
+        except (KeyError, ValueError):
+            analysis_window_seconds = 30.0  # Default fallback
+        samples_for_analysis = int(analysis_window_seconds / measurement_duration)
+        samples_needed = 3  # Minimum: 3 samples required for analysis
         
         if len(self.freq_buffer) >= samples_needed:
-            # Full analysis with measurement_duration worth of data
-            samples_to_use = samples_for_analysis
+            # Use 30-second analysis window (most recent samples)
+            samples_to_use = min(samples_for_analysis, len(self.freq_buffer))
             recent_data = list(self.freq_buffer)[-samples_to_use:]
             avar_10s, std_freq = self.analyzer.analyze_signal_quality(recent_data)
-            source = self.analyzer.classify_power_source(avar_10s, std_freq)
+            source = self.analyzer.classify_power_source(avar_10s, std_freq, len(recent_data))
         else:
             # Not enough data - stay in Unknown state
             source = "Unknown"
@@ -955,17 +981,21 @@ class FrequencyMonitor:
                 self._sd_notify("WATCHDOG=1")
 
                 # Analyze data only if we have enough data
-                # Since each measurement is measurement_duration seconds, we need at least 1 sample
-                # Use enough samples to cover measurement_duration seconds for analysis
+                # Use configurable analysis window for responsive detection while maintaining accuracy
+                # This balances detection speed with statistical reliability
                 self.logger.debug("Analyzing data...")
                 confidence = 0.0
                 
-                # Calculate how many samples we need for analysis
-                # Since we measure every measurement_duration seconds, 1 sample = measurement_duration seconds
-                # For robust statistical analysis, use multiple samples if available (prefer 3+)
-                samples_needed = 1  # Minimum: 1 sample (covers measurement_duration seconds)
-                # Use all available samples for better statistics (minimum 1, prefer 3+)
-                samples_for_analysis = max(1, min(len(self.freq_buffer), max(3, len(self.freq_buffer))))
+                # Get analysis window from config
+                try:
+                    analysis_window_seconds = self.config.get_float('analysis.analysis_window_seconds')
+                except (KeyError, ValueError):
+                    analysis_window_seconds = 30.0  # Default fallback
+                
+                # Calculate how many samples to use based on analysis window
+                # Each measurement takes measurement_duration seconds
+                samples_for_analysis = int(analysis_window_seconds / measurement_duration)
+                samples_needed = 3  # Minimum: 3 samples required for analysis
                 
                 if freq is None:
                     # No frequency reading - classify as Unknown
@@ -973,15 +1003,15 @@ class FrequencyMonitor:
                     source = "Unknown"
                     avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
                 elif len(self.freq_buffer) >= samples_needed:
-                    # We have enough data - use available samples for analysis
-                    self.logger.debug(f"Full analysis with {len(self.freq_buffer)} samples (using {samples_for_analysis} samples, each covering {measurement_duration}s)")
-                    # Use available samples for analysis (prefer multiple for better statistics)
-                    samples_to_use = samples_for_analysis
+                    # We have enough data - use 30-second analysis window (most recent samples)
+                    # Take the most recent samples up to the analysis window size
+                    samples_to_use = min(samples_for_analysis, len(self.freq_buffer))
+                    self.logger.debug(f"Analysis with {len(self.freq_buffer)} samples in buffer (using last {samples_to_use} samples = {samples_to_use * measurement_duration:.1f}s window)")
                     recent_data = list(self.freq_buffer)[-samples_to_use:]
                     
                     # Simplified signal analysis (std_dev + allan_variance only)
                     avar_10s, std_freq = self.analyzer.analyze_signal_quality(recent_data)
-                    source = self.analyzer.classify_power_source(avar_10s, std_freq)
+                    source = self.analyzer.classify_power_source(avar_10s, std_freq, len(recent_data))
                     
                     # Debug logging for classification
                     self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, source={source}")
