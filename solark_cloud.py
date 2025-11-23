@@ -23,6 +23,11 @@ class SolArkCloudError(Exception):
     pass
 
 
+class NetworkError(SolArkCloudError):
+    """Exception raised when network connectivity issues occur"""
+    pass
+
+
 class SolArkCloud:
     """
     Sol-Ark Cloud integration class using Playwright for web automation
@@ -145,6 +150,9 @@ class SolArkCloud:
         
         Returns:
             bool: True if login successful
+            
+        Raises:
+            NetworkError: If network connectivity issues occur
         """
         if not self.username or not self.password:
             self.logger.error("Username or password not configured")
@@ -162,23 +170,34 @@ class SolArkCloud:
                 session_data = self._load_session()
                 if session_data:
                     self.logger.info("Attempting to restore existing session...")
-                    if self._restore_session(session_data):
-                        # Verify we're actually logged in
-                        if self._is_logged_in():
-                            self.is_logged_in = True
-                            self.logger.info("Successfully restored session - no login needed")
-                            return True
+                    try:
+                        if self._restore_session(session_data):
+                            # Verify we're actually logged in
+                            if self._is_logged_in():
+                                self.is_logged_in = True
+                                self.logger.info("Successfully restored session - no login needed")
+                                return True
+                            else:
+                                self.logger.info("Session restored but not logged in - proceeding with fresh login")
                         else:
-                            self.logger.info("Session restored but not logged in - proceeding with fresh login")
-                    else:
-                        self.logger.info("Failed to restore session - proceeding with fresh login")
+                            self.logger.info("Failed to restore session - proceeding with fresh login")
+                    except NetworkError:
+                        # Re-raise network errors from session restore
+                        raise
             
             self.logger.info("Attempting to login to Sol-Ark Cloud...")
             
             # Navigate directly to inverter page - if not logged in, will redirect to login
             inverter_url = f"{self.base_url}/device/inverter"
-            self.page.goto(inverter_url)
-            self.page.wait_for_load_state('networkidle')
+            try:
+                self.page.goto(inverter_url)
+                self.page.wait_for_load_state('networkidle')
+            except (PlaywrightTimeoutError, Exception) as e:
+                error_msg = str(e).lower()
+                if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                    self.logger.error(f"Network error during login navigation: {e}")
+                    raise NetworkError(f"Network connectivity issue: {e}") from e
+                raise
             
             # Check if we got redirected to login page
             current_url = self.page.url
@@ -295,6 +314,9 @@ class SolArkCloud:
                     
                     return True
                     
+        except NetworkError:
+            # Re-raise network errors so they can be handled by the integration layer
+            raise
         except Exception as e:
             self.logger.error(f"Login failed: {e}")
             return False
@@ -427,8 +449,15 @@ class SolArkCloud:
                 self.logger.info(f"Restored {len(cookies)} cookies to browser context")
             
             # Navigate to base URL first
-            self.page.goto(self.base_url)
-            self.page.wait_for_load_state('networkidle')
+            try:
+                self.page.goto(self.base_url)
+                self.page.wait_for_load_state('networkidle')
+            except (PlaywrightTimeoutError, Exception) as e:
+                error_msg = str(e).lower()
+                if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                    self.logger.error(f"Network error during session restore navigation: {e}")
+                    raise NetworkError(f"Network connectivity issue: {e}") from e
+                raise
             
             # Restore localStorage and sessionStorage if available
             if local_storage or session_storage:
@@ -446,9 +475,18 @@ class SolArkCloud:
                         self.logger.info(f"Restored {len(session_storage)} sessionStorage items")
                     
                     # Refresh the page to apply storage changes
-                    self.page.reload()
-                    self.page.wait_for_load_state('networkidle')
+                    try:
+                        self.page.reload()
+                        self.page.wait_for_load_state('networkidle')
+                    except (PlaywrightTimeoutError, Exception) as reload_e:
+                        error_msg = str(reload_e).lower()
+                        if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                            self.logger.error(f"Network error during session restore reload: {reload_e}")
+                            raise NetworkError(f"Network connectivity issue: {reload_e}") from reload_e
+                        raise
                     
+                except NetworkError:
+                    raise
                 except Exception as e:
                     self.logger.warning(f"Failed to restore storage data: {e}")
             
@@ -463,8 +501,15 @@ class SolArkCloud:
             
             # Additional check - try to navigate to a protected page
             try:
-                self.page.goto(f"{self.base_url}/device/inverter")
-                self.page.wait_for_load_state('networkidle')
+                try:
+                    self.page.goto(f"{self.base_url}/device/inverter")
+                    self.page.wait_for_load_state('networkidle')
+                except (PlaywrightTimeoutError, Exception) as nav_e:
+                    error_msg = str(nav_e).lower()
+                    if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                        self.logger.error(f"Network error during session restore verification: {nav_e}")
+                        raise NetworkError(f"Network connectivity issue: {nav_e}") from nav_e
+                    raise
                 
                 # Check if we're redirected to login
                 if '/login' in self.page.url:
@@ -517,6 +562,9 @@ class SolArkCloud:
             
         Returns:
             bool: True if toggle successful
+            
+        Raises:
+            NetworkError: If network connectivity issues occur
         """
         try:
             # Require inverter_id parameter - this should come from optocoupler config
@@ -535,8 +583,15 @@ class SolArkCloud:
             inverter_url = f"{self.base_url}/device/inverter"
             
             self.logger.info(f"Navigating directly to inverter device page: {inverter_url}")
-            self.page.goto(inverter_url)
-            self.page.wait_for_load_state('networkidle')
+            try:
+                self.page.goto(inverter_url)
+                self.page.wait_for_load_state('networkidle')
+            except (PlaywrightTimeoutError, Exception) as e:
+                error_msg = str(e).lower()
+                if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                    self.logger.error(f"Network error during navigation: {e}")
+                    raise NetworkError(f"Network connectivity issue: {e}") from e
+                raise
             
             # Check if we got redirected to login page
             current_url = self.page.url
@@ -546,8 +601,15 @@ class SolArkCloud:
                     return False
                 # After login, navigate back to inverter page
                 self.logger.info("Login successful, navigating back to inverter page...")
-                self.page.goto(inverter_url)
-                self.page.wait_for_load_state('networkidle')
+                try:
+                    self.page.goto(inverter_url)
+                    self.page.wait_for_load_state('networkidle')
+                except (PlaywrightTimeoutError, Exception) as e:
+                    error_msg = str(e).lower()
+                    if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                        self.logger.error(f"Network error during navigation: {e}")
+                        raise NetworkError(f"Network connectivity issue: {e}") from e
+                    raise
             
             # Wait for JavaScript to load the inverter list
             self.logger.info("Waiting for inverter list to load...")
@@ -718,9 +780,16 @@ class SolArkCloud:
                     
                     # Navigate directly to the iframe URL
                     self.logger.info("Navigating to iframe URL...")
-                    self.page.goto(iframe_src)
-                    self.page.wait_for_load_state('networkidle')
-                    self.logger.info("Successfully navigated to iframe URL")
+                    try:
+                        self.page.goto(iframe_src)
+                        self.page.wait_for_load_state('networkidle')
+                        self.logger.info("Successfully navigated to iframe URL")
+                    except (PlaywrightTimeoutError, Exception) as e:
+                        error_msg = str(e).lower()
+                        if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                            self.logger.error(f"Network error during iframe navigation: {e}")
+                            raise NetworkError(f"Network connectivity issue: {e}") from e
+                        raise
                     
                     # First, click on "System Work Mode" to access the TOU settings
                     self.logger.info("Looking for System Work Mode link...")
@@ -967,6 +1036,9 @@ class SolArkCloud:
                 self.logger.error("Could not find TOU switch - may not be on System Work Mode page")
                 return False
             
+        except NetworkError:
+            # Re-raise network errors so they can be handled by the integration layer
+            raise
         except Exception as e:
             self.logger.error(f"Failed to toggle Time of Use: {e}")
             return False

@@ -165,6 +165,7 @@ solark_cloud:
   session_timeout: 15768000   # Session timeout in seconds (6 months)
   tou_state_file: "solark_tou_state.json" # File to store TOU state for inverters
   tou_cooldown_seconds: 300  # Cooldown period in seconds before retrying TOU changes (5 minutes)
+  network_retry_interval_seconds: 300  # Interval in seconds for retrying pending operations when network is down (5 minutes)
   parameter_changes:
     enabled: true           # Enable automatic parameter changes
     dry_run: false          # Set to true to log changes without applying

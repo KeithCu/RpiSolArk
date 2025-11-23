@@ -16,7 +16,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import json
 
-from solark_cloud import SolArkCloud, SolArkCloudError
+from solark_cloud import SolArkCloud, SolArkCloudError, NetworkError
 
 
 class SolArkIntegration:
@@ -55,7 +55,14 @@ class SolArkIntegration:
         self.tou_cooldown_seconds = self.solark_config.get('tou_cooldown_seconds', 300)  # Default 5 minutes
         self.tou_state = {}  # In-memory cache of TOU state
         
-        # Load TOU state from disk
+        # Network retry configuration
+        self.network_retry_interval_seconds = self.solark_config.get('network_retry_interval_seconds', 300)  # Default 5 minutes
+        
+        # Pending operations tracking (for network failures)
+        self.pending_operations = {}  # Key: inverter_id, Value: dict with operation details
+        self.pending_operations_lock = threading.Lock()  # Lock for pending operations
+        
+        # Load TOU state from disk (includes pending operations)
         self._load_tou_state()
         
         # Optocoupler to plant mapping
@@ -76,6 +83,12 @@ class SolArkIntegration:
                 'time_of_use_enabled': False  # Disable TOU off-grid
             }
         }
+        
+        # Start background retry thread for network failures
+        self.retry_thread_running = True
+        self.retry_thread = threading.Thread(target=self._retry_pending_operations_loop, daemon=True)
+        self.retry_thread.start()
+        self.logger.info(f"Started network retry thread (interval: {self.network_retry_interval_seconds}s)")
         
         self.logger.info(f"Sol-Ark integration initialized (enabled: {self.enabled})")
     
@@ -156,7 +169,8 @@ class SolArkIntegration:
         try:
             if not os.path.exists(self.tou_state_file):
                 self.logger.info(f"TOU state file {self.tou_state_file} does not exist, starting fresh")
-                self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+                self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None, 'pending_operations': {}}
+                self.pending_operations = {}
                 return
             
             with open(self.tou_state_file, 'r') as f:
@@ -170,7 +184,8 @@ class SolArkIntegration:
             version = state_data.get('version', 1)
             if version != 1:
                 self.logger.warning(f"Unknown TOU state file version {version}, starting fresh")
-                self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+                self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None, 'pending_operations': {}}
+                self.pending_operations = {}
                 return
             
             # Load inverters state
@@ -178,29 +193,47 @@ class SolArkIntegration:
             if not isinstance(inverters, dict):
                 raise ValueError("Invalid inverters structure in TOU state file")
             
+            # Load pending operations
+            pending_ops = state_data.get('pending_operations', {})
+            if not isinstance(pending_ops, dict):
+                pending_ops = {}
+            
             self.tou_state = {
                 'version': 1,
                 'inverters': inverters,
-                'last_sync': state_data.get('last_sync')
+                'last_sync': state_data.get('last_sync'),
+                'pending_operations': pending_ops
             }
             
+            # Load pending operations into in-memory dict
+            with self.pending_operations_lock:
+                self.pending_operations = pending_ops.copy()
+            
             inverter_count = len(inverters)
-            self.logger.info(f"Loaded TOU state for {inverter_count} inverter(s) from {self.tou_state_file}")
+            pending_count = len(pending_ops)
+            self.logger.info(f"Loaded TOU state for {inverter_count} inverter(s) and {pending_count} pending operation(s) from {self.tou_state_file}")
             
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             self.logger.warning(f"Failed to load TOU state: {e}, starting fresh")
-            self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+            self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None, 'pending_operations': {}}
+            self.pending_operations = {}
         except Exception as e:
             self.logger.error(f"Unexpected error loading TOU state: {e}, starting fresh")
-            self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None}
+            self.tou_state = {'version': 1, 'inverters': {}, 'last_sync': None, 'pending_operations': {}}
+            self.pending_operations = {}
     
     def _save_tou_state(self):
         """Save TOU state to disk with atomic write."""
         try:
+            # Get current pending operations
+            with self.pending_operations_lock:
+                pending_ops = self.pending_operations.copy()
+            
             state_data = {
                 'version': 1,
                 'inverters': self.tou_state.get('inverters', {}),
-                'last_sync': time.time()
+                'last_sync': time.time(),
+                'pending_operations': pending_ops
             }
             
             # Atomic write: write to temp file, then rename
@@ -258,6 +291,123 @@ class SolArkIntegration:
         
         self._save_tou_state()
         self.logger.debug(f"Updated TOU state for inverter {inverter_id}: {'enabled' if enabled else 'disabled'} (power source: {power_source})")
+    
+    def _add_pending_operation(self, inverter_id: str, enable: bool, power_source: str, optocoupler_name: str):
+        """
+        Add a pending operation to the queue for network retry.
+        
+        Args:
+            inverter_id: Inverter ID
+            enable: Desired TOU state
+            power_source: Power source that triggered this change
+            optocoupler_name: Name of the optocoupler
+        """
+        with self.pending_operations_lock:
+            self.pending_operations[inverter_id] = {
+                'enable': enable,
+                'power_source': power_source,
+                'optocoupler_name': optocoupler_name,
+                'first_failure_time': time.time(),
+                'retry_count': self.pending_operations.get(inverter_id, {}).get('retry_count', 0) + 1
+            }
+            # Update TOU state file with pending operations
+            self.tou_state['pending_operations'] = self.pending_operations.copy()
+            self._save_tou_state()
+        
+        self.logger.info(f"Added pending operation for inverter {inverter_id}: TOU={'ON' if enable else 'OFF'} "
+                        f"(power_source: {power_source}, retry_count: {self.pending_operations[inverter_id]['retry_count']})")
+    
+    def _remove_pending_operation(self, inverter_id: str):
+        """
+        Remove a pending operation from the queue.
+        
+        Args:
+            inverter_id: Inverter ID to remove
+        """
+        with self.pending_operations_lock:
+            if inverter_id in self.pending_operations:
+                del self.pending_operations[inverter_id]
+                # Update TOU state file
+                self.tou_state['pending_operations'] = self.pending_operations.copy()
+                self._save_tou_state()
+                self.logger.info(f"Removed pending operation for inverter {inverter_id}")
+    
+    def _retry_pending_operations_loop(self):
+        """
+        Background thread that retries pending operations every network_retry_interval_seconds.
+        This runs independently of the cooldown mechanism.
+        """
+        while self.retry_thread_running:
+            try:
+                # Sleep for the retry interval
+                time.sleep(self.network_retry_interval_seconds)
+                
+                # Check if there are any pending operations
+                with self.pending_operations_lock:
+                    pending_ops = list(self.pending_operations.items())
+                
+                if not pending_ops:
+                    continue  # No pending operations, continue waiting
+                
+                self.logger.info(f"Retrying {len(pending_ops)} pending operation(s) due to network failures")
+                
+                # Retry each pending operation
+                for inverter_id, op_data in pending_ops:
+                    try:
+                        enable = op_data['enable']
+                        power_source = op_data['power_source']
+                        optocoupler_name = op_data.get('optocoupler_name', 'Unknown')
+                        retry_count = op_data.get('retry_count', 0)
+                        
+                        self.logger.info(f"Retrying TOU toggle for inverter {inverter_id}: "
+                                       f"TOU={'ON' if enable else 'OFF'} "
+                                       f"(attempt {retry_count + 1}, power_source: {power_source})")
+                        
+                        # Attempt the operation
+                        result = self.solark_cloud.toggle_time_of_use(enable, inverter_id)
+                        
+                        if result:
+                            # Success! Remove from pending queue and update state
+                            self.logger.info(f"Successfully retried TOU toggle for inverter {inverter_id} "
+                                           f"after {retry_count} failed attempts")
+                            self._remove_pending_operation(inverter_id)
+                            # Update TOU state to reflect success
+                            self._update_tou_state(inverter_id, enable, power_source)
+                        else:
+                            # Still failed, but not a network error - might be other issue
+                            # Keep it in pending queue for next retry
+                            self.logger.warning(f"Retry failed for inverter {inverter_id} (non-network error), "
+                                              f"will retry again in {self.network_retry_interval_seconds}s")
+                            
+                    except NetworkError as e:
+                        # Network still down, keep in pending queue and increment retry count
+                        with self.pending_operations_lock:
+                            if inverter_id in self.pending_operations:
+                                self.pending_operations[inverter_id]['retry_count'] = \
+                                    self.pending_operations[inverter_id].get('retry_count', 0) + 1
+                                retry_count = self.pending_operations[inverter_id]['retry_count']
+                                # Update TOU state file
+                                self.tou_state['pending_operations'] = self.pending_operations.copy()
+                                self._save_tou_state()
+                            else:
+                                retry_count = op_data.get('retry_count', 0)
+                        
+                        first_failure_time = op_data.get('first_failure_time', time.time())
+                        time_since_first_failure = time.time() - first_failure_time
+                        
+                        self.logger.warning(f"Network still unavailable for inverter {inverter_id} "
+                                          f"(retry {retry_count}, "
+                                          f"down for {time_since_first_failure/60:.1f} minutes): {e}")
+                        # Operation stays in pending queue for next retry
+                        
+                    except Exception as e:
+                        # Unexpected error, log it but keep retrying
+                        self.logger.error(f"Unexpected error retrying operation for inverter {inverter_id}: {e}")
+                        # Operation stays in pending queue for next retry
+                        
+            except Exception as e:
+                self.logger.error(f"Error in retry thread loop: {e}")
+                # Continue the loop even if there's an error
     
     def _is_in_cooldown(self, inverter_id: str) -> bool:
         """
@@ -409,22 +559,38 @@ class SolArkIntegration:
                             # Not in cooldown, proceed with cloud call
                             self.logger.info(f"TOU state mismatch for inverter {inverter_id}: stored={stored_state}, desired={enable}, updating via cloud")
                             
-                            # Optimistically update state BEFORE cloud call (assume it will succeed)
-                            attempt_time = time.time()
-                            self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=attempt_time)
-                            
                             # Use synchronous Sol-Ark cloud method
-                            result = self.solark_cloud.toggle_time_of_use(enable, inverter_id)
-                            
-                            if result:
-                                success_count += 1
-                                self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for inverter {inverter_id}")
-                                # State already updated optimistically, no need to update again
-                            else:
-                                self.logger.warning(f"Cloud call failed for inverter {inverter_id}, but state was optimistically updated. "
-                                                  f"Assuming success per configuration (will retry after cooldown if needed)")
-                                # Still count as success since we optimistically assume it succeeded
-                                success_count += 1
+                            try:
+                                result = self.solark_cloud.toggle_time_of_use(enable, inverter_id)
+                                
+                                if result:
+                                    success_count += 1
+                                    self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for inverter {inverter_id}")
+                                    # Update state after successful cloud call
+                                    attempt_time = time.time()
+                                    self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=attempt_time)
+                                    # Remove from pending operations if it was there
+                                    self._remove_pending_operation(inverter_id)
+                                else:
+                                    # Non-network failure (e.g., element not found, authentication issue)
+                                    self.logger.warning(f"Cloud call failed for inverter {inverter_id} (non-network error)")
+                                    # Don't add to pending queue for non-network errors
+                                    # Still update attempt time for cooldown
+                                    attempt_time = time.time()
+                                    self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=attempt_time)
+                                    
+                            except NetworkError as e:
+                                # Network failure - add to pending queue for retry
+                                self.logger.warning(f"Network error toggling TOU for inverter {inverter_id}: {e}. "
+                                                  f"Adding to pending operations queue for retry every {self.network_retry_interval_seconds}s")
+                                self._add_pending_operation(inverter_id, enable, power_source, optocoupler_name)
+                                # Don't count as success, but don't fail completely either
+                                # The retry thread will handle it
+                                
+                            except Exception as e:
+                                # Other unexpected errors
+                                self.logger.error(f"Unexpected error toggling TOU for inverter {inverter_id}: {e}")
+                                # Don't add to pending queue for unexpected errors
                                 
                         except Exception as e:
                             self.logger.error(f"Error toggling TOU for inverter {inverter_id}: {e}")
