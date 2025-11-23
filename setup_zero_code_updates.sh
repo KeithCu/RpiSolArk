@@ -19,18 +19,91 @@ read -p "Enter your choice (1-5): " choice
 case $choice in
     1)
         echo "📅 Setting up Systemd Timer..."
-        
-        # Copy service files
-        sudo cp update.service /etc/systemd/system/
-        sudo cp update.timer /etc/systemd/system/
-        sudo cp update.sh /home/pi/RpiSolArk/
+
+        # Create update script
+        sudo tee /home/pi/RpiSolArk/update.sh > /dev/null << 'EOF'
+#!/bin/bash
+# Simple auto-update script - NO CUSTOM CODE NEEDED!
+
+set -e
+
+cd /home/pi/RpiSolArk
+
+# Check if we're in a git repository
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Not a git repository - skipping update"
+    exit 0
+fi
+
+# Fetch latest changes
+git fetch origin
+
+# Check if there are updates
+if git diff --quiet HEAD origin/release; then
+    echo "No updates available"
+    exit 0
+fi
+
+echo "Updates available - applying..."
+
+# Create backup
+BACKUP_DIR="/tmp/backup_$(date +%Y%m%d_%H%M%S)"
+cp -r . "$BACKUP_DIR"
+
+# Pull updates
+git pull origin release
+
+# Install dependencies if requirements.txt changed
+if git diff --name-only HEAD~1 HEAD | grep -q requirements.txt; then
+    echo "Requirements changed - installing dependencies..."
+    pip install -r requirements.txt
+fi
+
+# Restart service if it's running
+if systemctl is-active --quiet frequency-monitor; then
+    echo "Restarting frequency-monitor service..."
+    systemctl restart frequency-monitor
+fi
+
+echo "Update completed successfully"
+EOF
+
         sudo chmod +x /home/pi/RpiSolArk/update.sh
-        
+
+        # Create systemd service
+        sudo tee /etc/systemd/system/update.service > /dev/null << EOF
+[Unit]
+Description=Auto-update RpiSolArk from GitHub
+After=network.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/RpiSolArk
+ExecStart=/home/pi/RpiSolArk/update.sh
+StandardOutput=journal
+StandardError=journal
+EOF
+
+        # Create systemd timer
+        sudo tee /etc/systemd/system/update.timer > /dev/null << EOF
+[Unit]
+Description=Run auto-update every hour
+Requires=update.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
         # Enable and start
         sudo systemctl daemon-reload
         sudo systemctl enable update.timer
         sudo systemctl start update.timer
-        
+
         echo "✅ Systemd timer setup complete!"
         echo "   Updates will run every hour automatically"
         echo "   View status: sudo systemctl status update.timer"

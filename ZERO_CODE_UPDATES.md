@@ -14,11 +14,11 @@ You're absolutely right! Here are the **proper production solutions** that requi
 
 ### **1. Systemd Timer (Recommended)**
 **What it is:** Built-in Linux scheduling system
-**How it works:** Runs a simple bash script every hour
+**How it works:** Creates and runs update script + systemd service/timer every hour
 **Setup:** `./setup_zero_code_updates.sh` → Choose option 1
 
 ```bash
-# That's it! System handles everything
+# Script creates everything automatically
 sudo systemctl status update.timer
 journalctl -u update.service
 ```
