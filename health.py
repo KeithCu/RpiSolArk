@@ -24,26 +24,17 @@ class HealthMonitor:
     def __init__(self, config, logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.watchdog_timeout = config.get('health.watchdog_timeout')
         self.memory_threshold = config.get('health.memory_warning_threshold')
         self.cpu_threshold = config.get('health.cpu_warning_threshold')
-        self.watchdog_action = config.get('health.watchdog_action')
-        self.last_activity = time.time()
         self.running = True
-        
+
         # Resource tracking
         self.tracked_threads: Set[threading.Thread] = set()
         self.tracked_files: Set[str] = set()
         self.resource_lock = threading.Lock()
         self.startup_time = time.time()
-        
-        # Watchdog tracking
-        self.loop_iteration_count = 0
-        self.last_loop_time = time.time()
-        self.loop_rate_history = deque(maxlen=10)  # Track last 10 loop rates
-        self.watchdog_triggered = False
-        self.last_known_good_heartbeat = time.time()
-        
+
+
         self._start_monitoring()
     
     def _start_monitoring(self):
@@ -57,7 +48,6 @@ class HealthMonitor:
         while self.running:
             try:
                 self._check_system_health()
-                self._check_watchdog()
                 time.sleep(10)  # Check every 10 seconds
             except Exception as e:
                 self.logger.error(f"Health monitoring error: {e}")
@@ -78,49 +68,7 @@ class HealthMonitor:
         except Exception as e:
             self.logger.error(f"System health check error: {e}")
     
-    def _check_watchdog(self):
-        """Check if system is responsive and take action if needed."""
-        current_time = time.time()
-        time_since_activity = current_time - self.last_activity
-        
-        if time_since_activity > self.watchdog_timeout:
-            if not self.watchdog_triggered:
-                self.watchdog_triggered = True
-                self.logger.error(f"Watchdog timeout - system appears unresponsive for {time_since_activity:.1f}s")
-                
-                # Take configured action
-                self._execute_watchdog_action()
-            else:
-                # Already triggered, check if we've recovered
-                if time_since_activity < self.watchdog_timeout:
-                    self.logger.info("Watchdog recovery detected - system responsive again")
-                    self.watchdog_triggered = False
-        else:
-            # System is responsive, update last known good heartbeat
-            self.last_known_good_heartbeat = current_time
-            if self.watchdog_triggered:
-                self.logger.info("Watchdog recovery detected - system responsive again")
-                self.watchdog_triggered = False
-    
-    def _execute_watchdog_action(self):
-        """Execute the configured watchdog action."""
-        try:
-            if self.watchdog_action == 'log':
-                self.logger.critical("Watchdog timeout - logging only (no action taken)")
-                
-            elif self.watchdog_action == 'restart':
-                self.logger.critical("Watchdog timeout - initiating application restart")
-                self._restart_application()
-                
-            elif self.watchdog_action == 'reboot':
-                self.logger.critical("Watchdog timeout - initiating system reboot")
-                self._reboot_system()
-                
-            else:
-                self.logger.warning(f"Unknown watchdog action: {self.watchdog_action}, defaulting to log")
-                
-        except Exception as e:
-            self.logger.error(f"Error executing watchdog action '{self.watchdog_action}': {e}")
+
     
     def _restart_application(self):
         """Restart the application by exiting with error code."""
@@ -139,26 +87,6 @@ class HealthMonitor:
             self.logger.critical("Exiting process as last resort")
             os._exit(1)
     
-    def update_activity(self):
-        """Update last activity timestamp and track loop rate."""
-        current_time = time.time()
-        self.last_activity = current_time
-        
-        # Track loop rate
-        self.loop_iteration_count += 1
-        if self.loop_iteration_count > 0:
-            time_since_last = current_time - self.last_loop_time
-            if time_since_last > 0:
-                loop_rate = 1.0 / time_since_last
-                self.loop_rate_history.append(loop_rate)
-                
-                # Check for loop slowdown
-                if len(self.loop_rate_history) >= 5:
-                    avg_rate = sum(self.loop_rate_history) / len(self.loop_rate_history)
-                    if avg_rate < 0.1:  # Less than 0.1 Hz (10 second intervals)
-                        self.logger.warning(f"Main loop slowdown detected: {avg_rate:.3f} Hz average")
-        
-        self.last_loop_time = current_time
     
     def stop(self):
         """Stop health monitoring."""

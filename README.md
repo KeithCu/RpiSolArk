@@ -108,7 +108,7 @@ The system uses **three complementary analysis methods** to detect power sources
 - 🔧 **Hardware error recovery** with automatic optocoupler health checks
 - 📊 **Buffer corruption detection** with automatic data validation
 - 🔒 **Atomic file operations** for power-loss safe data logging
-- ⚡ **Configurable watchdog recovery** with restart/reboot capabilities
+- ⚡ **Systemd watchdog integration** for automatic service restart
 
 ## 📺 Display Interface
 
@@ -240,8 +240,6 @@ Raspberry Pi GPIO 22 ──┬─── Button ─── GND
 </div>
 ### 📊 Detailed Logging Mode
 
-
-### 📊 Detailed Logging Mode
 ```bash
 # Enable detailed logging (1 second intervals)
 python monitor.py --detailed-logging
@@ -263,7 +261,7 @@ The system uses a comprehensive YAML configuration file `config.yaml` with setti
 |   📊**Sampling**   |    Sample rate, buffer duration    |      Data collection parameters      |
 |   🎯**Analysis**   |        Detection thresholds        | Power source classification criteria |
 |    📝**Logging**    |         Log files, rotation         |      Logging and data retention      |
-|    🏥**Health**    |    Watchdog timeout, thresholds    |       System health monitoring       |
+|    🏥**Health**    |  Resource thresholds, systemd watchdog |   System health monitoring   |
 |   ☁️**Sol-Ark**   |     Credentials, sync intervals     |      Cloud integration settings      |
 | 🛡️**Reliability** | State persistence, recovery actions |     Long-term operation settings     |
 
@@ -286,9 +284,10 @@ hardware:
     health_check_interval: 30.0
     max_recovery_attempts: 3
 
-# Watchdog Recovery Actions
+# System Health Monitoring
 health:
-  watchdog_action: 'log'  # 'log', 'restart', or 'reboot'
+  memory_warning_threshold: 0.8
+  cpu_warning_threshold: 0.8
 ```
 
 **Configuration Philosophy**: The system now follows a "fail-fast" approach - if configuration is missing or invalid, the application will crash immediately with clear error messages rather than using potentially incorrect defaults.
@@ -310,13 +309,18 @@ health:
 
 ```bash
 # Run unit tests
-python test_monitor.py
+pytest
+
+# Test specific components
+pytest tests/test_monitor.py
+pytest tests/test_solark_cloud.py
+pytest tests/test_optocoupler.py
 
 # Test Sol-Ark cloud connection
-python test_solark_cloud.py
+python tests/test_solark_cloud.py
 
 # Test hardware components
-python hardware.py --test
+python tests/test_optocoupler.py
 ```
 
 ## 🏗️ Architecture
@@ -344,7 +348,7 @@ graph TB
     L --> N[Web Automation]
   
     D --> O[System Resources]
-    D --> P[Watchdog Timer]
+    D --> P[Systemd Notifications]
   
     E --> Q[CSV Logging]
     E --> R[File Rotation]
@@ -362,7 +366,7 @@ graph TB
 |  🎯**FrequencyMonitor**  | Main application controller |  Orchestrates all components  |
 |   🔧**HardwareManager**   | Hardware abstraction layer |  Graceful degradation support  |
 |  📊**FrequencyAnalyzer**  |  Frequency analysis engine  | Allan variance, classification |
-|    🏥**HealthMonitor**    |   System health tracking   | Resource monitoring, watchdog |
+|    🏥**HealthMonitor**    |   System health tracking   | Resource monitoring, systemd notifications |
 |     📝**DataLogger**     |      Data persistence      |   CSV logging, file rotation   |
 | ☁️**SolArkIntegration** |   Cloud integration layer   |   Parameter synchronization   |
 |     🤖**SolArkCloud**     |       Web automation       |  Playwright-based interaction  |
@@ -440,8 +444,7 @@ result = await solark.toggle_time_of_use(False, "2207079903")
 ### 📈 Health Metrics
 
 - **CPU Usage**: Real-time processor utilization
-- **Memory Usage**: RAM consumption tracking
-- **Watchdog Timer**: System responsiveness monitoring
+- **Systemd Watchdog**: Service health monitoring via systemd
 - **Frequency Stability**: Allan variance analysis
 - **Power Source**: Utility vs Generator classification
 - **Network Status**: Cloud connectivity monitoring
@@ -456,13 +459,6 @@ result = await solark.toggle_time_of_use(False, "2207079903")
 - **Atomic file writes** prevent corruption during power loss
 - **Duplicate action prevention** avoids redundant operations after restart
 - **State validation** with automatic fallback to safe defaults
-
-### 🛡️ **Resource Leak Prevention**
-
-- **Comprehensive resource tracking** monitors threads and file handles
-- **Context manager support** ensures proper cleanup of all hardware components
-- **Cleanup verification** detects and logs resource leaks
-- **Automatic garbage collection** prevents memory accumulation
 
 ### 🔧 **Hardware Error Recovery**
 
@@ -480,7 +476,7 @@ result = await solark.toggle_time_of_use(False, "2207079903")
 
 ### ⚡ **Automated Recovery Systems**
 
-- **Configurable watchdog actions**: log, restart application, or reboot system
+- **Systemd watchdog integration**: Automatic service restart on unresponsiveness
 - **Loop rate monitoring** detects system slowdowns
 - **Recovery detection** tracks system responsiveness
 - **Fallback mechanisms** for failed recovery attempts

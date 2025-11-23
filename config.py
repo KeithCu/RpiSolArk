@@ -129,12 +129,6 @@ class Config:
             if 'state_file' not in state_machine:
                 raise ValueError("persistent_state_enabled is True but state_file is not configured.")
         
-        # Validate watchdog action
-        health = self.config['health']
-        if 'watchdog_action' in health:
-            valid_actions = ['log', 'restart', 'reboot']
-            if health['watchdog_action'] not in valid_actions:
-                raise ValueError(f"Invalid watchdog_action: {health['watchdog_action']}. Must be one of: {valid_actions}")
     
     def validate_config(self) -> bool:
         """Public method to validate configuration."""

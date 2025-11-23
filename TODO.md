@@ -67,7 +67,7 @@
 - [x] **Data integrity protection** - NaN/inf detection and monotonic time validation ✅
 
 ### 🔄 **REMAINING - Hardware/System Level**
-- [ ] Enable hardware watchdog and service (`/dev/watchdog`, `watchdog` service)
+- [x] **Systemd Watchdog**: Using systemd service watchdog instead of hardware watchdog ✅
 - [ ] Configure log rotation and limit writes; consider overlay/RO root if feasible
 - [ ] Auto-restart core services via `systemd` (`Restart=always`, health checks)
 - [ ] Health monitoring and auto-recovery (network, disk space, processes)

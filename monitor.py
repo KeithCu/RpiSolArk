@@ -1098,9 +1098,6 @@ class FrequencyMonitor:
                 # Pet the systemd watchdog
                 self._sd_notify("WATCHDOG=1")
 
-                self.logger.debug("Updating health monitor...")
-                self.health_monitor.update_activity()
-
                 # Analyze data only if we have enough samples
                 self.logger.debug("Analyzing data...")
                 confidence = 0.0

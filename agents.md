@@ -10,7 +10,7 @@ This document provides comprehensive guidance for new developers joining the Rpi
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Optocoupler   │───▶│  Frequency      │───▶│  Power State    │
+│   Optocoupler   │──▶│  Frequency      │──▶│  Power State    │
 │   (Hardware)    │    │  Analysis       │    │  Machine        │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                 │                        │
@@ -23,7 +23,7 @@ This document provides comprehensive guidance for new developers joining the Rpi
                                 │                        │
                                 ▼                        ▼
                        ┌─────────────────┐    ┌─────────────────┐
-                       │  Sol-Ark Cloud  │◀───│  System Updates │
+                       │  Sol-Ark Cloud  │    │  System Updates │
                        │  Integration    │    │  & OS Tuning    │
                        └─────────────────┘    └─────────────────┘
 ```
@@ -130,16 +130,16 @@ This document provides comprehensive guidance for new developers joining the Rpi
 
 ### 8. health.py - System Monitoring
 
-**Purpose**: Monitors system health (CPU, RAM) and Watchdog.
+**Purpose**: Monitors system health (CPU, RAM) and integrates with systemd watchdog.
 
 **Key Classes**:
-- `HealthMonitor`: Watchdog timer and resource tracking.
+- `HealthMonitor`: Resource tracking and systemd watchdog notifications.
 - `MemoryMonitor`: Tracks process memory and triggers GC if needed.
 
 **Key Features**:
-- **Watchdog**: Can log, restart app, or reboot system if loop hangs.
+- **Systemd Watchdog Integration**: Sends watchdog notifications to systemd for automatic service restart.
+- **Resource Monitoring**: Tracks CPU, memory, threads, and file handles.
 - **Atomic CSV Logging**: Uses `fcntl` locking for safe log writes.
-- **Leak Detection**: Tracks open file handles and active threads.
 
 ### 9. setup_zero_code_updates.sh - Auto-Update System
 

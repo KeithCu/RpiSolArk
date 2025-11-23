@@ -20,12 +20,6 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Setup hardware watchdog
-echo "🐕 Setting up hardware watchdog..."
-sudo modprobe bcm2835_wdt
-sudo systemctl enable watchdog
-sudo systemctl start watchdog
-
 # Create systemd service
 echo "⚙️ Creating systemd service..."
 sudo tee /etc/systemd/system/frequency-monitor.service > /dev/null <<EOF
