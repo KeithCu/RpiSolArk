@@ -18,6 +18,7 @@
 ### 🎯 **The Core Problem**
 
 The system solves a critical challenge: **How do you automatically detect whether your home is powered by the utility grid or a backup generator?** This is essential for:
+
 - Automatic inverter parameter switching
 - Load management decisions
 - Safety systems
@@ -29,9 +30,10 @@ Unlike voltage (which can be similar for both sources), **frequency behavior is 
 
 <div align="center">
 
-| Power Source | Frequency Characteristics | Why This Happens |
-|:---:|:---:|:---:|
-| **🏢 Utility Grid** | Rock-solid 60.00 ± 0.01 Hz | Massive interconnected system with thousands of generators |
+
+|       Power Source       |   Frequency Characteristics   |                        Why This Happens                        |
+| :------------------------: | :------------------------------: | :---------------------------------------------------------------: |
+|   **🏢 Utility Grid**   |  Rock-solid 60.00 ± 0.01 Hz  |   Massive interconnected system with thousands of generators   |
 | **🔧 Generac Generator** | 59-64 Hz with hunting patterns | Single engine with mechanical governor trying to maintain speed |
 
 </div>
@@ -72,11 +74,12 @@ Frequency: 59-64 Hz with hunting pattern
 
 The system uses **three complementary analysis methods** to detect power sources:
 
-| Analysis Method | What It Detects | Why It Works |
-|:---:|:---:|:---:|
-| **📊 Allan Variance** | Short-term frequency instability | Captures hunting oscillations |
-| **📈 Standard Deviation** | Overall freqauency spread | Detects wide frequency ranges |
-| **📉 Kurtosis** | Distribution shape analysis | Identifies hunting patterns vs random noise |
+
+|      Analysis Method      |         What It Detects         |                Why It Works                |
+| :-------------------------: | :--------------------------------: | :-------------------------------------------: |
+|   **📊 Allan Variance**   | Short-term frequency instability |        Captures hunting oscillations        |
+| **📈 Standard Deviation** |    Overall freqauency spread    |        Detects wide frequency ranges        |
+|      **📉 Kurtosis**      |   Distribution shape analysis   | Identifies hunting patterns vs random noise |
 
 *For detailed mathematical formulas, implementation details, and metric effectiveness analysis, see [FREQUENCY_ANALYSIS.md](FREQUENCY_ANALYSIS.md).*
 
@@ -132,6 +135,7 @@ Press Ctrl+C to stop
 The 2-line LCD display provides comprehensive real-time information:
 
 #### 🔌 Utility Grid Mode
+
 ```
 Time: 14:32:15 [U]
 Freq: 60.02 Hz
@@ -139,7 +143,8 @@ Status: UTILITY GRID
 Stability: EXCELLENT
 ```
 
-#### ⚡ Generator Mode  
+#### ⚡ Generator Mode
+
 ```
 Time: 14:32:15 [G]
 Freq: 59.87 Hz
@@ -151,13 +156,14 @@ Stability: POOR
 
 ## 🔧 Hardware Requirements
 
-| Component | Specification | Purpose |
-|:---:|:---:|:---:|
-| 🍓 **Raspberry Pi** | Any model (3B+, 4B recommended) | Main processing unit |
-| 🔌 **H11AA1 Optocoupler** | AC line isolation | Safe frequency detection |
-| 📺 **16x2 I2C LCD** | Address 0x27 | Real-time status display |
-| 🔘 **Reset Button** | Momentary push button | Manual system reset/restart |
-| 🔗 **Resistors** | 1kΩ, 10kΩ | Circuit protection |
+
+|        Component        |          Specification          |           Purpose           |
+| :------------------------: | :-------------------------------: | :---------------------------: |
+|    🍓**Raspberry Pi**    | Any model (3B+, 4B recommended) |    Main processing unit    |
+| 🔌**H11AA1 Optocoupler** |        AC line isolation        |  Safe frequency detection  |
+|    📺**16x2 I2C LCD**    |          Address 0x27          |  Real-time status display  |
+|    🔘**Reset Button**    |      Momentary push button      | Manual system reset/restart |
+|     🔗**Resistors**     |           1kΩ, 10kΩ           |     Circuit protection     |
 
 ### 📋 Shopping List
 
@@ -194,13 +200,15 @@ python monitor.py --real
 
 ### 🔧 Hardware Configuration
 
-| Component | GPIO Pin | Connection |
-|:---:|:---:|:---:|
+
+|      Component      | GPIO Pin |       Connection       |
+| :--------------------: | :--------: | :-----------------------: |
 | 🔌 Optocoupler Input | GPIO 17 | AC line via optocoupler |
-| 🔘 Reset Button | GPIO 22 | Active LOW with pull-up |
-| 📺 I2C LCD | SDA/SCL | Address 0x27 |
+|   🔘 Reset Button   | GPIO 22 | Active LOW with pull-up |
+|      📺 I2C LCD      | SDA/SCL |      Address 0x27      |
 
 #### 🔘 Reset Button Wiring
+
 ```
 Raspberry Pi GPIO 22 ──┬─── Button ─── GND
                        │
@@ -220,17 +228,20 @@ Raspberry Pi GPIO 22 ──┬─── Button ─── GND
 
 <div align="center">
 
-| Command | Description | Use Case |
-|:---:|:---:|:---:|
-| `python monitor.py` | Default simulator mode | Testing without hardware |
-| `python monitor.py --real` | Real hardware mode | Production deployment |
-| `python monitor.py --verbose` | Verbose logging | Debugging issues |
+
+|                Command                |        Description        |           Use Case           |
+| :--------------------------------------: | :--------------------------: | :----------------------------: |
+|          `python monitor.py`          |   Default simulator mode   |   Testing without hardware   |
+|       `python monitor.py --real`       |     Real hardware mode     |    Production deployment    |
+|     `python monitor.py --verbose`     |      Verbose logging      |       Debugging issues       |
 | `python monitor.py --detailed-logging` | Detailed frequency logging | Data collection for analysis |
-| `python test_solark_cloud.py` | Test cloud integration | Verify Sol-Ark connection |
+|     `python test_solark_cloud.py`     |   Test cloud integration   |  Verify Sol-Ark connection  |
 
 </div>
 ### 📊 Detailed Logging Mode
 
+
+### 📊 Detailed Logging Mode
 ```bash
 # Enable detailed logging (1 second intervals)
 python monitor.py --detailed-logging
@@ -245,15 +256,16 @@ python monitor.py --analyze-offline
 
 The system uses a comprehensive YAML configuration file `config.yaml` with settings for:
 
-| Category | Settings | Description |
-|:---:|:---:|:---:|
-| 🔧 **Hardware** | GPIO pins, LCD address | Hardware interface configuration |
-| 📊 **Sampling** | Sample rate, buffer duration | Data collection parameters |
-| 🎯 **Analysis** | Detection thresholds | Power source classification criteria |
-| 📝 **Logging** | Log files, rotation | Logging and data retention |
-| 🏥 **Health** | Watchdog timeout, thresholds | System health monitoring |
-| ☁️ **Sol-Ark** | Credentials, sync intervals | Cloud integration settings |
-| 🛡️ **Reliability** | State persistence, recovery actions | Long-term operation settings |
+
+|      Category      |              Settings              |             Description             |
+| :-------------------: | :-----------------------------------: | :------------------------------------: |
+|   🔧**Hardware**   |       GPIO pins, LCD address       |   Hardware interface configuration   |
+|   📊**Sampling**   |    Sample rate, buffer duration    |      Data collection parameters      |
+|   🎯**Analysis**   |        Detection thresholds        | Power source classification criteria |
+|    📝**Logging**    |         Log files, rotation         |      Logging and data retention      |
+|    🏥**Health**    |    Watchdog timeout, thresholds    |       System health monitoring       |
+|   ☁️**Sol-Ark**   |     Credentials, sync intervals     |      Cloud integration settings      |
+| 🛡️**Reliability** | State persistence, recovery actions |     Long-term operation settings     |
 
 ### 🛡️ **New Reliability Configuration Options**
 
@@ -283,15 +295,16 @@ health:
 
 ## 📁 Output Files
 
-| File | Description | Format |
-|:---:|:---:|:---:|
-| 📊 `hourly_status.csv` | Hourly status reports | CSV with timestamps |
-| 📝 `monitor.log` | Detailed application logs | Rotating log files |
-| ☁️ `solark_cache/` | Cached Sol-Ark cloud pages | HTML files for analysis |
-| 🔄 `solark_session.json` | Session data | JSON session storage |
-| 🛡️ `/var/run/rpisolark_state*.json` | Persistent state files | JSON state storage |
-| 📊 `memory_usage.csv` | Memory monitoring data | CSV with resource metrics |
-| 📈 `detailed_frequency_data.csv` | Detailed frequency logs | CSV with analysis data |
+
+|                 File                 |        Description        |          Format          |
+| :------------------------------------: | :--------------------------: | :-------------------------: |
+|        📊`hourly_status.csv`        |   Hourly status reports   |    CSV with timestamps    |
+|           📝`monitor.log`           | Detailed application logs |    Rotating log files    |
+|         ☁️`solark_cache/`         | Cached Sol-Ark cloud pages |  HTML files for analysis  |
+|       🔄`solark_session.json`       |        Session data        |   JSON session storage   |
+| 🛡️`/var/run/rpisolark_state*.json` |   Persistent state files   |    JSON state storage    |
+|         📊`memory_usage.csv`         |   Memory monitoring data   | CSV with resource metrics |
+|   📈`detailed_frequency_data.csv`   |  Detailed frequency logs  |  CSV with analysis data  |
 
 ## 🧪 Testing
 
@@ -319,20 +332,20 @@ graph TB
     A --> D[HealthMonitor]
     A --> E[DataLogger]
     A --> F[SolArkIntegration]
-    
+  
     B --> G[GPIO Interface]
     B --> H[LCD Display]
-    
+  
     C --> J[Allan Variance]
     C --> K[Power Classification]
-    
+  
     F --> L[SolArkCloud]
     L --> M[Playwright Browser]
     L --> N[Web Automation]
-    
+  
     D --> O[System Resources]
     D --> P[Watchdog Timer]
-    
+  
     E --> Q[CSV Logging]
     E --> R[File Rotation]
 ```
@@ -343,23 +356,25 @@ graph TB
 
 <div align="center">
 
-| Component | Purpose | Key Features |
-|:---:|:---:|:---:|
-| 🎯 **FrequencyMonitor** | Main application controller | Orchestrates all components |
-| 🔧 **HardwareManager** | Hardware abstraction layer | Graceful degradation support |
-| 📊 **FrequencyAnalyzer** | Frequency analysis engine | Allan variance, classification |
-| 🏥 **HealthMonitor** | System health tracking | Resource monitoring, watchdog |
-| 📝 **DataLogger** | Data persistence | CSV logging, file rotation |
-| ☁️ **SolArkIntegration** | Cloud integration layer | Parameter synchronization |
-| 🤖 **SolArkCloud** | Web automation | Playwright-based interaction |
+
+|         Component         |           Purpose           |          Key Features          |
+| :-------------------------: | :---------------------------: | :------------------------------: |
+|  🎯**FrequencyMonitor**  | Main application controller |  Orchestrates all components  |
+|   🔧**HardwareManager**   | Hardware abstraction layer |  Graceful degradation support  |
+|  📊**FrequencyAnalyzer**  |  Frequency analysis engine  | Allan variance, classification |
+|    🏥**HealthMonitor**    |   System health tracking   | Resource monitoring, watchdog |
+|     📝**DataLogger**     |      Data persistence      |   CSV logging, file rotation   |
+| ☁️**SolArkIntegration** |   Cloud integration layer   |   Parameter synchronization   |
+|     🤖**SolArkCloud**     |       Web automation       |  Playwright-based interaction  |
 
 **Data Flow**: AC line frequency → Real-time analysis → LCD display/logging → Sol-Ark cloud updates
 
 ## 🎯 U/G Indicator Feature
 
 The U/G indicator shows the majority power source classification over a configurable time window (default: 5 minutes), providing stable indication:
+
 - **U** - Utility Grid (majority of recent classifications)
-- **G** - Generator (majority of recent classifications)  
+- **G** - Generator (majority of recent classifications)
 - **?** - Unknown/Equal (insufficient data or tied classifications)
 
 **Configuration**: Set `display.classification_window` in `config.yaml` (default: 300 seconds)
@@ -371,6 +386,7 @@ The U/G indicator shows the majority power source classification over a configur
 ### 🎯 **What It Does**
 
 Automatically:
+
 - **Logs into Sol-Ark Cloud** using your credentials
 - **Finds your specific inverter** by serial number
 - **Navigates to Parameters Setting** via dropdown menu
@@ -403,21 +419,21 @@ result = await solark.toggle_time_of_use(False, "2207079903")
 
 **Key Features**: Multiple click methods, smart navigation, success verification, session management, error recovery
 
-
 ## 📊 Monitoring
 
 **Comprehensive monitoring** with real-time LCD display, system health tracking, hourly logging, and cloud sync capabilities.
 
 **Health Metrics**: CPU usage, memory consumption, watchdog timer, frequency stability, power source classification, network status
 
-| Monitoring Type | Description | Output |
-|:---:|:---:|:---:|
-| 📺 **Real-time Display** | LCD status updates | Visual indicators |
-| 🏥 **System Health** | CPU, memory, watchdog | Resource monitoring |
-| 📝 **Hourly Logging** | Status reports | CSV files |
-| 📋 **Application Logs** | Detailed logging | Rotating log files |
-| ☁️ **Cloud Sync** | Sol-Ark integration | Parameter updates |
-| ⚡ **Power Management** | Source-based changes | Utility/Generator modes |
+
+|     Monitoring Type     |      Description      |         Output         |
+| :-----------------------: | :---------------------: | :-----------------------: |
+| 📺**Real-time Display** |  LCD status updates  |    Visual indicators    |
+|   🏥**System Health**   | CPU, memory, watchdog |   Resource monitoring   |
+|  📝**Hourly Logging**  |    Status reports    |        CSV files        |
+| 📋**Application Logs** |   Detailed logging   |   Rotating log files   |
+|   ☁️**Cloud Sync**   |  Sol-Ark integration  |    Parameter updates    |
+| ⚡**Power Management** | Source-based changes | Utility/Generator modes |
 
 </div>
 
@@ -435,36 +451,42 @@ result = await solark.toggle_time_of_use(False, "2207079903")
 **Designed for 5+ years of continuous operation** with comprehensive reliability improvements:
 
 ### 🔄 **Persistent State Management**
+
 - **JSON-based state persistence** survives restarts and power outages
 - **Atomic file writes** prevent corruption during power loss
 - **Duplicate action prevention** avoids redundant operations after restart
 - **State validation** with automatic fallback to safe defaults
 
 ### 🛡️ **Resource Leak Prevention**
+
 - **Comprehensive resource tracking** monitors threads and file handles
 - **Context manager support** ensures proper cleanup of all hardware components
 - **Cleanup verification** detects and logs resource leaks
 - **Automatic garbage collection** prevents memory accumulation
 
 ### 🔧 **Hardware Error Recovery**
+
 - **Optocoupler health checks** with automatic recovery mechanisms
 - **Counter reset and re-initialization** on hardware failures
 - **Configurable error thresholds** with graceful degradation
 - **Hardware status monitoring** with detailed health reporting
 
 ### 📊 **Data Integrity Protection**
+
 - **Buffer corruption detection** identifies and clears invalid data
 - **Periodic validation** checks for NaN/inf values and monotonic time
 - **Atomic CSV writes** with file locking for concurrent access
 - **Power-loss safe operations** using temporary files and atomic renames
 
 ### ⚡ **Automated Recovery Systems**
+
 - **Configurable watchdog actions**: log, restart application, or reboot system
 - **Loop rate monitoring** detects system slowdowns
 - **Recovery detection** tracks system responsiveness
 - **Fallback mechanisms** for failed recovery attempts
 
 ### ⚙️ **Robust Configuration**
+
 - **Comprehensive validation** with type checking and range validation
 - **Complete default configuration** prevents runtime errors
 - **Fail-fast startup** with clear error messages
@@ -475,6 +497,7 @@ result = await solark.toggle_time_of_use(False, "2207079903")
 Goal: keep root writable; retain your app's hourly write; curb OS background writes.
 
 ### 1) Put systemd journal in RAM (volatile)
+
 ```bash
 sudo cp /etc/systemd/journald.conf /etc/systemd/journald.conf.bak
 sudo sed -i 's/^#\?Storage=.*/Storage=volatile/' /etc/systemd/journald.conf
@@ -486,6 +509,7 @@ sudo systemctl disable --now rsyslog || true
 Revert: restore the backup or set `Storage=auto` and re‑enable rsyslog.
 
 ### 2) Disable APT periodic background jobs
+
 ```bash
 cat | sudo tee /etc/apt/apt.conf.d/02periodic-disable >/dev/null <<'EOF'
 APT::Periodic::Enable "0";
@@ -499,6 +523,7 @@ sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
 Revert: remove that file and re‑enable the timers.
 
 ### 3) Reduce filesystem metadata writes (noatime)
+
 ```bash
 sudo cp /etc/fstab /etc/fstab.bak
 # Edit the / and /boot lines to include noatime (example):
@@ -511,12 +536,14 @@ sudo reboot
 Optional: also add `commit=600` to the ext4 options to flush journal less often (higher data loss risk on power loss).
 
 ### 4) Use RAM for /tmp
+
 ```bash
 grep -qE '^tmpfs\s+/tmp\s+tmpfs' /etc/fstab || echo 'tmpfs /tmp tmpfs defaults,nosuid,nodev 0 0' | sudo tee -a /etc/fstab
 sudo mount -a
 ```
 
 ### 5) Optional: fake-hwclock timer (if NTP is available)
+
 ```bash
 # Only if you use NTP (systemd-timesyncd or chrony)
 sudo systemctl disable --now fake-hwclock.timer || true
@@ -524,6 +551,7 @@ sudo systemctl enable --now systemd-timesyncd || true
 ```
 
 ### Verify
+
 ```bash
 findmnt -no OPTIONS / | grep -q noatime && echo OK:noatime || echo MISSING:noatime
 systemctl show -p Storage systemd-journald | grep volatile || echo 'journald not volatile'
@@ -531,18 +559,20 @@ findmnt /tmp
 ```
 
 ### Expected endurance
+
 - Your hourly write dominates. 100 KB/hour ≈ 0.9 GB/year; 1 MB/hour ≈ 8.8 GB/year. Both are safe for quality microSD over 10 years. The steps above largely remove incidental OS writes.
 
 ## 🔧 Troubleshooting
 
 ### 🚨 Common Issues
 
-| Issue | Symptoms | Solution |
-|:---:|:---:|:---:|
-| 🔌 **GPIO Access Denied** | Permission errors | `sudo usermod -a -G gpio pi` |
-| 📺 **LCD Not Displaying** | Blank screen | Check I2C address and connections |
-| ☁️ **Cloud Connection Failed** | Sol-Ark sync errors | Check credentials and network |
-| 📊 **Frequency Reading Errors** | Invalid data | Verify optocoupler connections |
+
+|              Issue              |      Symptoms      |             Solution             |
+| :-------------------------------: | :-------------------: | :---------------------------------: |
+|    🔌**GPIO Access Denied**    |  Permission errors  |   `sudo usermod -a -G gpio pi`   |
+|    📺**LCD Not Displaying**    |    Blank screen    | Check I2C address and connections |
+| ☁️**Cloud Connection Failed** | Sol-Ark sync errors |   Check credentials and network   |
+| 📊**Frequency Reading Errors** |    Invalid data    |  Verify optocoupler connections  |
 
 ### 🔍 Diagnostic Steps
 

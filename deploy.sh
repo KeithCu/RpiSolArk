@@ -78,46 +78,21 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Create health monitor service
-echo "🏥 Creating health monitor service..."
-sudo tee /etc/systemd/system/frequency-health.service > /dev/null <<EOF
-[Unit]
-Description=Frequency Monitor Health Monitor
-After=network.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/venv/bin/python $(pwd)/system_health.py
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 # Enable and start services
 echo "🚀 Starting services..."
 sudo systemctl daemon-reload
 sudo systemctl enable frequency-monitor
 sudo systemctl enable frequency-reboot
-sudo systemctl enable frequency-health
 sudo systemctl start frequency-monitor
 sudo systemctl start frequency-reboot
-sudo systemctl start frequency-health
 
 # Check status
 echo "✅ Checking service status..."
 sudo systemctl status frequency-monitor --no-pager
 sudo systemctl status frequency-reboot --no-pager
-sudo systemctl status frequency-health --no-pager
 
 echo "🎉 Deployment complete!"
 echo "📊 Monitor logs: sudo journalctl -u frequency-monitor -f"
 echo "⏰ Reboot logs: sudo journalctl -u frequency-reboot -f"
-echo "🏥 Health logs: sudo journalctl -u frequency-health -f"
 echo "🔄 Restart service: sudo systemctl restart frequency-monitor"
 echo "⏹️ Stop service: sudo systemctl stop frequency-monitor"
