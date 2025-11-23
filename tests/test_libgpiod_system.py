@@ -87,7 +87,7 @@ def test_libgpiod_system():
         print("💡 You need to install libgpiod:")
         print("   sudo apt install python3-gpiod")
         print("   or")
-        print("   pip install gpiod")
+        print("   uv pip install gpiod")
         
     except Exception as e:
         print(f"❌ Test failed: {e}")

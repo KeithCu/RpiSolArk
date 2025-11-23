@@ -236,7 +236,7 @@ solark_cloud:
 1. **Clone & Install**:
    ```bash
    git clone <repo>
-   pip install -r requirements.txt
+   uv sync
    playwright install chromium  # Required for Sol-Ark integration
    ```
 

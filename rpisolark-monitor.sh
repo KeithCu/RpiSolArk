@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Wrapper to run RpiSolarkMonitor as a systemd service.
 # Requirements:
-# - This script lives in the same directory as monitor.py and the venv (if used).
+# - This script lives in the same directory as monitor.py and the .venv (if used).
 # - Systemd unit should ExecStart this script.
 #
 # Behavior:
 # - Detects its own directory (supports different install vs dev paths).
-# - Uses ./venv if present; otherwise falls back to system python3.
+# - Uses ./.venv if present; otherwise falls back to system python3.
 # - Runs: python monitor.py --real
 # - Exits non-zero on failure so systemd can restart it.
 
@@ -19,14 +19,14 @@ cd "$APP_DIR"
 
 # Prefer local virtualenv if it exists
 PYTHON_BIN=""
-if [[ -x "$APP_DIR/venv/bin/python" ]]; then
-    PYTHON_BIN="$APP_DIR/venv/bin/python"
+if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
+    PYTHON_BIN="$APP_DIR/.venv/bin/python"
 else
     # Fallback to system python3
     if command -v python3 >/dev/null 2>&1; then
         PYTHON_BIN="$(command -v python3)"
     else
-        echo "ERROR: No python3 found and no venv present in $APP_DIR" >&2
+        echo "ERROR: No python3 found and no .venv present in $APP_DIR" >&2
         exit 1
     fi
 fi

@@ -53,10 +53,10 @@ cp -r . "$BACKUP_DIR"
 # Pull updates
 git pull origin release
 
-# Install dependencies if requirements.txt changed
-if git diff --name-only HEAD~1 HEAD | grep -q requirements.txt; then
+# Install dependencies if requirements changed
+if git diff --name-only HEAD~1 HEAD | grep -qE "(requirements.txt|pyproject.toml)"; then
     echo "Requirements changed - installing dependencies..."
-    pip install -r requirements.txt
+    uv sync
 fi
 
 # Restart service if it's running
@@ -146,7 +146,7 @@ EOF
         # Create watchman configuration
         cat > .watchmanconfig << EOF
 {
-  "ignore_dirs": [".git", "logs", "solark_cache", "venv", "__pycache__"]
+  "ignore_dirs": [".git", "logs", "solark_cache", ".venv", "__pycache__"]
 }
 EOF
 

@@ -11,14 +11,19 @@ sudo apt update && sudo apt upgrade -y
 
 # Install required packages
 echo "📦 Installing required packages..."
-sudo apt install -y python3-pip python3-venv watchdog
+sudo apt install -y watchdog
+
+# Install uv if not present
+if ! command -v uv &> /dev/null; then
+    echo "📦 Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
 
 # Create virtual environment
 echo "🐍 Setting up Python environment..."
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv sync
 
 # Create systemd service
 echo "⚙️ Creating systemd service..."
@@ -31,7 +36,7 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/venv/bin/python $(pwd)/production_monitor.py
+ExecStart=$(pwd)/.venv/bin/python $(pwd)/production_monitor.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -62,7 +67,7 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/venv/bin/python $(pwd)/scheduled_reboot.py
+ExecStart=$(pwd)/.venv/bin/python $(pwd)/scheduled_reboot.py
 Restart=always
 RestartSec=10
 StandardOutput=journal

@@ -12,10 +12,7 @@ import logging
 import threading
 from typing import Optional, Dict
 
-try:
-	import gpiod  # libgpiod v2 Python bindings
-except ImportError as e:
-	raise ImportError("Missing dependency 'gpiod' (libgpiod v2). Install with: pip install gpiod") from e
+import gpiod  # libgpiod v2 Python bindings
 
 class GPIOEventCounter:
 	"""Pure-Python counter backend using libgpiod v2 edge events."""

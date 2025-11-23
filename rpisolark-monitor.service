@@ -12,8 +12,8 @@ WorkingDirectory=%E
 # Explanation:
 # - We will call a wrapper script that:
 #   - Resolves its own directory dynamically
-#   - Uses that as the app/venv directory
-#   - Activates venv if present (or runs system python as fallback)
+#   - Uses that as the app/.venv directory
+#   - Activates .venv if present (or runs system python as fallback)
 #   - Executes: python monitor.py --real
 ExecStart=%E/rpisolark-monitor.sh
 

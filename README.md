@@ -181,11 +181,20 @@ Stability: POOR
 
 ### 📥 Installation & Setup
 
+#### 🚀 Using uv (Recommended - Fastest)
+
 ```bash
-# Clone and install
+# Clone the repository
 git clone https://github.com/yourusername/RpiSolarkMonitor.git
 cd RpiSolarkMonitor
-pip install -r requirements.txt
+
+# Install uv if you don't have it
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies using uv
+uv sync
+
+# Install Playwright browser
 playwright install chromium
 
 # Enable I2C interface

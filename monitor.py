@@ -1383,16 +1383,12 @@ def main():
     
     # Enable remote debugging if requested
     if args.debug:
-        try:
-            import debugpy
-            debugpy.listen(("0.0.0.0", args.debug_port))
-            print(f"Remote debugging enabled on port {args.debug_port}")
-            print("Waiting for debugger to attach...")
-            debugpy.wait_for_client()
-            print("Debugger attached!")
-        except ImportError:
-            print("debugpy not installed. Install with: pip install debugpy")
-            sys.exit(1)
+        import debugpy
+        debugpy.listen(("0.0.0.0", args.debug_port))
+        print(f"Remote debugging enabled on port {args.debug_port}")
+        print("Waiting for debugger to attach...")
+        debugpy.wait_for_client()
+        print("Debugger attached!")
     
     # Determine simulator mode
     simulator_mode = args.simulator
