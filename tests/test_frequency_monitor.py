@@ -131,9 +131,9 @@ def test_frequency_monitor_buffer_sizes(mock_offline, mock_restart, mock_tuning,
     monitor = FrequencyMonitor()
 
     # Check buffer sizes based on config
-    sample_rate = config.get_float('sampling.sample_rate', 2.0)
-    buffer_duration = config.get_float('sampling.buffer_duration', 300)
-    expected_freq_buffer_size = int(buffer_duration * sample_rate)
+    measurement_duration = config.get_float('hardware.optocoupler.primary.measurement_duration', 2.0)
+    analysis_window_seconds = config.get_float('analysis.analysis_window_seconds', 30.0)
+    expected_freq_buffer_size = int(analysis_window_seconds / measurement_duration)
 
     assert len(monitor.freq_buffer) == 0  # Should start empty
     assert monitor.freq_buffer.maxlen == expected_freq_buffer_size

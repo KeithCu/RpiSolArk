@@ -396,5 +396,5 @@ To automate a new setting (e.g., "Battery Charge Current"):
 
 **Solutions**:
 1.  **Memory Monitor**: Check `memory_usage.csv`.
-2.  **Buffer Size**: Reduce `sampling.buffer_duration`.
+2.  **Buffer Size**: Reduce `analysis.analysis_window_seconds` (default: 30 seconds).
 3.  **Browser Leaks**: Browser automation is heavy. Ensure `solark_cloud` is only instantiating the browser when needed or properly closing contexts.

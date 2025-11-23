@@ -103,7 +103,7 @@ class Config:
             'state_machine.transition_timeout',
             'state_machine.zero_voltage_threshold',
             'sampling.sample_rate',
-            'sampling.buffer_duration'
+            'analysis.analysis_window_seconds'
         ]
         
         for timeout_path in timeout_paths:

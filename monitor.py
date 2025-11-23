@@ -532,10 +532,10 @@ class FrequencyAnalyzer:
         return float(freq)  # Ensure we return a Python float
     
     def _simulate_frequency(self) -> Optional[float]:
-        """Simulate power state cycling: grid (10s) -> off-grid (10s) -> generator (10s) -> grid (10s).
+        """Simulate power state cycling: grid (20s) -> off-grid (10s) -> generator (20s) -> grid (10s).
         
         With measurement_duration seconds per measurement, each state gets multiple measurements.
-        Total cycle: 40 seconds.
+        Total cycle: 60 seconds.
         """
         current_time = time.time()
 
@@ -657,6 +657,8 @@ class FrequencyAnalyzer:
         """Classify as Generac generator or utility using simplified OR logic (std_dev OR allan_variance).
         
         For small sample sizes (< 5), only use std_dev as Allan variance is too noisy.
+        For medium sample sizes (5-9), use AND logic (both metrics must exceed thresholds) to prevent false positives.
+        For larger sample sizes (>= 10), use OR logic for maximum detection sensitivity.
         """
         if std_freq is None:
             return "Unknown"
@@ -676,15 +678,39 @@ class FrequencyAnalyzer:
             self.logger.error(f"Invalid threshold values: avar={avar_thresh}, std={std_thresh}. Error: {e}")
             return "Unknown"
         
-        # For small sample sizes (< 5), only use std_dev as Allan variance is too noisy
-        # This prevents false positives from unstable Allan variance calculations
+        # For small sample sizes (< 5), primarily use std_dev as Allan variance is too noisy
+        # However, if Allan variance is VERY high (>10x threshold), that's a strong generator signal
+        # This prevents false positives from unstable Allan variance while catching strong generator signals early
         if sample_count is not None and sample_count < 5:
-            # Only use std_dev for small sample sizes
+            # Check for very high Allan variance first (strong generator signal)
+            if avar_10s is not None and avar_10s > (avar_thresh * 10.0):
+                return "Generac Generator"
+            # Otherwise, use std_dev for small sample sizes
             if std_freq > std_thresh:
                 return "Generac Generator"
             return "Utility Grid"
         
-        # For larger sample sizes, use OR logic: if EITHER metric exceeds threshold → generator
+        # For medium sample sizes (5-9), use smart logic to prevent false positives while catching generators
+        # If Allan variance is VERY high (>10x threshold), that's a strong generator signal regardless of std_dev
+        # Otherwise, use AND logic to prevent false positives from noisy Allan variance
+        if sample_count is not None and 5 <= sample_count < 10:
+            if avar_10s is None:
+                # Fallback to std_dev only if Allan variance not available
+                if std_freq > std_thresh:
+                    return "Generac Generator"
+                return "Utility Grid"
+            # If Allan variance is VERY high (>10x threshold), that's a strong generator signal
+            # This catches generators even if std_dev is slightly below threshold
+            if avar_10s > (avar_thresh * 10.0):
+                return "Generac Generator"
+            # Otherwise, use AND logic: both metrics must exceed thresholds
+            # This prevents false positives from noisy Allan variance at small values
+            if avar_10s > avar_thresh and std_freq > std_thresh:
+                return "Generac Generator"
+            return "Utility Grid"
+        
+        # For larger sample sizes (>= 10), use OR logic: if EITHER metric exceeds threshold → generator
+        # Allan variance is more reliable with more samples, so we can use OR logic for maximum sensitivity
         if avar_10s is None:
             # Fallback to std_dev only if Allan variance not available
             if std_freq > std_thresh:
@@ -1085,7 +1111,8 @@ class FrequencyMonitor:
                 
                 # Check for simulator auto-exit
                 if simulator_mode and time.time() >= self.simulator_exit_time:
-                    self.logger.info("Simulator auto-exit time reached (20 seconds)")
+                    elapsed = time.time() - self.start_time
+                    self.logger.info(f"Simulator auto-exit time reached ({elapsed:.1f} seconds)")
                     break
 
                 # Check reset button (debounced, check every 0.5 seconds)
