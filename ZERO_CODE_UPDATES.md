@@ -123,7 +123,7 @@ journalctl -u frequency-monitor -f
 - **Professional support** available
 
 ### **Simple = Reliable**
-- **One command** setup
+- **One command** setup (everything consolidated in a single script)
 - **Standard tools** everyone knows
 - **Easy troubleshooting** with system commands
 - **No learning curve** for maintenance
