@@ -532,10 +532,10 @@ class FrequencyAnalyzer:
         return float(freq)  # Ensure we return a Python float
     
     def _simulate_frequency(self) -> Optional[float]:
-        """Simulate power state cycling: grid (20s) -> off-grid (10s) -> generator (20s) -> grid (10s).
+        """Simulate power state cycling: grid (20s) -> off-grid (10s) -> generator (20s) -> grid (40s).
         
         With measurement_duration seconds per measurement, each state gets multiple measurements.
-        Total cycle: 60 seconds.
+        Total cycle: 90 seconds. Extended Grid Period 2 allows buffer to clear (30s) and verify convergence.
         """
         current_time = time.time()
 
@@ -543,41 +543,62 @@ class FrequencyAnalyzer:
         if self.simulator_start_time is None:
             self.simulator_start_time = current_time
 
-        # Calculate elapsed time and current phase (60 second cycle: longer grid periods for testing)
+        # Calculate elapsed time and current phase (90 second cycle: extended Grid Period 2 for convergence testing)
         elapsed = current_time - self.simulator_start_time
-        cycle_time = elapsed % 60.0  # 60 second cycle: 20s grid + 10s off + 20s gen + 10s grid
+        cycle_time = elapsed % 90.0  # 90 second cycle: 20s grid + 10s off + 20s gen + 40s grid
 
-        # Determine current state based on cycle time
+        # Determine current state based on cycle time and generate frequency
+        expected_state = None
+        expected_freq_desc = None
+        actual_freq = None
+
         if cycle_time < 20.0:
             # Grid power (0-20s): very stable 60 Hz
             self.simulator_state = "grid"
+            expected_state = "grid"
+            expected_freq_desc = "~60.0 Hz ± 0.005 (stable)"
             base_freq = 60.0
             noise = random.gauss(0, 0.005)  # Very small stable noise
-            return float(base_freq + noise)
+            actual_freq = float(base_freq + noise)
 
         elif cycle_time < 30.0:
             # Off-grid power (20-30s): no frequency (None)
             self.simulator_state = "off_grid"
-            return None  # No signal
+            expected_state = "off_grid"
+            expected_freq_desc = "None (no signal)"
+            actual_freq = None  # No signal
 
         elif cycle_time < 50.0:
             # Generator power (30-50s): variable frequency with hunting
             self.simulator_state = "generator"
+            expected_state = "generator"
             # Simulate generator hunting: alternating high/low
             phase_in_cycle = (cycle_time - 30.0) % 2.0
             if phase_in_cycle < 1.0:
-                base_freq = 58.5 + random.uniform(-0.5, 1.0)  # Low range
+                base_freq = 58.5 + random.uniform(-0.5, 1.0)  # Low range: 58.0-59.5 Hz
+                expected_freq_desc = "58.0-59.5 Hz (low phase, hunting pattern)"
             else:
-                base_freq = 61.0 + random.uniform(-1.0, 0.5)  # High range
+                base_freq = 61.0 + random.uniform(-1.0, 0.5)  # High range: 60.0-61.5 Hz
+                expected_freq_desc = "60.0-61.5 Hz (high phase, hunting pattern)"
             noise = random.gauss(0, 0.3)  # Moderate generator noise
-            return float(base_freq + noise)
+            actual_freq = float(base_freq + noise)
 
         else:
-            # Back to grid power (50-60s): stable 60 Hz
+            # Back to grid power (50-90s): stable 60 Hz (extended to allow buffer convergence)
             self.simulator_state = "grid"
+            expected_state = "grid"
+            expected_freq_desc = "~60.0 Hz ± 0.005 (stable)"
             base_freq = 60.0
             noise = random.gauss(0, 0.005)  # Very small stable noise
-            return float(base_freq + noise)
+            actual_freq = float(base_freq + noise)
+
+        # Log expected vs actual for debugging
+        if actual_freq is not None:
+            self.logger.debug(f"SIMULATOR: Cycle time {cycle_time:.1f}s | Expected: {expected_state} ({expected_freq_desc}) | Actual: {actual_freq:.3f} Hz")
+        else:
+            self.logger.debug(f"SIMULATOR: Cycle time {cycle_time:.1f}s | Expected: {expected_state} ({expected_freq_desc}) | Actual: None")
+
+        return actual_freq
     
     def analyze_stability(self, frac_freq: np.ndarray) -> Tuple[Optional[float], Optional[float]]:
         """Compute Allan variance and standard deviation (simplified - kurtosis removed)."""
@@ -935,10 +956,10 @@ class FrequencyMonitor:
         if self.hardware is not None:
             self.hardware.update_display("Starting...", "Please wait...")
 
-        # For simulator mode, set up auto-exit after 60 seconds (one full cycle)
+        # For simulator mode, set up auto-exit after 90 seconds (one full cycle)
         if simulator_mode:
-            self.simulator_exit_time = time.time() + 60.0
-            self.logger.info("Simulator mode: will auto-exit after 60 seconds (one full cycle: 20s grid -> 10s off-grid -> 20s generator -> 10s grid)")
+            self.simulator_exit_time = time.time() + 90.0
+            self.logger.info("Simulator mode: will auto-exit after 90 seconds (one full cycle: 20s grid -> 10s off-grid -> 20s generator -> 40s grid)")
         
         try:
             # Get measurement duration once at start
@@ -951,6 +972,24 @@ class FrequencyMonitor:
                 if simulator_mode:
                     # In simulator, generate a reading but simulate the 5-second measurement time
                     freq = self.analyzer._simulate_frequency()
+                    # Log expected vs actual comparison for simulator debugging
+                    expected_state = getattr(self.analyzer, 'simulator_state', 'unknown')
+                    if freq is not None:
+                        # Validate frequency matches expected state
+                        if expected_state == "grid":
+                            # Grid should be ~60.0 Hz ± 0.01 (allowing some margin)
+                            matches = 59.99 <= freq <= 60.01
+                            self.logger.debug(f"SIMULATOR COMPARISON: Expected state={expected_state}, freq={freq:.3f} Hz | {'✓ MATCHES' if matches else '✗ OUT OF RANGE (expected ~60.0 Hz)'}")
+                        elif expected_state == "generator":
+                            # Generator should be 58.0-61.5 Hz range
+                            matches = 58.0 <= freq <= 61.5
+                            self.logger.debug(f"SIMULATOR COMPARISON: Expected state={expected_state}, freq={freq:.3f} Hz | {'✓ MATCHES' if matches else '✗ OUT OF RANGE (expected 58.0-61.5 Hz)'}")
+                        else:
+                            self.logger.debug(f"SIMULATOR COMPARISON: Expected state={expected_state}, freq={freq:.3f} Hz")
+                    else:
+                        # None frequency should match off_grid state
+                        matches = expected_state == "off_grid"
+                        self.logger.debug(f"SIMULATOR COMPARISON: Expected state={expected_state}, freq=None | {'✓ MATCHES' if matches else '✗ MISMATCH (expected off_grid for None)'}")
                     # Simulate the measurement duration by sleeping
                     time.sleep(measurement_duration)
                 else:

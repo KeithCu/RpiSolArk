@@ -224,16 +224,32 @@ class DisplayManager:
         # Get state machine status
         state_info = state_machine.get_state_info()
         current_state = state_info['current_state']
+        
+        # Use state machine state for display (debounced and stable) instead of raw analysis result
+        # Map state machine states to display indicators
+        state_to_indicator = {
+            'grid': 'Util',
+            'generator': 'Gen',
+            'off_grid': '?',
+            'transitioning': '?'
+        }
+        
+        # If there's no voltage, always show "?" regardless of state machine state
+        # (state machine might not have transitioned yet)
+        if freq is None:
+            display_indicator = '?'
+        else:
+            display_indicator = state_to_indicator.get(current_state, '?')
 
         # Show time and frequency with power source indicator, updated once per second
         current_time = time.strftime("%H:%M:%S")
         
         line1 = f"{current_time}"
         if freq is not None:
-            line2 = f"{freq:.2f} Hz {ug_indicator}"
+            line2 = f"{freq:.2f} Hz {display_indicator}"
         else:
             formatted_duration = format_duration(zero_voltage_duration)
-            line2 = f"0V {formatted_duration} {ug_indicator}"
+            line2 = f"0V {formatted_duration} {display_indicator}"
         
         # Update display
         self.update_display(line1, line2)
