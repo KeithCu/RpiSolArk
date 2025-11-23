@@ -47,6 +47,7 @@ class SolArkIntegration:
         # State tracking
         self.last_power_source = None
         self.operation_lock = threading.Lock()  # Global lock for single operation at a time
+        self.active_toggle_thread = None  # Track active toggle operation thread
         
         # Optocoupler to plant mapping
         self.optocoupler_plants = self._build_optocoupler_plant_mapping()
@@ -245,6 +246,17 @@ class SolArkIntegration:
             self.logger.debug("TOU automation disabled in configuration")
             return
         
+        # Check if there's an active thread and handle timeout
+        if self.active_toggle_thread is not None and self.active_toggle_thread.is_alive():
+            # Check if thread has been running too long (timeout after 60 seconds)
+            thread_start_time = getattr(self.active_toggle_thread, 'start_time', None)
+            if thread_start_time is not None and (time.time() - thread_start_time) > 60:
+                self.logger.warning("Previous TOU toggle thread has been running > 60 seconds, allowing new thread")
+                self.active_toggle_thread = None
+            else:
+                self.logger.debug("TOU toggle operation already in progress, skipping duplicate request")
+                return
+        
         def do_toggle_with_lock():
             # Acquire lock to ensure only one operation at a time
             with self.operation_lock:
@@ -279,9 +291,14 @@ class SolArkIntegration:
                         
                 except Exception as e:
                     self.logger.error(f"Error in TOU toggle operation: {e}")
+                finally:
+                    # Clear thread reference when operation completes
+                    self.active_toggle_thread = None
         
         # Run in separate thread to avoid blocking
         thread = threading.Thread(target=do_toggle_with_lock, daemon=True)
+        thread.start_time = time.time()  # Track thread start time for timeout detection
+        self.active_toggle_thread = thread
         thread.start()
     
     

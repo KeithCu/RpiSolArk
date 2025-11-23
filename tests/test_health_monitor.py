@@ -49,11 +49,10 @@ def test_health_monitor_initialization(health_monitor):
     """Test HealthMonitor initializes correctly."""
     assert hasattr(health_monitor, 'config')
     assert hasattr(health_monitor, 'logger')
-    assert hasattr(health_monitor, 'last_activity')
-    assert hasattr(health_monitor, 'watchdog_timeout')
+    assert hasattr(health_monitor, 'running')
+    assert hasattr(health_monitor, 'tracked_threads')
+    assert hasattr(health_monitor, 'tracked_files')
 
-    # Should have recorded initial activity
-    assert health_monitor.last_activity > 0
     assert health_monitor.running == True
 
 

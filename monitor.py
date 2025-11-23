@@ -127,7 +127,7 @@ class PowerStateMachine:
         avg_confidence = sum(self.confidence_history) / len(self.confidence_history)
         
         # Only transition if confidence is high enough
-        if avg_confidence < 0.6:
+        if avg_confidence < 0.5:
             self.logger.debug(f"Low confidence ({avg_confidence:.2f}), maintaining current state")
             return self.current_state
         
@@ -136,9 +136,9 @@ class PowerStateMachine:
             new_state = PowerState.OFF_GRID
         elif frequency is None:
             new_state = PowerState.TRANSITIONING
-        elif power_source == "Utility Grid" and avg_confidence > 0.8:
+        elif power_source == "Utility Grid" and avg_confidence >= 0.7:
             new_state = PowerState.GRID
-        elif power_source == "Generac Generator" and avg_confidence > 0.8:
+        elif power_source == "Generac Generator" and avg_confidence >= 0.7:
             new_state = PowerState.GENERATOR
         else:
             new_state = PowerState.TRANSITIONING
@@ -884,6 +884,10 @@ class FrequencyMonitor:
         self.start_time = time.time()
         self.zero_voltage_start_time = None  # Track when voltage went to zero (absolute time)
         self.zero_voltage_duration = 0.0    # How long voltage has been zero
+        
+        # Secondary optocoupler zero voltage tracking (for dual mode)
+        self.secondary_zero_voltage_start_time = None  # Track when secondary voltage went to zero (absolute time)
+        self.secondary_zero_voltage_duration = 0.0    # How long secondary voltage has been zero
 
         # Reset button state tracking
         self.reset_button_pressed = False
@@ -1056,6 +1060,18 @@ class FrequencyMonitor:
                     # Frequency detected - reset zero voltage tracking
                     self.zero_voltage_start_time = None
                     self.zero_voltage_duration = 0.0
+                
+                # Track secondary optocoupler zero voltage duration independently (if in dual mode)
+                if self.dual_mode:
+                    if secondary_freq is None or secondary_freq == 0:
+                        # No secondary frequency detected - secondary voltage is zero
+                        if self.secondary_zero_voltage_start_time is None:
+                            self.secondary_zero_voltage_start_time = current_absolute_time
+                        self.secondary_zero_voltage_duration = current_absolute_time - self.secondary_zero_voltage_start_time
+                    else:
+                        # Secondary frequency detected - reset secondary zero voltage tracking
+                        self.secondary_zero_voltage_start_time = None
+                        self.secondary_zero_voltage_duration = 0.0
 
                 # Validate frequency reading with enhanced accuracy checks
                 self.logger.debug("Validating frequency reading...")
@@ -1161,15 +1177,19 @@ class FrequencyMonitor:
                         freq, source, confidence, self.zero_voltage_duration
                     )
                 
-                # Update secondary optocoupler state machine (if enabled and has frequency data)
-                if self.dual_mode and secondary_freq is not None:
+                # Update secondary optocoupler state machine (if enabled)
+                if self.dual_mode:
                     secondary_name = self.config.get('hardware.optocoupler.secondary.name')
                     if secondary_name in self.state_machines:
-                        # Analyze secondary frequency separately
-                        secondary_source, secondary_confidence = self._analyze_frequency_for_optocoupler(secondary_freq, secondary_name)
-                        secondary_zero_voltage_duration = 0.0 if secondary_freq is not None else self.zero_voltage_duration
+                        # Analyze secondary frequency separately (if available)
+                        if secondary_freq is not None:
+                            secondary_source, secondary_confidence = self._analyze_frequency_for_optocoupler(secondary_freq, secondary_name)
+                        else:
+                            secondary_source = "Unknown"
+                            secondary_confidence = 0.0
+                        # Use tracked secondary zero voltage duration
                         current_states[secondary_name] = self.state_machines[secondary_name].update_state_with_confidence(
-                            secondary_freq, secondary_source, secondary_confidence, secondary_zero_voltage_duration
+                            secondary_freq, secondary_source, secondary_confidence, self.secondary_zero_voltage_duration
                         )
                 
                 # Collect tuning data if enabled
