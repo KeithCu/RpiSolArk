@@ -350,14 +350,15 @@ class OptocouplerManager:
                 self.logger.info("Converted legacy single inverter config to new multi-inverter format")
             
             self.inverter_mapping['primary'] = []
-            for inverter in primary_inverters:
-                if inverter.get('id') and inverter.get('enabled', True):
-                    self.inverter_mapping['primary'].append({
-                        'id': inverter['id'],
-                        'name': inverter.get('name', f"Inverter {inverter['id']}"),
-                        'enabled': inverter.get('enabled', True)
-                    })
-                    self.logger.info(f"Optocoupler mapped to inverter: {inverter['id']} ({inverter.get('name', 'Unnamed')})")
+            if primary_inverters:
+                for inverter in primary_inverters:
+                    if inverter.get('id') and inverter.get('enabled', True):
+                        self.inverter_mapping['primary'].append({
+                            'id': inverter['id'],
+                            'name': inverter.get('name', f"Inverter {inverter['id']}"),
+                            'enabled': inverter.get('enabled', True)
+                        })
+                        self.logger.info(f"Optocoupler mapped to inverter: {inverter['id']} ({inverter.get('name', 'Unnamed')})")
                 
         except KeyError as e:
             self.logger.warning(f"Missing inverter configuration: {e}")

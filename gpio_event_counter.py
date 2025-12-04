@@ -37,8 +37,8 @@ class GPIOEventCounter:
 		settings = gpiod.LineSettings()
 		settings.direction = gpiod.line.Direction.INPUT
 		settings.edge_detection = gpiod.line.Edge.BOTH  # Count both rising and falling edges
-		# Optional: internal pull-up
-		# settings.bias = gpiod.line.Bias.PULL_UP
+		# Enable internal pull-up for optocoupler (H11AA1 needs pull-up)
+		settings.bias = gpiod.line.Bias.PULL_UP
 		
 		# Create config dictionary mapping offsets to settings
 		config = {offset: settings for offset in offsets}
@@ -108,6 +108,8 @@ class GPIOEventCounter:
 
 	def _event_loop(self):
 		assert self._request is not None
+		self.logger.debug("Event loop started")
+		event_count = 0
 		while self._running:
 			try:
 				ready = self._request.wait_edge_events(timeout=0.5)
@@ -120,9 +122,12 @@ class GPIOEventCounter:
 					for ev in events:
 						pin = ev.line_offset
 						self.counts[pin] = self.counts.get(pin, 0) + 1
+						event_count += 1
+						if event_count <= 10:  # Log first 10 events
+							self.logger.debug(f"Event detected on pin {pin}, count={self.counts[pin]}")
 			except Exception as e:
 				# Transient read/wait errors; keep running
-				self.logger.debug(f"Event loop transient error: {e}")
+				self.logger.warning(f"Event loop error: {e}", exc_info=True)
 				time.sleep(0.01)
 
 	def get_count(self, pin: int) -> int:

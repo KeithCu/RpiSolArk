@@ -14,6 +14,7 @@ from typing import Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from optocoupler import OptocouplerManager
+from config import Config
 
 # Hardware imports with graceful degradation
 try:
@@ -29,7 +30,11 @@ class OptocouplerTester:
     
     def __init__(self):
         self.logger = self._setup_logger()
-        self.config = self._create_test_config()
+        # Load actual config.yaml file - test should fail if config is invalid
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yaml')
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"config.yaml not found at {config_path}. Test requires a valid config.yaml file.")
+        self.config = Config(config_path)
         self.optocoupler = OptocouplerManager(self.config, self.logger)
         
     def _setup_logger(self) -> logging.Logger:
@@ -49,25 +54,6 @@ class OptocouplerTester:
         
         logger.addHandler(handler)
         return logger
-        
-    def _create_test_config(self) -> dict:
-        """Create test configuration for GPIO 26."""
-        return {
-            'hardware': {
-                'optocoupler': {
-                    'enabled': True,
-                    'max_consecutive_errors': 5,
-                    'health_check_interval': 30.0,
-                    'max_recovery_attempts': 3,
-                    'primary': {
-                        'gpio_pin': 26,  # GPIO 26 as requested
-                        'pulses_per_cycle': 2,  # H11A1 gives 2 pulses per AC cycle
-                        'measurement_duration': 1.0,
-                        'name': 'Test Optocoupler'
-                    }
-                }
-            }
-        }
     
     def test_gpio_setup(self):
         """Test GPIO setup and basic functionality."""
