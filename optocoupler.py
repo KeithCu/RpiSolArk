@@ -8,6 +8,7 @@ import logging
 import time
 import threading
 import os
+import statistics
 from typing import Optional, Tuple, List, Dict, Any
 import psutil
 
@@ -39,6 +40,7 @@ class SingleOptocoupler:
         # Optocoupler pulse counting
         self.pulse_count = 0
         self.pulse_count_lock = threading.Lock()
+        self.last_timestamps = []
         self.initialized = False
         
         # Error tracking and recovery
@@ -95,7 +97,7 @@ class SingleOptocoupler:
             self.logger.error(f"Failed to setup {self.name} optocoupler: {e}")
             self.initialized = False
     
-    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> int:
+    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> Tuple[int, float]:
         """
         Count optocoupler pulses over specified duration using working libgpiod.
         Uses interrupt-based counting for maximum accuracy and performance.
@@ -105,16 +107,18 @@ class SingleOptocoupler:
             debounce_time: Minimum time between state changes to filter noise (0.0 for clean signals)
             
         Returns:
-            Number of pulses counted
+            Tuple of (pulse_count, actual_elapsed_time) where:
+            - pulse_count: Number of pulses counted
+            - actual_elapsed_time: Actual elapsed time in seconds (measured with time.perf_counter())
         """
         if not self.initialized:
             self.logger.warning(f"{self.name} optocoupler not initialized, cannot count pulses")
-            return 0
+            return (0, 0.0)
         
         # Check health before measurement
         if not self.check_health():
             self.logger.warning(f"{self.name} optocoupler unhealthy, skipping measurement")
-            return 0
+            return (0, 0.0)
         
         if duration is None:
             duration = self.measurement_duration
@@ -137,27 +141,29 @@ class SingleOptocoupler:
             if pulse_count < 0:
                 self.consecutive_errors += 1
                 self.logger.warning(f"{self.name} invalid pulse count: {pulse_count}")
-                return 0
+                return (0, elapsed)
             
             # Reset error count on successful measurement
             self.consecutive_errors = 0
             self.last_successful_count = pulse_count
             
             self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds (libgpiod)")
-            return pulse_count
+            return (pulse_count, elapsed)
             
         except Exception as e:
             self.consecutive_errors += 1
             self.logger.error(f"{self.name} pulse counting error: {e}")
-            return 0
+            return (0, 0.0)
     
-    def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None) -> Optional[float]:
+    def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, actual_duration: float = None) -> Optional[float]:
         """
         Calculate AC frequency from pulse count using correct libgpiod calculation.
         
         Args:
             pulse_count: Number of pulses counted
-            duration: Duration in seconds (uses config default if None)
+            duration: Requested duration in seconds (uses config default if None, used for logging)
+            actual_duration: Actual measured duration in seconds (if None, uses duration parameter)
+                           Use this for accurate frequency calculation based on actual elapsed time
             
         Returns:
             Calculated frequency in Hz, or None if invalid
@@ -165,17 +171,61 @@ class SingleOptocoupler:
         if duration is None:
             duration = self.measurement_duration
         
-        if pulse_count <= 0 or duration <= 0:
+        # Use actual_duration if provided, otherwise fall back to requested duration
+        measurement_duration = actual_duration if actual_duration is not None else duration
+        
+        if pulse_count <= 0 or measurement_duration <= 0:
             return None
         
+        # METHOD 1: Precise Timestamp Interval Analysis
+        # This method eliminates synchronization errors between CPU sleep time and pulse arrival.
+        # It calculates frequency based on the exact time elapsed between the first and last pulse.
+        # Frequency = (Count - 1) / (Last_Timestamp - First_Timestamp)
+        # This is the "raw" frequency of the observed pulse train without any median filtering.
+        self.logger.debug(f"Timestamp debug: count={pulse_count}, timestamps_len={len(self.last_timestamps) if self.last_timestamps else 0}")
+        if self.last_timestamps and len(self.last_timestamps) >= 2:
+            try:
+                timestamps = self.last_timestamps
+                
+                # Get first and last timestamp (in nanoseconds)
+                t_first = timestamps[0]
+                t_last = timestamps[-1]
+                
+                # Calculate total duration of the observed pulses
+                duration_ns = t_last - t_first
+                
+                # Calculate number of full intervals observed
+                # If we have N pulses, we have N-1 intervals between them
+                num_intervals = len(timestamps) - 1
+                
+                if duration_ns > 0 and num_intervals > 0:
+                    # Calculate frequency: Intervals / Duration
+                    # Convert duration from ns to seconds (1e9)
+                    # Divide by 4 because we have 4 edges per AC cycle (H11AA1 double-edge detection)
+                    precise_freq = (num_intervals * 1e9) / (duration_ns * 4)
+                    
+                    # Sanity check (40-80Hz range) to prevent gross outliers from single glitches
+                    if 40 <= precise_freq <= 80:
+                        self.logger.debug(f"{self.name} precision frequency: {precise_freq:.3f} Hz (from {len(timestamps)} pulses over {duration_ns/1e9:.3f}s)")
+                        return precise_freq
+                    else:
+                        self.logger.warning(f"{self.name} precision frequency {precise_freq:.3f} Hz out of range, falling back to average")
+            except Exception as e:
+                self.logger.warning(f"{self.name} timestamp analysis failed: {e}")
+
+        # METHOD 2: Average Frequency (Fallback)
         # Calculate frequency using correct libgpiod calculation for AC-into-DC-optocoupler
-        # H11AA1 with AC input (no rectifier): 1 pulse per AC cycle (positive half-cycle only)
-        # libgpiod counts 4 edges per AC cycle (both edges of both positive/negative transitions)
-        # But negative half-cycle doesn't conduct, so only 2 edges are actually counted
-        # So we need to divide by 4 to get frequency (accounting for the 2 counted edges)
-        frequency = pulse_count / (duration * 4)  # 4 edges per AC cycle
+        # H11AA1 with AC input: optocoupler output is a square wave that transitions on each zero-crossing
+        # libgpiod counts BOTH rising and falling edges (Edge.BOTH detection)
+        # For 60 Hz AC: we get 4 edges per cycle (rising at +zero, falling at -zero, rising at +zero, falling at -zero)
+        # Actual measurement confirms: 240 edges/second = 60 Hz * 4 edges/cycle
+        # So we divide by 4 to convert edge count to frequency
+        frequency = pulse_count / (measurement_duration * 4)  # 4 edges per AC cycle (libgpiod counts both edges)
         
-        self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {duration:.2f}s")
+        if actual_duration is not None and abs(actual_duration - duration) > 0.001:
+            self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {actual_duration:.3f}s (requested: {duration:.3f}s)")
+        else:
+            self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {measurement_duration:.2f}s")
         return frequency
     
     def check_health(self) -> bool:
@@ -470,14 +520,16 @@ class OptocouplerManager:
         return optocoupler.count_optocoupler_pulses(duration, debounce_time)
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, 
-                                       optocoupler_name: str = 'primary') -> Optional[float]:
+                                       optocoupler_name: str = 'primary', actual_duration: float = None) -> Optional[float]:
         """
         Calculate AC frequency from pulse count using working libgpiod calculation.
         
         Args:
             pulse_count: Number of pulses counted
-            duration: Duration in seconds (uses config default if None)
+            duration: Requested duration in seconds (uses config default if None, used for logging)
             optocoupler_name: Name of optocoupler to use ('primary' only)
+            actual_duration: Actual measured duration in seconds (if None, uses duration parameter)
+                           Use this for accurate frequency calculation based on actual elapsed time
             
         Returns:
             Calculated frequency in Hz, or None if invalid
@@ -491,7 +543,7 @@ class OptocouplerManager:
             return None
         
         optocoupler = self.optocouplers[optocoupler_name]
-        return optocoupler.calculate_frequency_from_pulses(pulse_count, duration)
+        return optocoupler.calculate_frequency_from_pulses(pulse_count, duration, actual_duration)
     
     def get_available_optocouplers(self) -> List[str]:
         """Get list of available optocoupler names."""

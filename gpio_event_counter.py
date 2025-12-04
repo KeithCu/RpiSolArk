@@ -22,6 +22,7 @@ class GPIOEventCounter:
 		self.chip_name = chip_name
 		self.registered_pins: Dict[int, int] = {}  # pin -> index (0..1)
 		self.counts: Dict[int, int] = {}
+		self.timestamps: Dict[int, list] = {}  # pin -> list of timestamps (ns)
 		self._counts_lock = threading.Lock()
 		self._chip: Optional[gpiod.Chip] = None
 		self._request: Optional[gpiod.Request] = None
@@ -88,6 +89,7 @@ class GPIOEventCounter:
 		self.registered_pins[pin] = len(self.registered_pins)
 		with self._counts_lock:
 			self.counts.setdefault(pin, 0)
+			self.timestamps.setdefault(pin, [])
 		# If already running, reconfigure to include the new pin
 		if self._running:
 			try:
@@ -122,6 +124,15 @@ class GPIOEventCounter:
 					for ev in events:
 						pin = ev.line_offset
 						self.counts[pin] = self.counts.get(pin, 0) + 1
+						
+						# Store timestamp (ns)
+						if pin in self.timestamps:
+							self.timestamps[pin].append(ev.timestamp_ns)
+							if event_count <= 1:
+								self.logger.debug(f"Stored timestamp for pin {pin}: {ev.timestamp_ns}")
+						else:
+							self.logger.warning(f"Pin {pin} not in timestamps dict! Keys: {list(self.timestamps.keys())}")
+							
 						event_count += 1
 						if event_count <= 10:  # Log first 10 events
 							self.logger.debug(f"Event detected on pin {pin}, count={self.counts[pin]}")
@@ -134,10 +145,19 @@ class GPIOEventCounter:
 		with self._counts_lock:
 			return int(self.counts.get(pin, 0))
 
+	def get_timestamps(self, pin: int) -> list:
+		"""Get list of timestamps (ns) for the pin."""
+		with self._counts_lock:
+			timestamps = list(self.timestamps.get(pin, []))
+			self.logger.debug(f"get_timestamps for pin {pin} returning {len(timestamps)} items")
+			return timestamps
+
 	def reset_count(self, pin: int) -> bool:
 		with self._counts_lock:
 			if pin in self.counts:
 				self.counts[pin] = 0
+				self.timestamps[pin] = []
+				self.logger.debug(f"reset_count for pin {pin} - cleared timestamps")
 				return True
 			return False
 
@@ -163,6 +183,7 @@ class GPIOEventCounter:
 		finally:
 			with self._counts_lock:
 				self.counts.clear()
+				self.timestamps.clear()
 			self.registered_pins.clear()
 
 

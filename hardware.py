@@ -40,12 +40,16 @@ class HardwareManager:
     # Delegate methods to component managers for backward compatibility
     
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
-                                 optocoupler_name: str = 'primary') -> int:
-        """Count optocoupler pulses over specified duration."""
+                                 optocoupler_name: str = 'primary') -> Tuple[int, float]:
+        """Count optocoupler pulses over specified duration.
+        
+        Returns:
+            Tuple of (pulse_count, actual_elapsed_time)
+        """
         return self.optocoupler.count_optocoupler_pulses(duration, debounce_time, optocoupler_name)
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, 
-                                       optocoupler_name: str = 'primary') -> Optional[float]:
+                                       optocoupler_name: str = 'primary', actual_duration: float = None) -> Optional[float]:
         """Calculate AC frequency from pulse count."""
         return self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration, optocoupler_name)
     

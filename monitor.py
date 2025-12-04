@@ -459,17 +459,20 @@ class FrequencyAnalyzer:
         """
         Optimized 2-second optocoupler frequency measurement.
         NO AVERAGING - measures actual frequency changes.
+        Uses actual elapsed time for maximum accuracy.
         """
         try:
             # Use optimized 2-second measurement with no debouncing for clean signals
-            pulse_count = self.hardware_manager.count_optocoupler_pulses(duration, debounce_time=0.0)
+            pulse_count, actual_elapsed = self.hardware_manager.count_optocoupler_pulses(duration, debounce_time=0.0)
             
             if pulse_count <= 0:
-                self.logger.debug(f"No pulses detected in {duration:.2f} seconds")
+                self.logger.debug(f"No pulses detected in {actual_elapsed:.3f} seconds (requested: {duration:.2f}s)")
                 return None
             
-            # Calculate frequency from pulse count
-            frequency = self.hardware_manager.calculate_frequency_from_pulses(pulse_count, duration)
+            # Calculate frequency from pulse count using actual elapsed time for accuracy
+            frequency = self.hardware_manager.calculate_frequency_from_pulses(
+                pulse_count, duration, actual_duration=actual_elapsed
+            )
             
             if frequency is None:
                 self.logger.warning(f"Failed to calculate frequency from {pulse_count} pulses")
@@ -486,7 +489,12 @@ class FrequencyAnalyzer:
                 self.logger.warning(f"Invalid frequency reading: {frequency:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
                 return None
             
-            self.logger.debug(f"Optocoupler frequency: {frequency:.2f} Hz from {pulse_count} pulses in {duration:.2f}s")
+            # Log timing difference if significant
+            time_diff_ms = (actual_elapsed - duration) * 1000
+            if abs(time_diff_ms) > 0.5:
+                self.logger.debug(f"Optocoupler frequency: {frequency:.2f} Hz from {pulse_count} pulses in {actual_elapsed:.3f}s (requested: {duration:.2f}s, diff: {time_diff_ms:+.1f}ms)")
+            else:
+                self.logger.debug(f"Optocoupler frequency: {frequency:.2f} Hz from {pulse_count} pulses in {actual_elapsed:.3f}s")
             return float(frequency)
             
         except Exception as e:
