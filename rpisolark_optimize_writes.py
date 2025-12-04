@@ -653,7 +653,7 @@ def do_status() -> None:
     log("Status check complete.")
 
 
-def cleanup_temp_kfiles() -> None:
+def cleanup_temp_files() -> None:
     """Clean up any remaining temp files."""
     for temp_file in TEMP_FILES:
         try:
