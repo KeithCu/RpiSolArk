@@ -56,9 +56,15 @@ class OptocouplerTester:
             'hardware': {
                 'optocoupler': {
                     'enabled': True,
-                    'gpio_pin': 26,  # GPIO 26 as requested
-                    'pulses_per_cycle': 2,  # H11A1 gives 2 pulses per AC cycle
-                    'measurement_duration': 1.0
+                    'max_consecutive_errors': 5,
+                    'health_check_interval': 30.0,
+                    'max_recovery_attempts': 3,
+                    'primary': {
+                        'gpio_pin': 26,  # GPIO 26 as requested
+                        'pulses_per_cycle': 2,  # H11A1 gives 2 pulses per AC cycle
+                        'measurement_duration': 1.0,
+                        'name': 'Test Optocoupler'
+                    }
                 }
             }
         }
@@ -74,10 +80,16 @@ class OptocouplerTester:
         if not self.optocoupler.optocoupler_initialized:
             print("❌ Optocoupler not initialized")
             return False
+        
+        # Access the primary optocoupler through the manager
+        primary_optocoupler = self.optocoupler.optocouplers.get('primary')
+        if not primary_optocoupler:
+            print("❌ Primary optocoupler not found")
+            return False
             
-        print(f"✅ Optocoupler initialized on GPIO {self.optocoupler.optocoupler_pin}")
-        print(f"✅ Pulses per cycle: {self.optocoupler.pulses_per_cycle}")
-        print(f"✅ Measurement duration: {self.optocoupler.measurement_duration}s")
+        print(f"✅ Optocoupler initialized on GPIO {primary_optocoupler.pin}")
+        print(f"✅ Pulses per cycle: {primary_optocoupler.pulses_per_cycle}")
+        print(f"✅ Measurement duration: {primary_optocoupler.measurement_duration}s")
         return True
     
     def test_pulse_detection(self, duration: float = 5.0):
@@ -106,10 +118,6 @@ class OptocouplerTester:
         if not self.optocoupler.optocoupler_initialized:
             print("❌ Optocoupler not initialized")
             return None
-            
-        # Reset pulse counter
-        with self.optocoupler.pulse_count_lock:
-            self.optocoupler.pulse_count = 0
             
         print(f"Counting pulses for {duration} seconds with high precision timing...")
         start_time = time.time()
@@ -164,16 +172,12 @@ class OptocouplerTester:
         
         try:
             while time.time() - start_time < duration:
-                # Reset and count pulses
-                with self.optocoupler.pulse_count_lock:
-                    self.optocoupler.pulse_count = 0
+                # Count pulses over the measurement interval
+                pulse_count = self.optocoupler.count_optocoupler_pulses(
+                    measurement_interval, debounce_time=0.001
+                )
                 
-                time.sleep(measurement_interval)
-                
-                # Get pulse count and calculate frequency
-                with self.optocoupler.pulse_count_lock:
-                    pulse_count = self.optocoupler.pulse_count
-                
+                # Calculate frequency from the pulse count
                 frequency = self.optocoupler.calculate_frequency_from_pulses(
                     pulse_count, measurement_interval
                 )
