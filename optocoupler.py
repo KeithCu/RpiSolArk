@@ -137,6 +137,9 @@ class SingleOptocoupler:
             pulse_count = self.counter.get_count(self.pin)
             elapsed = time.perf_counter() - start_time
             
+            # Retrieve and store timestamps for precise frequency calculation
+            self.last_timestamps = self.counter.get_timestamps(self.pin)
+            
             # Validate pulse count
             if pulse_count < 0:
                 self.consecutive_errors += 1
