@@ -137,8 +137,8 @@ class SingleOptocoupler:
             pulse_count = self.counter.get_count(self.pin)
             elapsed = time.perf_counter() - start_time
             
-            # Retrieve and store timestamps for precise frequency calculation
-            self.last_timestamps = self.counter.get_timestamps(self.pin)
+            # Retrieve frequency stats (count, first, last) directly to avoid list copy overhead
+            stat_count, t_first, t_last = self.counter.get_frequency_info(self.pin)
             
             # Validate pulse count
             if pulse_count < 0:
@@ -185,36 +185,40 @@ class SingleOptocoupler:
         # It calculates frequency based on the exact time elapsed between the first and last pulse.
         # Frequency = (Count - 1) / (Last_Timestamp - First_Timestamp)
         # This is the "raw" frequency of the observed pulse train without any median filtering.
-        self.logger.debug(f"Timestamp debug: count={pulse_count}, timestamps_len={len(self.last_timestamps) if self.last_timestamps else 0}")
-        if self.last_timestamps and len(self.last_timestamps) >= 2:
-            try:
-                timestamps = self.last_timestamps
-                
-                # Get first and last timestamp (in nanoseconds)
-                t_first = timestamps[0]
-                t_last = timestamps[-1]
-                
+        
+        # Use the stats retrieved in count_optocoupler_pulses if available
+        # (This assumes count_optocoupler_pulses was called just before this)
+        try:
+            stat_count, t_first, t_last = self.counter.get_frequency_info(self.pin)
+            self.logger.debug(f"Timestamp debug: count={stat_count}, duration_ns={t_last - t_first if stat_count > 1 else 0}")
+            
+            if stat_count >= 2:
                 # Calculate total duration of the observed pulses
                 duration_ns = t_last - t_first
                 
                 # Calculate number of full intervals observed
                 # If we have N pulses, we have N-1 intervals between them
-                num_intervals = len(timestamps) - 1
+                num_intervals = stat_count - 1
                 
                 if duration_ns > 0 and num_intervals > 0:
                     # Calculate frequency: Intervals / Duration
                     # Convert duration from ns to seconds (1e9)
-                    # Divide by 4 because we have 4 edges per AC cycle (H11AA1 double-edge detection)
-                    precise_freq = (num_intervals * 1e9) / (duration_ns * 4)
+                    # We use a divisor of 2 because:
+                    # 1. H11AA1 generates 2 zero-crossing pulses per AC cycle (0 deg and 180 deg)
+                    # 2. The pulses are very narrow (~33us).
+                    # 3. Our 0.2ms debounce filters out the falling edge of each pulse.
+                    # 4. Therefore, we count exactly 1 rising edge per zero-crossing.
+                    # Total: 2 events per AC cycle.
+                    precise_freq = (num_intervals * 1e9) / (duration_ns * 2)
                     
                     # Sanity check (40-80Hz range) to prevent gross outliers from single glitches
                     if 40 <= precise_freq <= 80:
-                        self.logger.debug(f"{self.name} precision frequency: {precise_freq:.3f} Hz (from {len(timestamps)} pulses over {duration_ns/1e9:.3f}s)")
+                        self.logger.debug(f"{self.name} precision frequency: {precise_freq:.3f} Hz (from {stat_count} pulses over {duration_ns/1e9:.3f}s)")
                         return precise_freq
                     else:
                         self.logger.warning(f"{self.name} precision frequency {precise_freq:.3f} Hz out of range, falling back to average")
-            except Exception as e:
-                self.logger.warning(f"{self.name} timestamp analysis failed: {e}")
+        except Exception as e:
+            self.logger.warning(f"{self.name} timestamp analysis failed: {e}")
 
         # METHOD 2: Average Frequency (Fallback)
         # Calculate frequency using correct libgpiod calculation for AC-into-DC-optocoupler
@@ -223,7 +227,9 @@ class SingleOptocoupler:
         # For 60 Hz AC: we get 4 edges per cycle (rising at +zero, falling at -zero, rising at +zero, falling at -zero)
         # Actual measurement confirms: 240 edges/second = 60 Hz * 4 edges/cycle
         # So we divide by 4 to convert edge count to frequency
-        frequency = pulse_count / (measurement_duration * 4)  # 4 edges per AC cycle (libgpiod counts both edges)
+        # UPDATE: With 0.2ms debounce, we filter the falling edge (pulse width ~33us).
+        # So we count 2 edges per cycle.
+        frequency = pulse_count / (measurement_duration * 2)  # 2 edges per AC cycle (Debounced)
         
         if actual_duration is not None and abs(actual_duration - duration) > 0.001:
             self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {actual_duration:.3f}s (requested: {duration:.3f}s)")

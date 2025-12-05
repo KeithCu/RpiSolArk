@@ -10,7 +10,7 @@ import sys
 import time
 import logging
 import threading
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 
 import gpiod  # libgpiod v2 Python bindings
 
@@ -23,6 +23,8 @@ class GPIOEventCounter:
 		self.registered_pins: Dict[int, int] = {}  # pin -> index (0..1)
 		self.counts: Dict[int, int] = {}
 		self.timestamps: Dict[int, list] = {}  # pin -> list of timestamps (ns)
+		self.last_valid_timestamp: Dict[int, int] = {} # pin -> last valid timestamp (ns)
+		self.debounce_ns = 200000  # 0.2ms default debounce (reject < 0.2ms intervals)
 		self._counts_lock = threading.Lock()
 		self._chip: Optional[gpiod.Chip] = None
 		self._request: Optional[gpiod.Request] = None
@@ -40,6 +42,11 @@ class GPIOEventCounter:
 		settings.edge_detection = gpiod.line.Edge.BOTH  # Count both rising and falling edges
 		# Enable internal pull-up for optocoupler (H11AA1 needs pull-up)
 		settings.bias = gpiod.line.Bias.PULL_UP
+		# Enable hardware debounce if supported (optional, software filter also implemented)
+		try:
+			settings.debounce_period = datetime.timedelta(microseconds=1000)
+		except Exception:
+			pass # Not critical, using software filter
 		
 		# Create config dictionary mapping offsets to settings
 		config = {offset: settings for offset in offsets}
@@ -79,7 +86,7 @@ class GPIOEventCounter:
 		self._start_request()
 		self._start_thread()
 
-	def register_pin(self, pin: int) -> bool:
+	def register_pin(self, pin: int, debounce_ns: int = 2000000) -> bool:
 		"""Register a GPIO pin for counting (BCM offset)."""
 		if pin in self.registered_pins:
 			return True
@@ -87,9 +94,11 @@ class GPIOEventCounter:
 			self.logger.error("Only two concurrent pins are supported")
 			return False
 		self.registered_pins[pin] = len(self.registered_pins)
+		self.debounce_ns = debounce_ns
 		with self._counts_lock:
 			self.counts.setdefault(pin, 0)
 			self.timestamps.setdefault(pin, [])
+			self.last_valid_timestamp.setdefault(pin, 0)
 		# If already running, reconfigure to include the new pin
 		if self._running:
 			try:
@@ -123,13 +132,24 @@ class GPIOEventCounter:
 				with self._counts_lock:
 					for ev in events:
 						pin = ev.line_offset
+						current_ts = ev.timestamp_ns
+						
+						# Software filtering / Debounce
+						# Reject if interval < debounce_ns (e.g. 2ms)
+						last_ts = self.last_valid_timestamp.get(pin, 0)
+						if last_ts > 0 and (current_ts - last_ts) < self.debounce_ns:
+							# Noise detected, skip this event
+							continue
+						
+						# Valid event
 						self.counts[pin] = self.counts.get(pin, 0) + 1
+						self.last_valid_timestamp[pin] = current_ts
 						
 						# Store timestamp (ns)
 						if pin in self.timestamps:
-							self.timestamps[pin].append(ev.timestamp_ns)
+							self.timestamps[pin].append(current_ts)
 							if event_count <= 1:
-								self.logger.debug(f"Stored timestamp for pin {pin}: {ev.timestamp_ns}")
+								self.logger.debug(f"Stored timestamp for pin {pin}: {current_ts}")
 						else:
 							self.logger.warning(f"Pin {pin} not in timestamps dict! Keys: {list(self.timestamps.keys())}")
 							
@@ -151,12 +171,26 @@ class GPIOEventCounter:
 			timestamps = list(self.timestamps.get(pin, []))
 			self.logger.debug(f"get_timestamps for pin {pin} returning {len(timestamps)} items")
 			return timestamps
+	
+	def get_frequency_info(self, pin: int) -> Tuple[int, int, int]:
+		"""
+		Get frequency statistics without copying the full timestamp list.
+		Returns: (count, first_timestamp_ns, last_timestamp_ns)
+		"""
+		with self._counts_lock:
+			ts_list = self.timestamps.get(pin, [])
+			count = len(ts_list)
+			if count > 0:
+				return (count, ts_list[0], ts_list[-1])
+			else:
+				return (0, 0, 0)
 
 	def reset_count(self, pin: int) -> bool:
 		with self._counts_lock:
 			if pin in self.counts:
 				self.counts[pin] = 0
 				self.timestamps[pin] = []
+				self.last_valid_timestamp[pin] = 0
 				self.logger.debug(f"reset_count for pin {pin} - cleared timestamps")
 				return True
 			return False
