@@ -4,18 +4,17 @@ After=network.target
 
 [Service]
 Type=simple
-# Run as 'pi' by default; adjust if your deployment user differs.
-User=pi
-# Use the directory containing this service's companion script as WorkingDirectory.
-# This assumes you place rpisolark-monitor.sh and this unit in the same install directory.
-WorkingDirectory=%E
+# Run as root (no sudo needed) or as your user (requires passwordless sudo)
+# Option 1: Run as root (simplest, no sudo needed in script)
+User=root
+WorkingDirectory=/home/keithcu/Desktop/RpiSolArk
 # Explanation:
 # - We will call a wrapper script that:
 #   - Resolves its own directory dynamically
 #   - Uses that as the app/.venv directory
 #   - Activates .venv if present (or runs system python as fallback)
-#   - Executes: python monitor.py --real
-ExecStart=%E/rpisolark-monitor.sh
+#   - Executes: sudo python monitor.py --real
+ExecStart=/home/keithcu/Desktop/RpiSolArk/rpisolark-monitor.sh
 
 Restart=on-failure
 RestartSec=10

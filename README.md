@@ -262,6 +262,61 @@ python monitor.py --analyze-offline
 
 *Captures every frequency reading with full analysis data for debugging classification issues. See [FREQUENCY_ANALYSIS.md](FREQUENCY_ANALYSIS.md) for complete documentation.*
 
+## 🔄 Running as a Systemd Service
+
+To run the monitor as a systemd service that starts automatically on boot:
+
+### 📋 Setup Instructions
+
+1. **Copy the service file to systemd** (requires sudo):
+   ```bash
+   sudo cp /home/keithcu/Desktop/RpiSolArk/rpisolark-monitor.service /etc/systemd/system/
+   ```
+
+2. **Make sure the shell script is executable**:
+   ```bash
+   chmod +x /home/keithcu/Desktop/RpiSolArk/rpisolark-monitor.sh
+   ```
+
+3. **Reload systemd to recognize the new service**:
+   ```bash
+   sudo systemctl daemon-reload
+   ```
+
+4. **Enable the service to start on boot**:
+   ```bash
+   sudo systemctl enable rpisolark-monitor.service
+   ```
+
+5. **Start the service now** (optional, to test without rebooting):
+   ```bash
+   sudo systemctl start rpisolark-monitor.service
+   ```
+
+6. **Check the status**:
+   ```bash
+   sudo systemctl status rpisolark-monitor.service
+   ```
+
+7. **View logs**:
+   ```bash
+   sudo journalctl -u rpisolark-monitor.service -f
+   ```
+
+### ⚙️ Service Configuration
+
+- The service is configured to run as `root` (no passwordless sudo needed)
+- The script automatically uses `sudo` only if not already running as root
+- The service will automatically restart on failure (configured in the service file)
+- Logs are available via `journalctl` (see command above)
+
+### 🔧 Customizing the Service
+
+If you need to change the installation path or user, edit `/etc/systemd/system/rpisolark-monitor.service`:
+
+- **Change user**: Modify the `User=` line (requires passwordless sudo configuration if not root)
+- **Change path**: Update `WorkingDirectory=` and `ExecStart=` paths to match your installation
+
 ## ⚙️ Configuration
 
 The system uses a comprehensive YAML configuration file `config.yaml` with settings for:

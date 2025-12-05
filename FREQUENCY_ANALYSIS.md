@@ -614,7 +614,7 @@ The system uses optimized default values based on real-world generator data anal
 | **`std_dev`** | `0.08` | Overall frequency spread | Increase if false positives |
 | **`kurtosis`** | `0.4` | Hunting pattern detection | Lower for subtle hunting |
 | **`sample_rate`** | `2.0` | Data collection rate | Higher = more CPU usage |
-| **`buffer_duration`** | `300` | Analysis window | Longer = better detection |
+| **`analysis_window_seconds`** | `30.0` | Analysis window and buffer size | Longer = better detection, but slower response |
 
 </div>
 

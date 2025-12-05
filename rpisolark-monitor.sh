@@ -40,6 +40,12 @@ fi
 # Optional: log where we are running from for debugging
 echo "RpiSolarkMonitor starting from: $APP_DIR"
 echo "Using Python: $PYTHON_BIN"
-echo "Command: $PYTHON_BIN monitor.py --real"
 
-exec "$PYTHON_BIN" "$APP_DIR/monitor.py" --real
+# Use sudo only if not already running as root
+if [[ $EUID -eq 0 ]]; then
+    echo "Running as root, no sudo needed"
+    exec "$PYTHON_BIN" "$APP_DIR/monitor.py" --real
+else
+    echo "Running as user, using sudo"
+    exec sudo "$PYTHON_BIN" "$APP_DIR/monitor.py" --real
+fi
