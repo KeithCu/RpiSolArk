@@ -88,7 +88,7 @@ This document provides comprehensive guidance for new developers joining the Rpi
 - `SingleOptocoupler`: Individual optocoupler management with recovery mechanisms.
 
 **Key Features**:
-- **GIL-free Counting**: Uses `gpio_event_counter` C extension (via `libgpiod`) for accurate interrupt counting.
+- **GIL-free Counting**: Uses `gpio_event_counter.py` pure-Python implementation (via `libgpiod` v2) for accurate interrupt counting.
 - **Health Monitoring**: Tracks consecutive errors and attempts automatic recovery (re-initialization).
 - **Frequency Calculation**: Configurable pulse counting logic with dual-method support.
 
@@ -128,7 +128,34 @@ The optocoupler module now supports two frequency calculation methods that can r
 
 **Verification**: See `verify_regression.py` for standalone testing of the regression method with synthetic data.
 
-### 5. solark_cloud.py & solark_integration.py - Cloud Automation
+### 5. gpio_event_counter.py - GPIO Pulse Counting Backend
+
+**Purpose**: Pure-Python GPIO pulse counter using `libgpiod` v2 for accurate interrupt-based edge detection and timestamp collection.
+
+**Key Classes**:
+- `GPIOEventCounter`: Main counter implementation using libgpiod v2 edge events.
+
+**Key Features**:
+- **Pure-Python Implementation**: Uses `libgpiod` v2 Python bindings (no C extension required).
+- **Thread-Safe**: Background thread drains kernel edge events while main thread reads counts/timestamps.
+- **Debouncing**: Software filtering rejects events with intervals < debounce threshold (default 0.2ms).
+- **Timestamp Collection**: Stores nanosecond-precision timestamps for each edge event.
+- **Multi-Pin Support**: Supports up to 2 concurrent GPIO pins (limited by libgpiod design).
+- **Edge Detection**: Counts both rising and falling edges (BOTH edge detection).
+- **Pull-Up Configuration**: Automatically configures internal pull-up for optocoupler compatibility (H11AA1).
+
+**Usage**:
+- Called automatically by `optocoupler.py` for frequency measurement.
+- Provides `get_count()`, `get_timestamps()`, and `get_frequency_info()` methods.
+- Handles pin registration, event loop management, and cleanup automatically.
+
+**Technical Details**:
+- Uses `gpiod.Chip` and `gpiod.Request` for hardware access.
+- Event loop runs in daemon thread to avoid blocking main application.
+- Timestamps stored in nanoseconds for high-precision frequency calculations.
+- Thread-safe access via `threading.Lock` for concurrent reads/writes.
+
+### 6. solark_cloud.py & solark_integration.py - Cloud Automation
 
 **Purpose**: Automates Sol-Ark inverter settings via the cloud portal using **Playwright**.
 
@@ -143,7 +170,7 @@ The optocoupler module now supports two frequency calculation methods that can r
 - **Multi-Inverter Support**: Can control multiple inverters mapped to specific optocouplers.
 - **Resilience**: Handles redirects, login expirations, and network timeouts.
 
-### 6. rpisolark_optimize_writes.py - SD Card Preservation
+### 7. rpisolark_optimize_writes.py - SD Card Preservation
 
 **Purpose**: System tuning script to reduce MicroSD card wear for 24/7 operation.
 
@@ -162,7 +189,7 @@ The optocoupler module now supports two frequency calculation methods that can r
 - **Fail-fast Validation**: Prevents startup if critical config is missing.
 - **Type Checking**: Ensures numeric values are within valid ranges.
 
-### 8. health.py - System Monitoring
+### 9. health.py - System Monitoring
 
 **Purpose**: Monitors system health (CPU, RAM) and integrates with systemd watchdog.
 
@@ -175,7 +202,7 @@ The optocoupler module now supports two frequency calculation methods that can r
 - **Resource Monitoring**: Tracks CPU, memory, threads, and file handles.
 - **Atomic CSV Logging**: Uses `fcntl` locking for safe log writes.
 
-### 9. setup_zero_code_updates.sh - Auto-Update System
+### 10. setup_zero_code_updates.sh - Auto-Update System
 
 **Purpose**: User-friendly script to set up automatic code updates.
 
@@ -315,7 +342,7 @@ solark_cloud:
 - **Platform**: Raspberry Pi (tested on RPi 4B)
 - **OS**: Latest Debian (Raspberry Pi OS)
 - **Python**: 3.8+
-- **GPIO Library**: `libgpiod` via `gpio_event_counter` (C extension)
+- **GPIO Library**: `libgpiod` v2 via `gpio_event_counter.py` (pure-Python implementation)
 
 ### Performance Optimizations
 
