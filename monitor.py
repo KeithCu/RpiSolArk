@@ -120,7 +120,11 @@ class PowerStateMachine:
             elif self.pending_state_time and (current_time - self.pending_state_time) >= self.debounce_seconds:
                 # Get monitor reference from config if available (passed during initialization)
                 monitor = getattr(self, '_monitor_ref', None)
-                self._transition_to_state(new_state, monitor)
+                if monitor is not None:
+                    self._transition_to_state(new_state, monitor)
+                else:
+                    # Fallback: transition without monitor (won't clear buffers)
+                    self._transition_to_state(new_state, None)
                 self.pending_state = None
                 self.pending_state_time = None
         else:
@@ -133,7 +137,11 @@ class PowerStateMachine:
             if time.time() - self.state_entry_time > self.transition_timeout:
                 self.logger.warning(f"Transition timeout exceeded, forcing to OFF_GRID")
                 monitor = getattr(self, '_monitor_ref', None)
-                self._transition_to_state(PowerState.OFF_GRID, monitor)
+                if monitor is not None:
+                    self._transition_to_state(PowerState.OFF_GRID, monitor)
+                else:
+                    # Fallback: transition without monitor (won't clear buffers)
+                    self._transition_to_state(PowerState.OFF_GRID, None)
 
         return self.current_state
 
@@ -999,9 +1007,9 @@ class FrequencyMonitor:
             self.cleanup()
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
-        # Force exit the program
+        # Exit with code 1 to indicate shutdown (systemd will handle restart if configured)
         import sys
-        sys.exit(0)
+        sys.exit(1)
     
     def run(self, simulator_mode: bool = None):
         """Main monitoring loop."""
@@ -1027,7 +1035,7 @@ class FrequencyMonitor:
             measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
             
             while self.running:
-                current_time = time.time() - self.start_time
+                elapsed_time = time.time() - self.start_time
                 
                 # Get frequency reading - always measure for full measurement_duration
                 if simulator_mode:
@@ -1095,7 +1103,7 @@ class FrequencyMonitor:
                 self.logger.debug("Updating buffers...")
                 if freq is not None:
                     self.freq_buffer.append(freq)
-                    self.time_buffer.append(current_time)
+                    self.time_buffer.append(elapsed_time)
                     self.sample_count += 1
 
                 # Validate buffers periodically
@@ -1193,7 +1201,7 @@ class FrequencyMonitor:
                 self.logger.debug("Checking display update...")
                 display_interval = self.config.get_float('app.display_update_interval')
                 
-                if current_time - self.last_display_time >= display_interval:
+                if elapsed_time - self.last_display_time >= display_interval:
                     self.logger.debug("Updating display and LEDs...")
                     ug_indicator = self._get_power_source_indicator(source)
                     primary_name = self.config.get('hardware.optocoupler.primary.name')
@@ -1204,7 +1212,7 @@ class FrequencyMonitor:
                             freq, ug_indicator, primary_state_machine, 
                             self.zero_voltage_duration
                         )
-                    self.last_display_time = current_time
+                    self.last_display_time = elapsed_time
                 
                 # Memory monitoring and cleanup
                 memory_info = self.memory_monitor.get_memory_info()
@@ -1220,9 +1228,9 @@ class FrequencyMonitor:
                     break
 
                 # Check reset button (debounced, check every 0.5 seconds)
-                current_time = time.time()
-                if current_time - self.last_reset_check >= 0.5:
-                    self.last_reset_check = current_time
+                current_absolute_time = time.time()
+                if current_absolute_time - self.last_reset_check >= 0.5:
+                    self.last_reset_check = current_absolute_time
                     if self.hardware is not None and self.hardware.check_reset_button():
                         if not self.reset_button_pressed:
                             self.reset_button_pressed = True
@@ -1237,7 +1245,7 @@ class FrequencyMonitor:
                         self.reset_button_pressed = False
 
                 # Log hourly status
-                if current_time - self.last_log_time >= 3600:  # 1 hour
+                if current_absolute_time - self.last_log_time >= 3600:  # 1 hour
                     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                     # Log state info for all optocouplers
                     all_state_info = {}
@@ -1258,7 +1266,7 @@ class FrequencyMonitor:
                     memory_summary = self.memory_monitor.get_memory_summary()
                     self.logger.info(f"Memory status: {memory_summary}")
 
-                    self.last_log_time = current_time
+                    self.last_log_time = current_absolute_time
 
                 # No sleep needed - measurement already took measurement_duration seconds
                 # Loop will naturally run at rate: measurement_duration + processing time
@@ -1376,6 +1384,13 @@ class FrequencyMonitor:
         # Stop tuning data collection
         if self.tuning_collector.enabled:
             self.tuning_collector.stop_collection()
+        
+        # Cleanup Sol-Ark integration (stops threads and browser)
+        if self.solark_integration is not None:
+            try:
+                self.solark_integration.cleanup()
+            except Exception as e:
+                self.logger.error(f"Error cleaning up Sol-Ark integration: {e}")
         
         # Cleanup hardware components
         try:

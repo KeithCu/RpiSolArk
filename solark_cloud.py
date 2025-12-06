@@ -50,6 +50,7 @@ class SolArkCloud:
         self.logger = logging.getLogger(__name__)
         
         # Browser components
+        self.playwright = None  # Playwright instance (must be stopped in cleanup)
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -97,8 +98,8 @@ class SolArkCloud:
         try:
             self.logger.info("Initializing Sol-Ark Cloud browser...")
             
-            playwright = sync_playwright().start()
-            self.browser = playwright.chromium.launch(
+            self.playwright = sync_playwright().start()
+            self.browser = self.playwright.chromium.launch(
                 headless=self.headless,
                 args=['--no-sandbox', '--disable-dev-shm-usage']
             )
@@ -134,6 +135,9 @@ class SolArkCloud:
                 self.context.close()
             if self.browser:
                 self.browser.close()
+            # Stop playwright instance to prevent resource leaks
+            if self.playwright:
+                self.playwright.stop()
             self.logger.info("Browser cleanup completed")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
@@ -142,6 +146,7 @@ class SolArkCloud:
             self.page = None
             self.context = None
             self.browser = None
+            self.playwright = None
             self.is_logged_in = False
     
     def login(self) -> bool:
@@ -462,16 +467,16 @@ class SolArkCloud:
             # Restore localStorage and sessionStorage if available
             if local_storage or session_storage:
                 try:
-                    # Restore localStorage
+                    # Restore localStorage (using parameter binding to prevent injection)
                     if local_storage:
                         for key, value in local_storage.items():
-                            self.page.evaluate(f"localStorage.setItem('{key}', '{value}')")
+                            self.page.evaluate("(key, value) => localStorage.setItem(key, value)", key, value)
                         self.logger.info(f"Restored {len(local_storage)} localStorage items")
                     
-                    # Restore sessionStorage
+                    # Restore sessionStorage (using parameter binding to prevent injection)
                     if session_storage:
                         for key, value in session_storage.items():
-                            self.page.evaluate(f"sessionStorage.setItem('{key}', '{value}')")
+                            self.page.evaluate("(key, value) => sessionStorage.setItem(key, value)", key, value)
                         self.logger.info(f"Restored {len(session_storage)} sessionStorage items")
                     
                     # Refresh the page to apply storage changes
@@ -1078,9 +1083,7 @@ def main():
         result = solark.toggle_time_of_use(False, test_inverter_id)
         print(f"TOU disable result: {result}")
         
-        # Sync data
-        sync_result = solark.sync_data()
-        print(f"Sync result: {sync_result}")
+        # Note: sync_data() method not implemented - periodic syncing handled by SolArkIntegration
         
     except Exception as e:
         print(f"Error: {e}")

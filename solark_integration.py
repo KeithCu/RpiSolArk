@@ -49,6 +49,7 @@ class SolArkIntegration:
         self.last_power_source = None
         self.operation_lock = threading.Lock()  # Global lock for single operation at a time
         self.active_toggle_thread = None  # Track active toggle operation thread
+        self.active_threads = []  # Track all active threads for proper cleanup
         
         # TOU state file path
         self.tou_state_file = self.solark_config.get('tou_state_file', 'solark_tou_state.json')
@@ -91,6 +92,37 @@ class SolArkIntegration:
         self.logger.info(f"Started network retry thread (interval: {self.network_retry_interval_seconds}s)")
         
         self.logger.info(f"Sol-Ark integration initialized (enabled: {self.enabled})")
+    
+    def cleanup(self):
+        """Stop background threads and cleanup resources."""
+        self.logger.info("Cleaning up Sol-Ark integration...")
+        # Stop retry thread
+        self.retry_thread_running = False
+        if self.retry_thread and self.retry_thread.is_alive():
+            self.logger.info("Waiting for retry thread to stop...")
+            self.retry_thread.join(timeout=5.0)
+            if self.retry_thread.is_alive():
+                self.logger.warning("Retry thread did not stop within timeout")
+        
+        # Wait for any active toggle threads to complete (with timeout)
+        with self.operation_lock:
+            active_count = len([t for t in self.active_threads if t.is_alive()])
+            if active_count > 0:
+                self.logger.info(f"Waiting for {active_count} active toggle thread(s) to complete...")
+                for thread in self.active_threads[:]:  # Copy list to avoid modification during iteration
+                    if thread.is_alive():
+                        thread.join(timeout=2.0)
+                        if thread.is_alive():
+                            self.logger.warning(f"Thread {thread.name} did not complete within timeout")
+        
+        # Cleanup Sol-Ark cloud resources
+        if self.solark_cloud:
+            try:
+                self.solark_cloud.cleanup()
+            except Exception as e:
+                self.logger.error(f"Error cleaning up Sol-Ark cloud: {e}")
+        
+        self.logger.info("Sol-Ark integration cleanup completed")
     
     def validate_configuration(self) -> bool:
         """
@@ -507,13 +539,15 @@ class SolArkIntegration:
             thread_start_time = getattr(self.active_toggle_thread, 'start_time', None)
             if thread_start_time is not None and (time.time() - thread_start_time) > 60:
                 self.logger.warning("Previous TOU toggle thread has been running > 60 seconds, allowing new thread")
-                self.active_toggle_thread = None
+                # Don't set to None - keep reference for cleanup tracking
+                # The thread will complete on its own, we just allow a new one to start
             else:
                 self.logger.debug("TOU toggle operation already in progress, skipping duplicate request")
                 return
         
         def do_toggle_with_lock():
             # Acquire lock to ensure only one operation at a time
+            current_thread = threading.current_thread()
             with self.operation_lock:
                 try:
                     success_count = 0
@@ -610,12 +644,20 @@ class SolArkIntegration:
                     self.logger.error(f"Error in TOU toggle operation: {e}")
                 finally:
                     # Clear thread reference when operation completes
-                    self.active_toggle_thread = None
+                    if self.active_toggle_thread == current_thread:
+                        self.active_toggle_thread = None
+                    # Remove from active threads list
+                    with self.operation_lock:
+                        if current_thread in self.active_threads:
+                            self.active_threads.remove(current_thread)
         
         # Run in separate thread to avoid blocking
         thread = threading.Thread(target=do_toggle_with_lock, daemon=True)
         thread.start_time = time.time()  # Track thread start time for timeout detection
         self.active_toggle_thread = thread
+        # Track thread for cleanup
+        with self.operation_lock:
+            self.active_threads.append(thread)
         thread.start()
     
     
