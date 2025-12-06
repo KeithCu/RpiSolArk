@@ -38,12 +38,12 @@ def analyzer(config, logger):
 
 def test_simulator_state_cycling(analyzer):
     """Test that the simulator cycles through the expected states."""
-    # Test the 12-second cycle
+    # Test the 90-second cycle: 20s grid -> 10s off-grid -> 20s generator -> 40s grid
     states_observed = []
     start_time = time.time()
 
-    # Run for about 13 seconds to see a full cycle
-    while time.time() - start_time < 13:
+    # Run for about 95 seconds to see a full cycle
+    while time.time() - start_time < 95:
         freq = analyzer._simulate_frequency()
         states_observed.append((analyzer.simulator_state, freq))
         time.sleep(0.1)  # Small delay to not overwhelm
@@ -59,10 +59,10 @@ def test_simulator_state_cycling(analyzer):
     off_grid_freqs = [freq for state, freq in states_observed if state == "off_grid" and freq is None]
 
     # Verify the cycling pattern
-    # Should have grid > others since there are 2 grid periods in the 12s cycle
-    # Grid: 6s total (0-3s, 9-12s), Off-grid: 3s, Generator: 3s
+    # 90-second cycle: Grid: 60s total (0-20s, 50-90s), Off-grid: 10s (20-30s), Generator: 20s (30-50s)
+    # Grid should be ~66.7% of the cycle (60s / 90s)
     expected_grid_ratio = grid_count / max(1, (grid_count + off_grid_count + generator_count))
-    assert 0.5 <= expected_grid_ratio <= 0.8, "States are not cycling with correct proportions"
+    assert 0.6 <= expected_grid_ratio <= 0.75, f"Grid ratio {expected_grid_ratio:.2f} not in expected range (should be ~0.67)"
 
     # Grid should be stable
     if grid_freqs:
@@ -84,8 +84,9 @@ def test_simulator_frequency_ranges(analyzer):
     off_grid_count = 0
 
     # Run for a longer period to get samples from all states
+    # 95 seconds covers one full 90-second cycle
     start_time = time.time()
-    while time.time() - start_time < 30:  # 30 seconds covers multiple cycles
+    while time.time() - start_time < 95:
         freq = analyzer._simulate_frequency()
         state = analyzer.simulator_state
 
@@ -100,7 +101,7 @@ def test_simulator_frequency_ranges(analyzer):
 
     # Verify frequency ranges (accounting for random noise)
     if grid_freqs:
-        # Grid should be very stable around 60 Hz
+        # Grid should be very stable around 60 Hz (±0.005 noise)
         assert all(59.8 <= f <= 60.2 for f in grid_freqs), f"Grid frequencies out of range: {grid_freqs[:10]}..."
 
     if generator_freqs:

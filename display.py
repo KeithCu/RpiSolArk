@@ -55,7 +55,12 @@ def format_duration(seconds: float) -> str:
         if minutes > 0 or hours > 0:  # Show minutes if we have hours or minutes
             parts.append(f"{minutes:02d}m")
         if secs > 0 or not parts:  # Always show seconds if no other units, or if we have seconds
-            parts.append(f"{secs:02d}s")
+            # Use zero-padding only if we have other time units (for alignment)
+            # Otherwise use single-digit format for cleaner display
+            if parts:
+                parts.append(f"{secs:02d}s")
+            else:
+                parts.append(f"{secs}s")
     
     return ":".join(parts)
 
