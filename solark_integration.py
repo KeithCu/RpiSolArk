@@ -47,9 +47,12 @@ class SolArkIntegration:
         
         # State tracking
         self.last_power_source = None
-        self.operation_lock = threading.Lock()  # Global lock for single operation at a time
+        self.operation_lock = threading.RLock()  # Reentrant lock for single operation at a time
         self.active_toggle_thread = None  # Track active toggle operation thread
         self.active_threads = []  # Track all active threads for proper cleanup
+        
+        # Operation timeout configuration
+        self.max_operation_timeout = self.solark_config.get('max_operation_timeout', 120)  # Default 2 minutes max for any operation
         
         # TOU state file path
         self.tou_state_file = self.solark_config.get('tou_state_file', 'solark_tou_state.json')
@@ -61,7 +64,7 @@ class SolArkIntegration:
         
         # Pending operations tracking (for network failures)
         self.pending_operations = {}  # Key: inverter_id, Value: dict with operation details
-        self.pending_operations_lock = threading.Lock()  # Lock for pending operations
+        self.pending_operations_lock = threading.RLock()  # Reentrant lock for pending operations (needed for nested calls)
         
         # Load TOU state from disk (includes pending operations)
         self._load_tou_state()
@@ -105,12 +108,34 @@ class SolArkIntegration:
             if self.retry_thread.is_alive():
                 self.logger.warning("Retry thread did not stop within timeout, continuing cleanup")
         
-        # Wait for any active toggle threads to complete (with timeout)
-        with self.operation_lock:
-            active_count = len([t for t in self.active_threads if t.is_alive()])
+        # Try to acquire lock with timeout (Solution 3: Non-blocking cleanup)
+        lock_acquired = False
+        active_threads = []
+        try:
+            # Try to acquire lock with 5 second timeout (blocks for up to 5s, returns False if timeout)
+            lock_acquired = self.operation_lock.acquire(blocking=True, timeout=5.0)
+            if not lock_acquired:
+                self.logger.warning("Could not acquire operation lock within 5s timeout, "
+                                  "some threads may still be running. Continuing cleanup without lock.")
+                # Copy thread list without lock (may be incomplete, but threads are daemon anyway)
+                active_threads = self.active_threads.copy() if hasattr(self, 'active_threads') else []
+            else:
+                # Successfully acquired lock, get accurate thread list
+                active_threads = self.active_threads.copy()
+        except Exception as e:
+            self.logger.error(f"Error acquiring operation lock during cleanup: {e}")
+            # Continue cleanup without lock
+            active_threads = self.active_threads.copy() if hasattr(self, 'active_threads') else []
+        finally:
+            if lock_acquired:
+                self.operation_lock.release()
+        
+        # Wait for threads without holding lock (Solution 3)
+        if active_threads:
+            active_count = len([t for t in active_threads if t.is_alive()])
             if active_count > 0:
                 self.logger.info(f"Waiting for {active_count} active toggle thread(s) to complete...")
-                for thread in self.active_threads[:]:  # Copy list to avoid modification during iteration
+                for thread in active_threads:
                     if thread.is_alive():
                         thread.join(timeout=2.0)
                         if thread.is_alive():
@@ -543,48 +568,51 @@ class SolArkIntegration:
             self.logger.debug("TOU automation disabled in configuration")
             return
         
-        # Check if there's an active thread and handle timeout
-        current_active_thread = self.active_toggle_thread
-        if current_active_thread is not None and current_active_thread.is_alive():
-            # Check if thread has been running too long (timeout after 60 seconds)
-            thread_start_time = getattr(current_active_thread, 'start_time', None)
-            if thread_start_time is not None and (time.time() - thread_start_time) > 60:
-                self.logger.warning("Previous TOU toggle thread has been running > 60 seconds, allowing new thread")
-                # Don't set to None - keep reference for cleanup tracking
-                # The thread will complete on its own, we just allow a new one to start
-            else:
-                self.logger.debug("TOU toggle operation already in progress, skipping duplicate request")
-                return
-        
+        # Create thread function that will be registered before starting
         def do_toggle_with_lock():
-            # Acquire lock to ensure only one operation at a time
             current_thread = threading.current_thread()
+            operation_start = time.time()  # Track operation start time (Solution 5)
+            
+            # Acquire lock only for initial state checks and thread registration check
             with self.operation_lock:
-                try:
-                    success_count = 0
-                    total_count = len(inverter_ids)
+                # Verify this thread is still the active one (may have been replaced due to timeout)
+                if self.active_toggle_thread != current_thread:
+                    self.logger.debug("This thread is no longer the active toggle thread, exiting")
+                    return
+                
+                success_count = 0
+                total_count = len(inverter_ids)
+            
+            # RELEASE LOCK - Process inverters without holding lock
+            try:
+                for inverter_id in inverter_ids:
+                    # Check operation timeout (Solution 5)
+                    if time.time() - operation_start > self.max_operation_timeout:
+                        self.logger.error(f"Operation timeout exceeded {self.max_operation_timeout}s, aborting remaining inverters")
+                        break
                     
-                    for inverter_id in inverter_ids:
-                        try:
-                            # Check stored state first
-                            stored_state = self._get_tou_state(inverter_id)
+                    try:
+                        # Check stored state (no lock needed for read-only access)
+                        stored_state = self._get_tou_state(inverter_id)
+                        
+                        if stored_state == enable:
+                            # Check if we have actual stored data or just default assumption
+                            inverters = self.tou_state.get('inverters', {})
+                            has_stored_data = inverter_id in inverters
                             
-                            if stored_state == enable:
-                                # Check if we have actual stored data or just default assumption
-                                inverters = self.tou_state.get('inverters', {})
-                                has_stored_data = inverter_id in inverters
-                                
-                                if has_stored_data:
-                                    self.logger.info(f"TOU for inverter {inverter_id} already {'enabled' if enable else 'disabled'} (stored state), skipping cloud call")
-                                else:
-                                    self.logger.info(f"TOU for inverter {inverter_id} assumed {'enabled' if enable else 'disabled'} (default), skipping cloud call")
-                                
-                                success_count += 1
-                                # Update timestamp even though we didn't make a cloud call
+                            if has_stored_data:
+                                self.logger.info(f"TOU for inverter {inverter_id} already {'enabled' if enable else 'disabled'} (stored state), skipping cloud call")
+                            else:
+                                self.logger.info(f"TOU for inverter {inverter_id} assumed {'enabled' if enable else 'disabled'} (default), skipping cloud call")
+                            
+                            # Update state (requires lock)
+                            with self.operation_lock:
                                 self._update_tou_state(inverter_id, enable, power_source)
-                                continue
-                            
-                            # State differs - check cooldown before proceeding
+                            success_count += 1
+                            continue
+                        
+                        # State differs - check cooldown before proceeding (requires lock)
+                        with self.operation_lock:
                             if self._is_in_cooldown(inverter_id):
                                 inverters = self.tou_state.get('inverters', {})
                                 inverter_data = inverters.get(inverter_id, {})
@@ -600,14 +628,16 @@ class SolArkIntegration:
                                 self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=last_attempt_time)
                                 success_count += 1
                                 continue
+                        
+                        # Not in cooldown, proceed with cloud call
+                        self.logger.info(f"TOU state mismatch for inverter {inverter_id}: stored={stored_state}, desired={enable}, updating via cloud")
+                        
+                        # NETWORK CALL WITHOUT LOCK HELD (Solution 1)
+                        try:
+                            result = self.solark_cloud.toggle_time_of_use(enable, inverter_id)
                             
-                            # Not in cooldown, proceed with cloud call
-                            self.logger.info(f"TOU state mismatch for inverter {inverter_id}: stored={stored_state}, desired={enable}, updating via cloud")
-                            
-                            # Use synchronous Sol-Ark cloud method
-                            try:
-                                result = self.solark_cloud.toggle_time_of_use(enable, inverter_id)
-                                
+                            # Update state after network call (requires lock)
+                            with self.operation_lock:
                                 if result:
                                     success_count += 1
                                     self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for inverter {inverter_id}")
@@ -624,50 +654,70 @@ class SolArkIntegration:
                                     attempt_time = time.time()
                                     self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=attempt_time)
                                     
-                            except NetworkError as e:
-                                # Network failure - add to pending queue for retry
+                        except NetworkError as e:
+                            # Network failure - add to pending queue for retry (requires lock)
+                            with self.operation_lock:
                                 self.logger.warning(f"Network error toggling TOU for inverter {inverter_id}: {e}. "
                                                   f"Adding to pending operations queue for retry every {self.network_retry_interval_seconds}s")
                                 self._add_pending_operation(inverter_id, enable, power_source, optocoupler_name)
-                                # Don't count as success, but don't fail completely either
-                                # The retry thread will handle it
-                                
-                            except Exception as e:
-                                # Other unexpected errors
-                                self.logger.error(f"Unexpected error toggling TOU for inverter {inverter_id}: {e}")
-                                # Don't add to pending queue for unexpected errors
-                                
+                            # Don't count as success, but don't fail completely either
+                            # The retry thread will handle it
+                            
                         except Exception as e:
-                            self.logger.error(f"Error toggling TOU for inverter {inverter_id}: {e}")
+                            # Other unexpected errors
+                            self.logger.error(f"Unexpected error toggling TOU for inverter {inverter_id}: {e}")
+                            # Don't add to pending queue for unexpected errors
+                            
+                    except Exception as e:
+                        self.logger.error(f"Error toggling TOU for inverter {inverter_id}: {e}")
+                
+                # Log overall result
+                operation_duration = time.time() - operation_start
+                if operation_duration > 60:
+                    self.logger.warning(f"Operation took {operation_duration:.1f}s (longer than expected)")
+                
+                if success_count == total_count:
+                    self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for all {total_count} inverters "
+                                   f"(optocoupler: {optocoupler_name}, power source: {power_source})")
+                elif success_count > 0:
+                    self.logger.warning(f"Partially {'enabled' if enable else 'disabled'} TOU: {success_count}/{total_count} inverters "
+                                      f"(optocoupler: {optocoupler_name}, power source: {power_source})")
+                else:
+                    self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for any inverters "
+                                    f"(optocoupler: {optocoupler_name}, power source: {power_source})")
                     
-                    # Log overall result
-                    if success_count == total_count:
-                        self.logger.info(f"Successfully {'enabled' if enable else 'disabled'} TOU for all {total_count} inverters "
-                                       f"(optocoupler: {optocoupler_name}, power source: {power_source})")
-                    elif success_count > 0:
-                        self.logger.warning(f"Partially {'enabled' if enable else 'disabled'} TOU: {success_count}/{total_count} inverters "
-                                          f"(optocoupler: {optocoupler_name}, power source: {power_source})")
-                    else:
-                        self.logger.error(f"Failed to {'enable' if enable else 'disable'} TOU for any inverters "
-                                        f"(optocoupler: {optocoupler_name}, power source: {power_source})")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error in TOU toggle operation: {e}")
-                finally:
-                    # Clear thread reference when operation completes (while lock is still held)
+            except Exception as e:
+                self.logger.error(f"Error in TOU toggle operation: {e}")
+            finally:
+                # Clear thread reference when operation completes (requires lock)
+                with self.operation_lock:
                     if self.active_toggle_thread == current_thread:
                         self.active_toggle_thread = None
-                    # Remove from active threads list (lock is still held from outer 'with' block)
+                    # Remove from active threads list
                     if current_thread in self.active_threads:
                         self.active_threads.remove(current_thread)
         
-        # Run in separate thread to avoid blocking
-        thread = threading.Thread(target=do_toggle_with_lock, daemon=True)
-        thread.start_time = time.time()  # Track thread start time for timeout detection
-        self.active_toggle_thread = thread
-        # Track thread for cleanup
+        # Check if there's an active thread and handle timeout (Solution 4: register before starting)
         with self.operation_lock:
+            current_active_thread = self.active_toggle_thread
+            if current_active_thread is not None and current_active_thread.is_alive():
+                # Check if thread has been running too long (timeout after max_operation_timeout)
+                thread_start_time = getattr(current_active_thread, 'start_time', None)
+                if thread_start_time is not None and (time.time() - thread_start_time) > self.max_operation_timeout:
+                    self.logger.warning(f"Previous TOU toggle thread has been running > {self.max_operation_timeout} seconds, allowing new thread")
+                    # Don't set to None - keep reference for cleanup tracking
+                    # The thread will complete on its own, we just allow a new one to start
+                else:
+                    self.logger.debug("TOU toggle operation already in progress, skipping duplicate request")
+                    return
+            
+            # Create and register thread BEFORE starting (Solution 4)
+            thread = threading.Thread(target=do_toggle_with_lock, daemon=True)
+            thread.start_time = time.time()  # Track thread start time for timeout detection
+            self.active_toggle_thread = thread
             self.active_threads.append(thread)
+        
+        # Start thread AFTER registration (Solution 4)
         thread.start()
     
     
