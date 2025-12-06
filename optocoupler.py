@@ -370,11 +370,11 @@ class SingleOptocoupler:
             
             # Test with a short measurement
             try:
-                test_pulses = self.count_optocoupler_pulses(0.5)  # 0.5 second test
+                test_pulses, test_elapsed = self.count_optocoupler_pulses(0.5)  # 0.5 second test
 
                 if test_pulses >= 0:
                     self.consecutive_errors = 0
-                    self.logger.info(f"{self.name} recovery successful: {test_pulses} pulses in test")
+                    self.logger.info(f"{self.name} recovery successful: {test_pulses} pulses in {test_elapsed:.3f}s")
                     return True
                 else:
                     self.logger.warning(f"{self.name} recovery test failed: {test_pulses} pulses")
@@ -586,7 +586,7 @@ class OptocouplerManager:
             self.logger.warning(f"Thread priority setup failed: {e}")
     
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
-                                optocoupler_name: str = 'primary') -> int:
+                                optocoupler_name: str = 'primary') -> Tuple[int, float]:
         """
         Count optocoupler pulses over specified duration using working libgpiod.
         Uses interrupt-based counting for maximum accuracy.
@@ -597,15 +597,15 @@ class OptocouplerManager:
             optocoupler_name: Name of optocoupler to use ('primary' only)
             
         Returns:
-            Number of pulses counted
+            Tuple of (pulse_count, actual_elapsed_time)
         """
         if not self.optocoupler_enabled:
             self.logger.debug("Optocoupler disabled, returning 0 pulses")
-            return 0
+            return (0, 0.0)
             
         if optocoupler_name not in self.optocouplers:
             self.logger.warning(f"Optocoupler '{optocoupler_name}' not found")
-            return 0
+            return (0, 0.0)
         
         optocoupler = self.optocouplers[optocoupler_name]
         return optocoupler.count_optocoupler_pulses(duration, debounce_time)

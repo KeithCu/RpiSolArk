@@ -54,7 +54,8 @@ class RestartManager:
     def handle_restart_button(self) -> bool:
         """
         Handle restart button press with safety checks.
-        Returns True if restart was initiated, False if blocked.
+        Returns False if blocked by safety checks, otherwise exits the process
+        (systemd will restart the service).
         """
         if not self._can_restart():
             self.logger.warning("Restart blocked by safety checks")
@@ -66,6 +67,7 @@ class RestartManager:
         
         self.logger.info("Exiting process to trigger systemd restart")
         sys.exit(1)
+        # Note: sys.exit() terminates the process, so we never return from here
     
     def start_update_monitor(self):
         """

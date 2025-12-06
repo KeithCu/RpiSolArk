@@ -695,7 +695,6 @@ class SolArkIntegration:
 # Example usage
 def main():
     """Example usage of SolArkIntegration"""
-    import yaml
     
     # Setup logging
     logging.basicConfig(
@@ -707,35 +706,32 @@ def main():
     integration = SolArkIntegration()
     
     try:
-        # Start integration
-        integration.start()
-        
         # Simulate power source changes
         print("Simulating power source changes...")
         
-        # Utility power
-        integration.on_power_source_change('utility', {'frequency': 60.0, 'stability': 'high'})
+        # Grid power
+        integration.on_power_source_change('grid', {'frequency': 60.0, 'stability': 'high'})
         time.sleep(2)
         
         # Generator power
         integration.on_power_source_change('generator', {'frequency': 59.8, 'stability': 'low'})
         time.sleep(2)
         
-        # Back to utility
-        integration.on_power_source_change('utility', {'frequency': 60.0, 'stability': 'high'})
+        # Back to grid
+        integration.on_power_source_change('grid', {'frequency': 60.0, 'stability': 'high'})
         time.sleep(2)
         
         # Show status
         status = integration.get_status()
         print(f"Integration status: {status}")
         
-        # Keep running for a bit
+        # Keep running for a bit to let background threads work
         time.sleep(10)
         
     except KeyboardInterrupt:
         print("Stopping integration...")
     finally:
-        integration.stop()
+        integration.cleanup()
 
 
 if __name__ == "__main__":
