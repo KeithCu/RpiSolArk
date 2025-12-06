@@ -90,7 +90,43 @@ This document provides comprehensive guidance for new developers joining the Rpi
 **Key Features**:
 - **GIL-free Counting**: Uses `gpio_event_counter` C extension (via `libgpiod`) for accurate interrupt counting.
 - **Health Monitoring**: Tracks consecutive errors and attempts automatic recovery (re-initialization).
-- **Frequency Calculation**: Configurable pulse counting logic.
+- **Frequency Calculation**: Configurable pulse counting logic with dual-method support.
+
+#### Frequency Calculation Methods
+
+The optocoupler module now supports two frequency calculation methods that can run in parallel for comparison:
+
+**Method 1: First/Last Timestamp (Default)**
+- Uses only the first and last pulse timestamps from the measurement window
+- Calculates frequency as: `Frequency = (num_intervals * 1e9) / (duration_ns * pulses_per_cycle)`
+- Fast and efficient, works well with stable signals
+- Sensitive to outliers at the measurement boundaries
+
+**Method 2: Linear Regression (New)**
+- Uses all pulse timestamps collected during the measurement window
+- Performs linear regression on timestamp data: `time = slope * pulse_index + intercept`
+- Calculates frequency from the regression slope: `Frequency = 1 / (slope * pulses_per_cycle)`
+- More robust against individual timestamp jitter and outliers
+- Better accuracy when there are systematic timing variations
+- Uses `numpy.polyfit` for efficient computation
+
+**Configuration Flags** (in `optocoupler.py`):
+- `ENABLE_REGRESSION_COMPARISON = True`: Enables parallel calculation of both methods and logs comparison results
+- `USE_REGRESSION_FOR_RESULT = False`: Controls which method's result is returned (default: First/Last for backward compatibility)
+
+**Usage**:
+1. Both methods are calculated when `ENABLE_REGRESSION_COMPARISON = True`
+2. Comparison logs show: `First/Last=X.XXXXXX Hz, Regression=Y.YYYYYY Hz, Diff=Z.ZZZZZZ Hz (P.PPP%)`
+3. Switch to regression method by setting `USE_REGRESSION_FOR_RESULT = True`
+4. The old method remains available as fallback
+
+**When to Use Regression Method**:
+- When you observe systematic timing variations in your hardware
+- When first/last timestamps may be unreliable (e.g., measurement window boundaries)
+- When you want maximum accuracy by utilizing all collected data points
+- For research/analysis where you want to compare both methods
+
+**Verification**: See `verify_regression.py` for standalone testing of the regression method with synthetic data.
 
 ### 5. solark_cloud.py & solark_integration.py - Cloud Automation
 
@@ -270,6 +306,7 @@ solark_cloud:
 - **Unit Tests**: `pytest tests/`
 - **Sol-Ark Integration**: `python solark_cloud.py` (Runs a test login/TOU toggle check)
 - **Hardware**: `python tests/test_optocoupler.py`
+- **Regression Method Verification**: `python verify_regression.py` (Tests regression vs first/last method with synthetic data)
 
 ## Raspberry Pi Specifics
 
@@ -326,6 +363,45 @@ To add control for a new hardware component (e.g., a relay or buzzer):
             self.gpio.output(pin, state)
     ```
 
+### Enable Regression-Based Frequency Calculation
+
+To use the new regression-based frequency calculation method:
+
+1. **Enable Comparison Mode** (Recommended for initial testing):
+   - Open `optocoupler.py`
+   - Ensure `ENABLE_REGRESSION_COMPARISON = True` (default)
+   - This will calculate both methods and log comparisons
+   - Monitor logs to see differences between methods
+
+2. **Switch to Regression Method**:
+   - Open `optocoupler.py`
+   - Set `USE_REGRESSION_FOR_RESULT = True`
+   - The system will now return regression-based frequency values
+   - The first/last method remains available as fallback
+
+3. **Verify with Test Script**:
+   ```bash
+   python verify_regression.py
+   ```
+   This runs synthetic tests comparing both methods with various jitter scenarios.
+
+4. **Monitor Logs**:
+   When `ENABLE_REGRESSION_COMPARISON = True`, you'll see log entries like:
+   ```
+   Mechanical frequency comparison: First/Last=60.012345 Hz, Regression=60.012340 Hz, Diff=0.000005 Hz (0.008%)
+   ```
+
+**When to Use Regression Method**:
+- You observe systematic timing variations in your hardware
+- First/last timestamps may be unreliable (e.g., at measurement boundaries)
+- You want maximum accuracy by utilizing all collected data points
+- You're doing research/analysis and want to compare both methods
+
+**Performance Impact**:
+- Regression method adds minimal overhead (uses numpy.polyfit)
+- Both methods can run in parallel for comparison
+- Regression method uses all timestamps, which are already collected
+
 ### Adjust Detection Thresholds
 
 If the system falsely detects Generator power (False Positive) or misses it (False Negative):
@@ -380,6 +456,18 @@ To automate a new setting (e.g., "Battery Charge Current"):
 1.  **Optocoupler Wiring**: Verify H11AA1 pinout. Input side needs AC, output side needs pull-up resistor.
 2.  **GPIO Permissions**: Ensure user has access: `sudo usermod -a -G gpio pi`.
 3.  **Simulator**: Test with `python monitor.py --simulator` to verify software logic.
+
+### Frequency Accuracy Issues
+
+**Symptoms**: Frequency readings seem inaccurate or inconsistent.
+
+**Solutions**:
+1.  **Compare Methods**: Enable `ENABLE_REGRESSION_COMPARISON = True` and check logs for differences between methods.
+2.  **Test Regression Method**: Run `python verify_regression.py` to understand method behavior with synthetic data.
+3.  **Switch Methods**: Try setting `USE_REGRESSION_FOR_RESULT = True` to use regression-based calculation.
+4.  **Check Timestamps**: Verify that `gpio_event_counter` is collecting timestamps correctly (check debug logs).
+5.  **Hardware Issues**: Verify optocoupler connections and signal quality - noise can affect both methods.
+6.  **Measurement Duration**: Longer measurement windows provide more data points for regression method.
 
 ### High CPU Usage
 

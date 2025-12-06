@@ -70,6 +70,34 @@ Frequency: 59-64 Hz with hunting pattern
 
 *The generator shows characteristic hunting oscillations while utility power remains rock-solid.*
 
+### 📐 **Frequency Measurement Methods**
+
+The system supports two frequency calculation methods that can run in parallel:
+
+**Method 1: First/Last Timestamp (Default)**
+- Uses the first and last pulse timestamps from the measurement window
+- Fast and efficient, works well with stable signals
+- Formula: `Frequency = (num_intervals * 1e9) / (duration_ns * pulses_per_cycle)`
+
+**Method 2: Linear Regression (Optional)**
+- Uses **all** pulse timestamps collected during the measurement window
+- Performs linear regression to find the best-fit line through all data points
+- More robust against individual timestamp jitter and outliers
+- Better accuracy when there are systematic timing variations
+- Formula: `Frequency = 1 / (regression_slope * pulses_per_cycle)`
+
+**Configuration** (in `optocoupler.py`):
+- `ENABLE_REGRESSION_COMPARISON = True`: Enables parallel calculation and comparison logging
+- `USE_REGRESSION_FOR_RESULT = False`: Controls which method's result is returned
+
+**Benefits of Regression Method**:
+- Utilizes all collected timestamps, not just two endpoints
+- Reduces impact of outliers at measurement boundaries
+- Better handles systematic timing variations
+- Provides more statistically robust frequency estimation
+
+**Verification**: Run `python verify_regression.py` to test both methods with synthetic data and compare accuracy.
+
 ### 🧮 **Detection Algorithm**
 
 The system uses **two complementary analysis methods** (simplified for maximum reliability):
@@ -98,6 +126,7 @@ The system uses **two complementary analysis methods** (simplified for maximum r
 - 🔍 **Power source classification** (Utility Grid vs Generac Generator) - Simplified detection using std_dev + Allan variance
 - 📈 **Allan variance analysis** for frequency stability assessment
 - 🎯 **Simplified & Reliable**: Removed unnecessary complexity (kurtosis, confidence scoring) while maintaining 100% accuracy
+- 📐 **Dual Frequency Calculation Methods**: First/Last timestamp (default) and Linear Regression (optional) for enhanced accuracy
 - 📺 **LCD display** with real-time status updates and U/G indicator
 - 🎯 **U/G indicator** showing majority classification over recent data window
 - 🏥 **Health monitoring** with system resource tracking
@@ -387,7 +416,33 @@ python tests/test_solark_cloud.py
 
 # Test hardware components
 python tests/test_optocoupler.py
+
+# Verify regression-based frequency calculation
+python verify_regression.py
 ```
+
+### 📐 Frequency Calculation Method Testing
+
+The `verify_regression.py` script allows you to test and compare both frequency calculation methods:
+
+```bash
+# Run verification with synthetic data
+python verify_regression.py
+```
+
+This script:
+- Generates synthetic pulse timestamps with configurable jitter
+- Tests both First/Last and Regression methods
+- Compares accuracy across multiple scenarios
+- Provides statistical analysis of method performance
+
+**Test Scenarios**:
+- Perfect 60.0 Hz (no jitter)
+- 60.0 Hz with various jitter levels (100ns, 1000ns, 10000ns std)
+- Generator-like frequencies (59.5 Hz) with jitter
+- Slightly high frequencies (60.1 Hz) with jitter
+
+Use this to understand when the regression method provides better accuracy in your specific use case.
 
 ## 🏗️ Architecture
 
@@ -642,6 +697,7 @@ findmnt /tmp
 4. **🔐 Check Permissions**: Ensure GPIO access permissions are correct
 5. **⚙️ Review Configuration**: Verify `config.yaml` settings
 6. **☁️ Test Sol-Ark Integration**: Run `python test_solark_cloud.py`
+7. **📐 Test Frequency Methods**: Run `python verify_regression.py` to compare calculation methods
 
 ## 🤝 Contributing
 
