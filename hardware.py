@@ -51,7 +51,7 @@ class HardwareManager:
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, 
                                        optocoupler_name: str = 'primary', actual_duration: float = None) -> Optional[float]:
         """Calculate AC frequency from pulse count."""
-        return self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration, optocoupler_name)
+        return self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration, optocoupler_name, actual_duration)
     
     def get_available_optocouplers(self) -> list:
         """Get list of available optocoupler names."""
