@@ -32,6 +32,7 @@ from tuning_collector import TuningDataCollector
 from offline_analyzer import OfflineAnalyzer
 from restart_manager import RestartManager
 from solark_integration import SolArkIntegration
+from health_check_reporter import HealthCheckReporter
 
 
 class PowerState(Enum):
@@ -846,6 +847,10 @@ class FrequencyMonitor:
         self.start_time = time.time()
         self.zero_voltage_start_time = None  # Track when voltage went to zero (absolute time)
         self.zero_voltage_duration = 0.0    # How long voltage has been zero
+        
+        # Store current values for health check reporter callback
+        self.last_freq = None
+        self.last_source = "Unknown"
 
         # Reset button state tracking
         self.reset_button_pressed = False
@@ -871,6 +876,54 @@ class FrequencyMonitor:
         
         # Start restart manager (auto-updates handled by system services)
         self.restart_manager.start_update_monitor()
+        
+        # Initialize health check reporter (if enabled)
+        self.health_check_reporter = None
+        try:
+            if self.config.get('health_check.enabled', False):
+                # Create callback function to get current state
+                def get_current_state():
+                    """Callback to get current system state for health check."""
+                    state_info = {}
+                    
+                    # Get memory info
+                    try:
+                        memory_info = self.memory_monitor.get_memory_info()
+                        if memory_info:
+                            state_info['memory_mb'] = memory_info.get('process_memory_mb', 0)
+                            state_info['memory_percent'] = memory_info.get('process_memory_percent', 0)
+                            state_info['system_memory_percent'] = memory_info.get('system_memory_percent', 0)
+                    except Exception as e:
+                        self.logger.debug(f"Error getting memory info for health check: {e}")
+                    
+                    # Get current frequency and power source (from most recent values)
+                    # These are set in the main loop, so we access them safely
+                    try:
+                        if hasattr(self, 'last_freq') and self.last_freq is not None:
+                            state_info['frequency'] = self.last_freq
+                        if hasattr(self, 'last_source') and self.last_source:
+                            state_info['power_source'] = self.last_source
+                        if hasattr(self, 'sample_count'):
+                            state_info['sample_count'] = self.sample_count
+                    except Exception as e:
+                        self.logger.debug(f"Error getting frequency info for health check: {e}")
+                    
+                    # Get current state from state machines
+                    try:
+                        primary_name = self.config.get('hardware.optocoupler.primary.name')
+                        if primary_name in self.state_machines:
+                            state_info_dict = self.state_machines[primary_name].get_state_info()
+                            state_info['current_state'] = state_info_dict.get('current_state', 'unknown')
+                    except Exception as e:
+                        self.logger.debug(f"Error getting state machine info for health check: {e}")
+                    
+                    return state_info
+                
+                self.health_check_reporter = HealthCheckReporter(
+                    self.config, self.logger, get_current_state
+                )
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize health check reporter: {e}")
     
     def _create_optocoupler_state_machines(self) -> Dict[str, PowerStateMachine]:
         """
@@ -1096,6 +1149,10 @@ class FrequencyMonitor:
                     # Not enough data for analysis yet - stay in Unknown state
                     avar_10s, std_freq = None, None
                     source = "Unknown"
+                
+                # Store current values for health check reporter callback
+                self.last_freq = freq
+                self.last_source = source
 
                 # Update state machines for each optocoupler
                 self.logger.debug("Updating state machines...")
@@ -1308,6 +1365,10 @@ class FrequencyMonitor:
     def cleanup(self):
         """Cleanup resources with verification."""
         self.logger.info("Cleaning up resources...")
+        
+        # Stop health check reporter
+        if self.health_check_reporter is not None:
+            self.health_check_reporter.stop()
         
         # Stop health monitoring
         self.health_monitor.stop()

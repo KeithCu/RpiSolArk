@@ -85,6 +85,13 @@ health:
   memory_warning_threshold: 0.8  # fraction of available memory
   cpu_warning_threshold: 0.8     # fraction of CPU usage
 
+# Health Check Reporting
+health_check:
+  enabled: false                 # Enable periodic health check reporting
+  endpoint_url: "http://example.com/api/health"  # URL endpoint to send GET requests to
+  interval_seconds: 300          # How often to send health checks (5 minutes)
+  timeout_seconds: 10            # Request timeout in seconds
+
 # Memory Monitoring
 memory:
   process_warning_mb: 500        # Process memory warning threshold (MB)
