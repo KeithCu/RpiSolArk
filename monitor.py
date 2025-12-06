@@ -418,13 +418,14 @@ class FrequencyAnalyzer:
         if not hasattr(self, 'hardware_manager'):
             return self._simulate_frequency()
         
-        # Check if optocoupler is available and enabled
+        # Use optocoupler with libgpiod (required - no fallback)
         if (hasattr(self.hardware_manager, 'optocoupler_initialized') and 
             self.hardware_manager.optocoupler_initialized):
             return self._count_optocoupler_frequency(duration)
         
-        # Fall back to original zero-crossing method
-        return self._count_zero_crossings_original(duration)
+        # Optocoupler not initialized - this should not happen if libgpiod is working
+        self.logger.error("Optocoupler not initialized - libgpiod setup failed")
+        return None
     
     def validate_signal_quality(self, freq: Optional[float], pulse_count: int, duration: float) -> bool:
         """Comprehensive signal quality validation for maximum accuracy."""
@@ -520,44 +521,6 @@ class FrequencyAnalyzer:
         except Exception as e:
             self.logger.error(f"Error in optocoupler frequency measurement: {e}")
             return None
-    
-    def _count_zero_crossings_original(self, duration: float = 0.5) -> Optional[float]:
-        """Original zero-crossing counting method (fallback)."""
-        # Validate duration parameter
-        if not isinstance(duration, (int, float)) or duration <= 0:
-            self.logger.error(f"Invalid duration parameter: {duration}. Must be a positive number.")
-            return None
-        
-        count = 0
-        start_time = time.time()
-        prev_state = self.hardware_manager.read_gpio()
-        
-        while time.time() - start_time < duration:
-            state = self.hardware_manager.read_gpio()
-            if state != prev_state and state == 1:  # Rising edge
-                count += 1
-            prev_state = state
-            time.sleep(0.00005)  # 50μs sleep for faster polling while avoiding CPU overload
-        
-        freq = count / (2 * duration)
-        
-        # Validate frequency is a number
-        if not isinstance(freq, (int, float)) or np.isnan(freq) or np.isinf(freq):
-            self.logger.error(f"Invalid frequency calculation result: {freq}")
-            return None
-        
-        # Filter erratic readings
-        try:
-            min_freq = self.config['sampling']['min_freq']
-            max_freq = self.config['sampling']['max_freq']
-        except KeyError as e:
-            raise KeyError(f"Missing required sampling configuration key: {e}")
-        
-        if freq < min_freq or freq > max_freq:
-            self.logger.warning(f"Invalid frequency reading: {freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
-            return None
-        
-        return float(freq)  # Ensure we return a Python float
     
     def _simulate_frequency(self) -> Optional[float]:
         """Simulate power state cycling: grid (20s) -> off-grid (10s) -> generator (20s) -> grid (40s).
@@ -842,6 +805,10 @@ class FrequencyMonitor:
         self.zero_voltage_start_time = None  # Track when voltage went to zero (absolute time)
         self.zero_voltage_duration = 0.0    # How long voltage has been zero
         
+        # Non-blocking measurement state
+        self.measurement_in_progress = False
+        self.has_new_reading = False  # Track if we have a new reading to process
+        
         # Store current values for health check reporter callback
         self.last_freq = None
         self.last_source = "Unknown"
@@ -1020,12 +987,17 @@ class FrequencyMonitor:
             # Get measurement duration once at start
             measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
             
+            # Start first measurement immediately (non-blocking)
+            if not simulator_mode:
+                self.hardware.start_measurement(duration=measurement_duration)
+                self.measurement_in_progress = True
+            
             while self.running:
                 elapsed_time = time.time() - self.start_time
                 
-                # Get frequency reading - always measure for full measurement_duration
+                # Get frequency reading - non-blocking for real hardware
                 if simulator_mode:
-                    # In simulator, generate a reading but simulate the 5-second measurement time
+                    # In simulator, generate a reading but simulate the measurement time
                     freq = self.analyzer._simulate_frequency()
                     # Log expected vs actual comparison for simulator debugging
                     expected_state = getattr(self.analyzer, 'simulator_state', 'unknown')
@@ -1048,81 +1020,126 @@ class FrequencyMonitor:
                     # Simulate the measurement duration by sleeping
                     time.sleep(measurement_duration)
                 else:
-                    # Real hardware: measure for full duration (blocks for measurement_duration seconds)
-                    freq = self.analyzer.count_zero_crossings(duration=measurement_duration)
-
-                # Track zero voltage duration
-                self.logger.debug("Tracking zero voltage duration...")
-                current_absolute_time = time.time()
-                if freq is None or freq == 0:
-                    # No frequency detected - voltage is zero
-                    if self.zero_voltage_start_time is None:
-                        self.zero_voltage_start_time = current_absolute_time
-                    self.zero_voltage_duration = current_absolute_time - self.zero_voltage_start_time
-                else:
-                    # Frequency detected - reset zero voltage tracking
-                    self.zero_voltage_start_time = None
-                    self.zero_voltage_duration = 0.0
-
-                # Validate frequency reading with enhanced accuracy checks
-                self.logger.debug("Validating frequency reading...")
-                if freq is None:
-                    self.logger.info(f"No frequency reading (zero voltage duration: {self.zero_voltage_duration:.1f}s)")
-                    # Continue processing even with no frequency for state machine updates
-                elif not isinstance(freq, (int, float)):
-                    self.logger.error(f"Invalid frequency data type: {type(freq)}. Expected number, got {freq}")
-                    continue
-                elif np.isnan(freq) or np.isinf(freq):
-                    self.logger.error(f"Invalid frequency value: {freq}")
-                    continue
-                else:
-                    # Enhanced validation for accuracy
-                    pulse_count = getattr(self, 'last_pulse_count', 0)  # Get from optocoupler if available
-                    validated_freq = self.analyzer.validate_frequency_reading(freq, pulse_count, measurement_duration)
-                    if validated_freq is None:
-                        self.logger.warning(f"Frequency reading failed validation: {freq:.2f}Hz")
-                        continue
+                    # Real hardware: check if measurement is complete (non-blocking)
+                    is_complete, pulse_count, actual_elapsed = self.hardware.check_measurement()
                     
-                    freq = validated_freq
-                
-                # Update buffers only with valid frequency readings
-                self.logger.debug("Updating buffers...")
-                if freq is not None:
-                    self.freq_buffer.append(freq)
-                    self.time_buffer.append(elapsed_time)
-                    self.sample_count += 1
+                    if is_complete:
+                        # Measurement complete - process result
+                        if pulse_count is not None and actual_elapsed is not None:
+                            # Calculate frequency from pulse count
+                            freq = self.hardware.calculate_frequency_from_pulses(
+                                pulse_count, measurement_duration, actual_duration=actual_elapsed
+                            )
+                            
+                            # Validate frequency range
+                            if freq is not None:
+                                try:
+                                    min_freq = self.config['sampling']['min_freq']
+                                    max_freq = self.config['sampling']['max_freq']
+                                except KeyError as e:
+                                    raise KeyError(f"Missing required sampling configuration key: {e}")
+                                
+                                if freq < min_freq or freq > max_freq:
+                                    self.logger.warning(f"Invalid frequency reading: {freq:.2f} Hz (outside range {min_freq}-{max_freq} Hz)")
+                                    freq = None
+                        else:
+                            freq = None
+                        
+                        # Mark that we have a new reading to process
+                        self.has_new_reading = True
+                        self.measurement_in_progress = False
+                        
+                        # Start next measurement immediately (non-blocking)
+                        if self.hardware.start_measurement(duration=measurement_duration):
+                            self.measurement_in_progress = True
+                        else:
+                            self.logger.warning("Failed to start next measurement")
+                            self.measurement_in_progress = False
+                    else:
+                        # Measurement still in progress - skip frequency processing this iteration
+                        # Main loop continues with other tasks (display updates, button checks, etc.)
+                        freq = None
+                        self.has_new_reading = False
 
-                # Validate buffers periodically
+                # Process frequency only if we have a new reading
+                # When measurement is in progress, skip frequency processing but continue with other tasks
+                if self.has_new_reading:
+                    # Track zero voltage duration
+                    self.logger.debug("Tracking zero voltage duration...")
+                    current_absolute_time = time.time()
+                    if freq is None or freq == 0:
+                        # No frequency detected - voltage is zero
+                        if self.zero_voltage_start_time is None:
+                            self.zero_voltage_start_time = current_absolute_time
+                        self.zero_voltage_duration = current_absolute_time - self.zero_voltage_start_time
+                    else:
+                        # Frequency detected - reset zero voltage tracking
+                        self.zero_voltage_start_time = None
+                        self.zero_voltage_duration = 0.0
+
+                    # Validate frequency reading with enhanced accuracy checks
+                    self.logger.debug("Validating frequency reading...")
+                    if freq is None:
+                        self.logger.info(f"No frequency reading (zero voltage duration: {self.zero_voltage_duration:.1f}s)")
+                        # Continue processing even with no frequency for state machine updates
+                    elif not isinstance(freq, (int, float)):
+                        self.logger.error(f"Invalid frequency data type: {type(freq)}. Expected number, got {freq}")
+                        # Skip frequency processing but continue loop
+                        freq = None
+                    elif np.isnan(freq) or np.isinf(freq):
+                        self.logger.error(f"Invalid frequency value: {freq}")
+                        # Skip frequency processing but continue loop
+                        freq = None
+                    else:
+                        # Enhanced validation for accuracy
+                        pulse_count = getattr(self, 'last_pulse_count', 0)  # Get from optocoupler if available
+                        validated_freq = self.analyzer.validate_frequency_reading(freq, pulse_count, measurement_duration)
+                        if validated_freq is None:
+                            self.logger.warning(f"Frequency reading failed validation: {freq:.2f}Hz")
+                            # Skip frequency processing but continue loop
+                            freq = None
+                        else:
+                            freq = validated_freq
+                    
+                    # Update buffers only with valid frequency readings
+                    self.logger.debug("Updating buffers...")
+                    if freq is not None:
+                        self.freq_buffer.append(freq)
+                        self.time_buffer.append(elapsed_time)
+                        self.sample_count += 1
+
+                # Validate buffers periodically (always check, even during measurement)
                 if self.sample_count - self.last_buffer_validation >= self.buffer_validation_interval:
                     self.validate_buffers()
                     self.last_buffer_validation = self.sample_count
 
-                # Pet the systemd watchdog
+                # Pet the systemd watchdog (always pet, even during measurement)
                 self._sd_notify("WATCHDOG=1")
 
-                # Analyze data only if we have enough data
+                # Analyze data only if we have a frequency reading (not during measurement)
                 # Use configurable analysis window for responsive detection while maintaining accuracy
                 # This balances detection speed with statistical reliability
-                self.logger.debug("Analyzing data...")
-                confidence = 0.0
-                
-                # Get analysis window from config
-                try:
-                    analysis_window_seconds = self.config.get_float('analysis.analysis_window_seconds')
-                except (KeyError, ValueError):
-                    analysis_window_seconds = 30.0  # Default fallback
-                
-                # Calculate how many samples to use based on analysis window
-                # Each measurement takes measurement_duration seconds
-                samples_for_analysis = int(analysis_window_seconds / measurement_duration)
-                samples_needed = 3  # Minimum: 3 samples required for analysis
-                
-                if freq is None:
-                    # No frequency reading - classify as Unknown
-                    self.logger.debug("No frequency reading - classifying as Unknown")
-                    source = "Unknown"
-                    avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
-                elif len(self.freq_buffer) >= samples_needed:
+                if freq is not None or (freq is None and not self.measurement_in_progress):
+                    self.logger.debug("Analyzing data...")
+                    confidence = 0.0
+                    
+                    # Get analysis window from config
+                    try:
+                        analysis_window_seconds = self.config.get_float('analysis.analysis_window_seconds')
+                    except (KeyError, ValueError):
+                        analysis_window_seconds = 30.0  # Default fallback
+                    
+                    # Calculate how many samples to use based on analysis window
+                    # Each measurement takes measurement_duration seconds
+                    samples_for_analysis = int(analysis_window_seconds / measurement_duration)
+                    samples_needed = 3  # Minimum: 3 samples required for analysis
+                    
+                    if freq is None:
+                        # No frequency reading - classify as Unknown
+                        self.logger.debug("No frequency reading - classifying as Unknown")
+                        source = "Unknown"
+                        avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
+                    elif len(self.freq_buffer) >= samples_needed:
                     # We have enough data - use 30-second analysis window (most recent samples)
                     # Take the most recent samples up to the analysis window size
                     samples_to_use = min(samples_for_analysis, len(self.freq_buffer))
@@ -1138,64 +1155,73 @@ class FrequencyMonitor:
                     if len(recent_data) >= 2:
                         freq_range = max(recent_data) - min(recent_data)
                         self.logger.debug(f"Recent frequency range: {freq_range:.2f} Hz (min: {min(recent_data):.2f}, max: {max(recent_data):.2f})")
-                else:
-                    self.logger.debug(f"Not enough samples for analysis (have {len(self.freq_buffer)}, need {samples_needed} sample(s), each covering {measurement_duration}s)")
-                    # Not enough data for analysis yet - stay in Unknown state
-                    avar_10s, std_freq = None, None
-                    source = "Unknown"
-                
-                # Store current values for health check reporter callback
-                self.last_freq = freq
-                self.last_source = source
+                    else:
+                        self.logger.debug(f"Not enough samples for analysis (have {len(self.freq_buffer)}, need {samples_needed} sample(s), each covering {measurement_duration}s)")
+                        # Not enough data for analysis yet - stay in Unknown state
+                        avar_10s, std_freq = None, None
+                        source = "Unknown"
+                    
+                    # Store current values for health check reporter callback
+                    self.last_freq = freq
+                    self.last_source = source
 
-                # Update state machines for each optocoupler
-                self.logger.debug("Updating state machines...")
-                current_states = {}
-                
-                # Update optocoupler state machine (simplified - no confidence)
-                primary_name = self.config.get('hardware.optocoupler.primary.name')
-                if primary_name in self.state_machines:
-                    current_states[primary_name] = self.state_machines[primary_name].update_state(
-                        freq, source, self.zero_voltage_duration
-                    )
-                
-                # Collect tuning data if enabled
-                self.logger.debug("Collecting tuning data...")
-                if self.tuning_collector.enabled:
+                    # Update state machines for each optocoupler
+                    self.logger.debug("Updating state machines...")
+                    current_states = {}
+                    
+                    # Update optocoupler state machine (simplified - no confidence)
+                    primary_name = self.config.get('hardware.optocoupler.primary.name')
+                    if primary_name in self.state_machines:
+                        current_states[primary_name] = self.state_machines[primary_name].update_state(
+                            freq, source, self.zero_voltage_duration
+                        )
+                    
+                    # Collect tuning data if enabled
+                    self.logger.debug("Collecting tuning data...")
+                    if self.tuning_collector.enabled:
+                        analysis_results = {
+                            'allan_variance': avar_10s,
+                            'std_deviation': std_freq
+                        }
+                        self.tuning_collector.collect_frequency_sample(freq, analysis_results, source)
+                        self.tuning_collector.collect_analysis_results(analysis_results, source, len(self.freq_buffer))
+                    
+                    # Log detailed frequency data if enabled
+                    self.logger.debug("Logging detailed frequency data...")
                     analysis_results = {
                         'allan_variance': avar_10s,
                         'std_deviation': std_freq
                     }
-                    self.tuning_collector.collect_frequency_sample(freq, analysis_results, source)
-                    self.tuning_collector.collect_analysis_results(analysis_results, source, len(self.freq_buffer))
+                    self.data_logger.log_detailed_frequency_data(
+                        freq, analysis_results, source, self.sample_count, 
+                        len(self.freq_buffer), self.start_time
+                    )
+                    
+                    # Log accuracy metrics for debugging
+                    self.log_accuracy_metrics(freq, source, analysis_results)
+                    
+                    # Mark that we've processed this reading
+                    self.has_new_reading = False
+                else:
+                    # Measurement in progress - skip frequency processing but keep other variables
+                    source = self.last_source  # Use last known source
+                    avar_10s, std_freq = None, None
                 
-                # Log detailed frequency data if enabled
-                self.logger.debug("Logging detailed frequency data...")
-                analysis_results = {
-                    'allan_variance': avar_10s,
-                    'std_deviation': std_freq
-                }
-                self.data_logger.log_detailed_frequency_data(
-                    freq, analysis_results, source, self.sample_count, 
-                    len(self.freq_buffer), self.start_time
-                )
-                
-                # Log accuracy metrics for debugging
-                self.log_accuracy_metrics(freq, source, analysis_results)
-                
-                # Update display and LEDs once per second
+                # Update display and LEDs once per second (always update, even during measurement)
                 self.logger.debug("Checking display update...")
                 display_interval = self.config.get_float('app.display_update_interval')
                 
                 if elapsed_time - self.last_display_time >= display_interval:
                     self.logger.debug("Updating display and LEDs...")
+                    # Use last known frequency if measurement in progress
+                    display_freq = self.last_freq if self.measurement_in_progress else freq
                     ug_indicator = self._get_power_source_indicator(source)
                     primary_name = self.config.get('hardware.optocoupler.primary.name')
                     primary_state_machine = self.state_machines.get(primary_name)
                     
                     if primary_state_machine:
                         self.hardware.display.update_display_and_leds(
-                            freq, ug_indicator, primary_state_machine, 
+                            display_freq, ug_indicator, primary_state_machine, 
                             self.zero_voltage_duration
                         )
                     self.last_display_time = elapsed_time
@@ -1254,8 +1280,15 @@ class FrequencyMonitor:
 
                     self.last_log_time = current_absolute_time
 
-                # No sleep needed - measurement already took measurement_duration seconds
-                # Loop will naturally run at rate: measurement_duration + processing time
+                # Sleep to prevent busy-waiting when measurement is in progress
+                # This keeps CPU usage low while maintaining responsiveness
+                if self.measurement_in_progress:
+                    # Small sleep during measurement to avoid busy-waiting
+                    # Still responsive enough for button checks and other tasks
+                    loop_sleep_interval = self.config.get_float('app.loop_sleep_interval', 0.05)  # Default 50ms
+                    time.sleep(loop_sleep_interval)
+                # When measurement completes, process immediately without sleep for best responsiveness
+                
                 self.logger.debug("Main loop iteration complete")
                 
         except Exception as e:

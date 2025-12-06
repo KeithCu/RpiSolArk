@@ -104,6 +104,7 @@ memory:
 app:
   simulator_mode: true     # Use real hardware in production
   display_update_interval: 1.0  # seconds between display updates
+  loop_sleep_interval: 0.05  # seconds to sleep when measurement in progress (50ms default, prevents busy-waiting)
   cleanup_on_exit: true
 
 # Data Collection & Tuning Mode

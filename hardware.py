@@ -39,9 +39,26 @@ class HardwareManager:
     
     # Delegate methods to component managers for backward compatibility
     
+    def start_measurement(self, duration: float = None, optocoupler_name: str = 'primary') -> bool:
+        """Start a non-blocking measurement window.
+        
+        Returns:
+            True if measurement started successfully, False otherwise
+        """
+        return self.optocoupler.start_measurement(duration, optocoupler_name)
+    
+    def check_measurement(self, optocoupler_name: str = 'primary') -> Tuple[bool, Optional[int], Optional[float]]:
+        """Check if the current measurement window has elapsed.
+        
+        Returns:
+            Tuple of (is_complete, pulse_count, actual_elapsed_time)
+        """
+        return self.optocoupler.check_measurement(optocoupler_name)
+    
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
                                  optocoupler_name: str = 'primary') -> Tuple[int, float]:
         """Count optocoupler pulses over specified duration.
+        BLOCKING VERSION - Use start_measurement()/check_measurement() for non-blocking operation.
         
         Returns:
             Tuple of (pulse_count, actual_elapsed_time)

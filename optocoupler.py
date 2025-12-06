@@ -59,6 +59,12 @@ class SingleOptocoupler:
         self.recovery_attempts = 0
         self.max_recovery_attempts = config.get('hardware.optocoupler.max_recovery_attempts')
         
+        # Non-blocking measurement state
+        self.measurement_active = False
+        self.measurement_start_time = None
+        self.measurement_duration = None
+        self.measurement_lock = threading.Lock()
+        
         # Initialize GIL-safe counter (required)
         self.counter = create_counter(self.logger)
         self.logger.info(f"GIL-safe counter initialized for {self.name}")
@@ -86,17 +92,11 @@ class SingleOptocoupler:
             
             # Use libgpiod only - don't mix with RPi.GPIO to avoid conflicts
             # Set up GIL-free interrupt detection using working libgpiod
-            try:
-                if self.counter.register_pin(self.pin):
-                    self.logger.info(f"{self.name} optocoupler libgpiod interrupt detection configured")
-                    self.initialized = True
-                else:
-                    raise Exception("libgpiod counter setup failed")
-            except Exception as e:
-                self.logger.warning(f"Could not set up libgpiod interrupt detection for {self.name}: {e}")
-                self.logger.info(f"Will use polling method for {self.name} pulse detection")
-                # Still mark as initialized for polling fallback
+            if self.counter.register_pin(self.pin):
+                self.logger.info(f"{self.name} optocoupler libgpiod interrupt detection configured")
                 self.initialized = True
+            else:
+                raise Exception("libgpiod counter setup failed")
             
             self.logger.info(f"{self.name} optocoupler setup completed successfully")
             
@@ -104,9 +104,105 @@ class SingleOptocoupler:
             self.logger.error(f"Failed to setup {self.name} optocoupler: {e}")
             self.initialized = False
     
+    def start_measurement(self, duration: float = None) -> bool:
+        """
+        Start a non-blocking measurement window.
+        
+        Args:
+            duration: Duration in seconds to count pulses (uses config default if None)
+            
+        Returns:
+            True if measurement started successfully, False otherwise
+        """
+        if not self.initialized:
+            self.logger.warning(f"{self.name} optocoupler not initialized, cannot start measurement")
+            return False
+        
+        # Check health before measurement
+        if not self.check_health():
+            self.logger.warning(f"{self.name} optocoupler unhealthy, cannot start measurement")
+            return False
+        
+        if duration is None:
+            duration = self.measurement_duration
+        
+        with self.measurement_lock:
+            # If a measurement is already active, don't start a new one
+            if self.measurement_active:
+                self.logger.debug(f"{self.name} measurement already active, skipping start")
+                return False
+            
+            try:
+                # Reset counter before measurement
+                self.counter.reset_count(self.pin)
+                
+                # Record measurement start time and duration
+                self.measurement_start_time = time.perf_counter()
+                self.measurement_duration = duration
+                self.measurement_active = True
+                
+                self.logger.debug(f"{self.name} started non-blocking measurement (duration: {duration:.2f}s)")
+                return True
+                
+            except Exception as e:
+                self.logger.error(f"{self.name} failed to start measurement: {e}")
+                self.measurement_active = False
+                return False
+    
+    def check_measurement(self) -> Tuple[bool, Optional[int], Optional[float]]:
+        """
+        Check if the current measurement window has elapsed.
+        
+        Returns:
+            Tuple of (is_complete, pulse_count, actual_elapsed_time):
+            - is_complete: True if measurement is complete, False if still in progress
+            - pulse_count: Number of pulses counted (None if not complete)
+            - actual_elapsed_time: Actual elapsed time in seconds (None if not complete)
+        """
+        with self.measurement_lock:
+            if not self.measurement_active:
+                return (False, None, None)
+            
+            current_time = time.perf_counter()
+            elapsed = current_time - self.measurement_start_time
+            
+            # Check if measurement window has elapsed
+            if elapsed < self.measurement_duration:
+                # Still in progress
+                return (False, None, None)
+            
+            # Measurement complete - retrieve results
+            try:
+                pulse_count = self.counter.get_count(self.pin)
+                
+                # Validate pulse count
+                if pulse_count < 0:
+                    self.consecutive_errors += 1
+                    self.logger.warning(f"{self.name} invalid pulse count: {pulse_count}")
+                    self.measurement_active = False
+                    return (True, 0, elapsed)
+                
+                # Reset error count on successful measurement
+                self.consecutive_errors = 0
+                self.last_successful_count = pulse_count
+                
+                self.logger.debug(f"{self.name} measurement complete: {pulse_count} pulses in {elapsed:.3f} seconds")
+                
+                # Mark measurement as complete
+                self.measurement_active = False
+                
+                return (True, pulse_count, elapsed)
+                
+            except Exception as e:
+                self.consecutive_errors += 1
+                self.logger.error(f"{self.name} error checking measurement: {e}")
+                self.measurement_active = False
+                return (True, 0, elapsed)
+    
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> Tuple[int, float]:
         """
         Count optocoupler pulses over specified duration using working libgpiod.
+        BLOCKING VERSION - Use start_measurement()/check_measurement() for non-blocking operation.
         Uses interrupt-based counting for maximum accuracy and performance.
         
         Args:
@@ -585,10 +681,57 @@ class OptocouplerManager:
         except Exception as e:
             self.logger.warning(f"Thread priority setup failed: {e}")
     
+    def start_measurement(self, duration: float = None, optocoupler_name: str = 'primary') -> bool:
+        """
+        Start a non-blocking measurement window.
+        
+        Args:
+            duration: Duration in seconds to count pulses (uses config default if None)
+            optocoupler_name: Name of optocoupler to use ('primary' only)
+            
+        Returns:
+            True if measurement started successfully, False otherwise
+        """
+        if not self.optocoupler_enabled:
+            self.logger.debug("Optocoupler disabled, cannot start measurement")
+            return False
+            
+        if optocoupler_name not in self.optocouplers:
+            self.logger.warning(f"Optocoupler '{optocoupler_name}' not found")
+            return False
+        
+        optocoupler = self.optocouplers[optocoupler_name]
+        return optocoupler.start_measurement(duration)
+    
+    def check_measurement(self, optocoupler_name: str = 'primary') -> Tuple[bool, Optional[int], Optional[float]]:
+        """
+        Check if the current measurement window has elapsed.
+        
+        Args:
+            optocoupler_name: Name of optocoupler to use ('primary' only)
+            
+        Returns:
+            Tuple of (is_complete, pulse_count, actual_elapsed_time):
+            - is_complete: True if measurement is complete, False if still in progress
+            - pulse_count: Number of pulses counted (None if not complete)
+            - actual_elapsed_time: Actual elapsed time in seconds (None if not complete)
+        """
+        if not self.optocoupler_enabled:
+            self.logger.debug("Optocoupler disabled, measurement not available")
+            return (False, None, None)
+            
+        if optocoupler_name not in self.optocouplers:
+            self.logger.warning(f"Optocoupler '{optocoupler_name}' not found")
+            return (False, None, None)
+        
+        optocoupler = self.optocouplers[optocoupler_name]
+        return optocoupler.check_measurement()
+    
     def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
                                 optocoupler_name: str = 'primary') -> Tuple[int, float]:
         """
         Count optocoupler pulses over specified duration using working libgpiod.
+        BLOCKING VERSION - Use start_measurement()/check_measurement() for non-blocking operation.
         Uses interrupt-based counting for maximum accuracy.
         
         Args:
