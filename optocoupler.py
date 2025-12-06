@@ -11,6 +11,7 @@ import os
 import statistics
 from typing import Optional, Tuple, List, Dict, Any
 import psutil
+import numpy as np
 
 # Hardware imports with graceful degradation
 try:
@@ -22,6 +23,12 @@ except (ImportError, RuntimeError) as e:
 
 # GIL-safe counter imports (required)
 from gpio_event_counter import create_counter
+
+# Global flags for regression-based frequency calculation
+# Set ENABLE_REGRESSION_COMPARISON = True to calculate and log regression results alongside standard results
+ENABLE_REGRESSION_COMPARISON = True
+# Set USE_REGRESSION_FOR_RESULT = True to return regression result instead of standard result
+USE_REGRESSION_FOR_RESULT = False
 
 
 class SingleOptocoupler:
@@ -158,6 +165,63 @@ class SingleOptocoupler:
             self.logger.error(f"{self.name} pulse counting error: {e}")
             return (0, 0.0)
     
+    def calculate_frequency_regression(self, pulse_count: int, duration: float = None) -> Optional[float]:
+        """
+        Calculate AC frequency using linear regression on all pulse timestamps.
+        This method uses all timestamps to reduce the impact of individual timestamp jitter.
+        
+        Args:
+            pulse_count: Number of pulses counted (used for validation)
+            duration: Requested duration in seconds (used for logging)
+            
+        Returns:
+            Calculated frequency in Hz, or None if invalid
+        """
+        if pulse_count < 2:
+            return None
+        
+        try:
+            # Retrieve full list of timestamps
+            timestamps_ns = self.counter.get_timestamps(self.pin)
+            
+            if len(timestamps_ns) < 2:
+                return None
+            
+            # Convert timestamps to relative time in seconds (starting from 0)
+            t_first = timestamps_ns[0]
+            times_sec = np.array([(ts - t_first) / 1e9 for ts in timestamps_ns])
+            
+            # Create pulse indices (0, 1, 2, ..., n-1)
+            pulse_indices = np.arange(len(timestamps_ns))
+            
+            # Perform linear regression: time = slope * index + intercept
+            # We want to find the slope (seconds per pulse interval)
+            try:
+                slope, intercept = np.polyfit(pulse_indices, times_sec, 1)
+            except Exception as e:
+                self.logger.warning(f"{self.name} regression polyfit failed: {e}")
+                return None
+            
+            # Slope represents seconds per pulse interval
+            # Frequency = 1 / (slope * pulses_per_cycle)
+            if slope <= 0:
+                self.logger.warning(f"{self.name} invalid regression slope: {slope}")
+                return None
+            
+            frequency = 1.0 / (slope * self.pulses_per_cycle)
+            
+            # Sanity check (40-80Hz range) to prevent gross outliers
+            if 40 <= frequency <= 80:
+                self.logger.debug(f"{self.name} regression frequency: {frequency:.3f} Hz (from {len(timestamps_ns)} timestamps)")
+                return frequency
+            else:
+                self.logger.warning(f"{self.name} regression frequency {frequency:.3f} Hz out of range")
+                return None
+                
+        except Exception as e:
+            self.logger.warning(f"{self.name} regression calculation failed: {e}")
+            return None
+    
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, actual_duration: float = None) -> Optional[float]:
         """
         Calculate AC frequency from pulse count using correct libgpiod calculation.
@@ -180,6 +244,11 @@ class SingleOptocoupler:
         if pulse_count <= 0 or measurement_duration <= 0:
             return None
         
+        # Calculate regression-based frequency if enabled for comparison
+        freq_regression = None
+        if ENABLE_REGRESSION_COMPARISON:
+            freq_regression = self.calculate_frequency_regression(pulse_count, duration)
+        
         # METHOD 1: Precise Timestamp Interval Analysis
         # This method eliminates synchronization errors between CPU sleep time and pulse arrival.
         # It calculates frequency based on the exact time elapsed between the first and last pulse.
@@ -188,6 +257,7 @@ class SingleOptocoupler:
         
         # Use the stats retrieved in count_optocoupler_pulses if available
         # (This assumes count_optocoupler_pulses was called just before this)
+        freq_first_last = None
         try:
             stat_count, t_first, t_last = self.counter.get_frequency_info(self.pin)
             self.logger.debug(f"Timestamp debug: count={stat_count}, duration_ns={t_last - t_first if stat_count > 1 else 0}")
@@ -209,16 +279,28 @@ class SingleOptocoupler:
                     # 3. Our 0.2ms debounce filters out the falling edge of each pulse.
                     # 4. Therefore, we count exactly 1 rising edge per zero-crossing.
                     # Total: 2 events per AC cycle.
-                    precise_freq = (num_intervals * 1e9) / (duration_ns * 2)
+                    freq_first_last = (num_intervals * 1e9) / (duration_ns * self.pulses_per_cycle)
                     
                     # Sanity check (40-80Hz range) to prevent gross outliers from single glitches
-                    if 40 <= precise_freq <= 80:
-                        self.logger.debug(f"{self.name} precision frequency: {precise_freq:.3f} Hz (from {stat_count} pulses over {duration_ns/1e9:.3f}s)")
-                        return precise_freq
+                    if 40 <= freq_first_last <= 80:
+                        self.logger.debug(f"{self.name} precision frequency: {freq_first_last:.3f} Hz (from {stat_count} pulses over {duration_ns/1e9:.3f}s)")
                     else:
-                        self.logger.warning(f"{self.name} precision frequency {precise_freq:.3f} Hz out of range, falling back to average")
+                        self.logger.warning(f"{self.name} precision frequency {freq_first_last:.3f} Hz out of range, falling back to average")
+                        freq_first_last = None
         except Exception as e:
             self.logger.warning(f"{self.name} timestamp analysis failed: {e}")
+        
+        # Log comparison if both methods succeeded and comparison is enabled
+        if ENABLE_REGRESSION_COMPARISON and freq_first_last is not None and freq_regression is not None:
+            diff = abs(freq_regression - freq_first_last)
+            diff_pct = (diff / freq_first_last) * 100 if freq_first_last > 0 else 0
+            self.logger.info(f"{self.name} frequency comparison: First/Last={freq_first_last:.6f} Hz, Regression={freq_regression:.6f} Hz, Diff={diff:.6f} Hz ({diff_pct:.3f}%)")
+        
+        # Use regression result if enabled and available, otherwise use first/last
+        if USE_REGRESSION_FOR_RESULT and freq_regression is not None:
+            return freq_regression
+        elif freq_first_last is not None:
+            return freq_first_last
 
         # METHOD 2: Average Frequency (Fallback)
         # Calculate frequency using correct libgpiod calculation for AC-into-DC-optocoupler
@@ -229,7 +311,7 @@ class SingleOptocoupler:
         # So we divide by 4 to convert edge count to frequency
         # UPDATE: With 0.2ms debounce, we filter the falling edge (pulse width ~33us).
         # So we count 2 edges per cycle.
-        frequency = pulse_count / (measurement_duration * 2)  # 2 edges per AC cycle (Debounced)
+        frequency = pulse_count / (measurement_duration * self.pulses_per_cycle)  # 2 edges per AC cycle (Debounced)
         
         if actual_duration is not None and abs(actual_duration - duration) > 0.001:
             self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {actual_duration:.3f}s (requested: {duration:.3f}s)")
