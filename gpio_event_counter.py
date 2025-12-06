@@ -10,6 +10,7 @@ import sys
 import time
 import logging
 import threading
+import datetime
 from typing import Optional, Dict, Tuple
 
 import gpiod  # libgpiod v2 Python bindings

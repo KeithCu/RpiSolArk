@@ -654,13 +654,12 @@ class SolArkIntegration:
                 except Exception as e:
                     self.logger.error(f"Error in TOU toggle operation: {e}")
                 finally:
-                    # Clear thread reference when operation completes
+                    # Clear thread reference when operation completes (while lock is still held)
                     if self.active_toggle_thread == current_thread:
                         self.active_toggle_thread = None
-                    # Remove from active threads list
-                    with self.operation_lock:
-                        if current_thread in self.active_threads:
-                            self.active_threads.remove(current_thread)
+                    # Remove from active threads list (lock is still held from outer 'with' block)
+                    if current_thread in self.active_threads:
+                        self.active_threads.remove(current_thread)
         
         # Run in separate thread to avoid blocking
         thread = threading.Thread(target=do_toggle_with_lock, daemon=True)
