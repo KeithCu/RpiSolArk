@@ -352,18 +352,36 @@ class MemoryMonitor:
             # Remove oldest backup files beyond backup_count
             base_name = filepath.replace('.csv', '')
             backup_pattern = f"{base_name}.csv.*"
-            backup_files = sorted(glob.glob(backup_pattern), reverse=True)
+            backup_files = glob.glob(backup_pattern)
             
-            # Remove excess backup files
-            for old_backup in backup_files[self.csv_backup_count - 1:]:
+            # Extract numeric suffix and sort numerically (oldest first)
+            def get_backup_number(filename: str) -> int:
+                """Extract backup number from filename like 'file.csv.3' -> 3"""
+                try:
+                    suffix = filename.rsplit('.csv.', 1)[1]
+                    return int(suffix)
+                except (ValueError, IndexError):
+                    return 0
+            
+            # Sort by backup number (ascending: oldest first)
+            backup_files = sorted(backup_files, key=get_backup_number)
+            
+            # We want to keep (csv_backup_count - 1) files before creating the new .csv.1
+            # So remove files beyond that count (the oldest ones)
+            files_to_keep = self.csv_backup_count - 1
+            files_to_remove = backup_files[files_to_keep:] if len(backup_files) > files_to_keep else []
+            
+            # Remove excess backup files (oldest ones)
+            for old_backup in files_to_remove:
                 try:
                     os.remove(old_backup)
                     self.logger.debug(f"Removed old backup file: {old_backup}")
                 except OSError as e:
                     self.logger.warning(f"Failed to remove old backup file {old_backup}: {e}")
             
-            # Shift existing backup files
-            for i in range(min(len(backup_files), self.csv_backup_count - 1), 0, -1):
+            # Shift existing backup files (only those we're keeping)
+            # Work backwards from highest number to avoid overwriting files we need
+            for i in range(files_to_keep, 0, -1):
                 old_name = f"{base_name}.csv.{i}"
                 new_name = f"{base_name}.csv.{i + 1}"
                 if os.path.exists(old_name):

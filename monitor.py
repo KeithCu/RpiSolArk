@@ -54,7 +54,18 @@ class PowerStateMachine:
         self.optocoupler_name = optocoupler_name  # Name of the optocoupler this state machine manages
         
         # Persistent state configuration
-        self.state_file = f"/tmp/{config.get('state_machine.state_file')}"
+        module_dir = os.path.dirname(os.path.abspath(__file__))
+        raw_state_file = config.get('state_machine.state_file')
+        if not raw_state_file:
+            raise ValueError("state_machine.state_file must be configured")
+
+        # Keep it simple: if absolute, use it; otherwise place alongside this module.
+        if os.path.isabs(raw_state_file):
+            self.state_file = raw_state_file
+        else:
+            self.state_file = os.path.join(module_dir, os.path.basename(raw_state_file))
+
+        os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
         self.persistent_state_enabled = config.get('state_machine.persistent_state_enabled')
 
         # Ensure /tmp directory exists (it should, but be safe)
@@ -692,11 +703,11 @@ class FrequencyAnalyzer:
         return avar_10s, std_freq
     
     def classify_power_source(self, avar_10s: Optional[float], std_freq: Optional[float], sample_count: int = None) -> str:
-        """Classify as Generac generator or utility using simplified OR logic (std_dev OR allan_variance).
+        """Classify power source with stabilized thresholds and simpler rules.
         
-        For small sample sizes (< 5), only use std_dev as Allan variance is too noisy.
-        For medium sample sizes (5-9), use AND logic (both metrics must exceed thresholds) to prevent false positives.
-        For larger sample sizes (>= 10), use OR logic for maximum detection sensitivity.
+        - Require a few samples before classifying.
+        - Use std-dev until Allan variance has enough samples to settle.
+        - Then use simple OR logic (either metric beyond threshold => generator).
         """
         if std_freq is None:
             return "Unknown"
@@ -716,45 +727,20 @@ class FrequencyAnalyzer:
             self.logger.error(f"Invalid threshold values: avar={avar_thresh}, std={std_thresh}. Error: {e}")
             return "Unknown"
         
-        # For small sample sizes (< 5), primarily use std_dev as Allan variance is too noisy
-        # However, if Allan variance is VERY high (>10x threshold), that's a strong generator signal
-        # This prevents false positives from unstable Allan variance while catching strong generator signals early
-        if sample_count is not None and sample_count < 5:
-            # Check for very high Allan variance first (strong generator signal)
-            if avar_10s is not None and avar_10s > (avar_thresh * 10.0):
-                return "Generac Generator"
-            # Otherwise, use std_dev for small sample sizes
-            if std_freq > std_thresh:
-                return "Generac Generator"
-            return "Utility Grid"
+        # Normalize sample count
+        sample_count = sample_count or 0
+        min_samples_for_any = 3
+        min_samples_for_avar = 6  # allow Allan variance to stabilize
         
-        # For medium sample sizes (5-9), use smart logic to prevent false positives while catching generators
-        # If Allan variance is VERY high (>10x threshold), that's a strong generator signal regardless of std_dev
-        # Otherwise, use AND logic to prevent false positives from noisy Allan variance
-        if sample_count is not None and 5 <= sample_count < 10:
-            if avar_10s is None:
-                # Fallback to std_dev only if Allan variance not available
-                if std_freq > std_thresh:
-                    return "Generac Generator"
-                return "Utility Grid"
-            # If Allan variance is VERY high (>10x threshold), that's a strong generator signal
-            # This catches generators even if std_dev is slightly below threshold
-            if avar_10s > (avar_thresh * 10.0):
-                return "Generac Generator"
-            # Otherwise, use AND logic: both metrics must exceed thresholds
-            # This prevents false positives from noisy Allan variance at small values
-            if avar_10s > avar_thresh and std_freq > std_thresh:
-                return "Generac Generator"
-            return "Utility Grid"
+        # Not enough data yet
+        if sample_count < min_samples_for_any:
+            return "Unknown"
         
-        # For larger sample sizes (>= 10), use OR logic: if EITHER metric exceeds threshold → generator
-        # Allan variance is more reliable with more samples, so we can use OR logic for maximum sensitivity
-        if avar_10s is None:
-            # Fallback to std_dev only if Allan variance not available
-            if std_freq > std_thresh:
-                return "Generac Generator"
-            return "Utility Grid"
+        # Until Allan variance has enough samples (or is missing), rely on std-dev only
+        if sample_count < min_samples_for_avar or avar_10s is None:
+            return "Generac Generator" if std_freq > std_thresh else "Utility Grid"
         
+        # Stable window: simple OR logic
         if avar_10s > avar_thresh or std_freq > std_thresh:
             return "Generac Generator"
         return "Utility Grid"

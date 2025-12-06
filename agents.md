@@ -65,7 +65,7 @@ This document provides comprehensive guidance for new developers joining the Rpi
 **Key Features**:
 - Delegates to specialized component managers (`gpio`, `optocoupler`, `display`).
 - Graceful degradation when hardware (GPIO, LCD) is unavailable.
-- **Thread Priority**: Sets high process priority and CPU affinity (Core 3) for stable timing.
+- Process priority / CPU affinity is handled inside `optocoupler.py` when measurements start (not in `hardware.py`).
 
 ### 3. display.py - Display and LED Management
 
@@ -191,15 +191,15 @@ The optocoupler module now supports two frequency calculation methods that can r
 
 ### 9. health.py - System Monitoring
 
-**Purpose**: Monitors system health (CPU, RAM) and integrates with systemd watchdog.
+**Purpose**: Monitors system health (CPU, RAM).
 
 **Key Classes**:
-- `HealthMonitor`: Resource tracking and systemd watchdog notifications.
+- `HealthMonitor`: Resource tracking and warning logs.
 - `MemoryMonitor`: Tracks process memory and triggers GC if needed.
 
 **Key Features**:
-- **Systemd Watchdog Integration**: Sends watchdog notifications to systemd for automatic service restart.
 - **Resource Monitoring**: Tracks CPU, memory, threads, and file handles.
+- **Systemd Watchdog**: Implemented in `monitor.py` via `sd_notify` and the systemd unit’s `WatchdogSec`.
 - **Atomic CSV Logging**: Uses `fcntl` locking for safe log writes.
 
 ### 10. setup_zero_code_updates.sh - Auto-Update System
@@ -220,12 +220,16 @@ The optocoupler module now supports two frequency calculation methods that can r
 
 The system uses **two complementary analysis methods** (simplified for reliability and maintainability):
 
-1. **Standard Deviation**: Measures overall frequency spread (100% detection rate - catches all generator instability patterns).
-2. **Allan Variance**: Detects short-term frequency instability and temporal hunting patterns (75% detection rate - catches temporal patterns std dev might miss).
+1. **Standard Deviation**: Measures overall frequency spread (catches wide swings).
+2. **Allan Variance**: Detects short-term instability and hunting patterns.
 
-**Generator Detection**: Generators exhibit "hunting" patterns (oscillations around 60Hz). Utility grid is typically very stable. 
+**Generator Detection**: Generators exhibit "hunting" patterns (oscillations around 60Hz). Utility grid is typically very stable.
 
-**Simplified OR Logic**: The system uses simple OR logic: if EITHER metric exceeds threshold → generator detected. This maintains 100% accuracy while keeping the code simple and maintainable.
+**Classification Logic**: Sample-count-aware and simplified:
+- <3 samples: no decision (Unknown)
+- 3–5 samples: std-dev only
+- ≥6 samples: std-dev OR Allan variance
+- Future analysis: consider entry/exit hysteresis to further damp transitions.
 
 **Note**: Kurtosis was removed (only 25% effective) and confidence scoring was simplified to simple debouncing. See [SIMPLIFICATION_PROPOSAL.md](SIMPLIFICATION_PROPOSAL.md) for details.
 
@@ -234,7 +238,7 @@ The system uses **two complementary analysis methods** (simplified for reliabili
 **States**: `OFF_GRID`, `GRID`, `GENERATOR`, `TRANSITIONING`.
 
 **Features**:
-- **Persistence**: Saves state to JSON to survive restarts.
+- **Persistence**: Saves state to JSON next to the code (`monitor.py` directory unless an absolute path is provided).
 - **Simple Debouncing**: Requires state to be consistent for 5 seconds before transitioning (prevents rapid state changes).
 - **Upgrade Lock**: Creates `/var/run/unattended-upgrades.lock` during Off-Grid/Generator states to prevent system updates from causing downtime when power is critical.
 
