@@ -999,6 +999,8 @@ class FrequencyMonitor:
                 if simulator_mode:
                     # In simulator, generate a reading but simulate the measurement time
                     freq = self.analyzer._simulate_frequency()
+                    # Mark that we have a new reading to process
+                    self.has_new_reading = True
                     # Log expected vs actual comparison for simulator debugging
                     expected_state = getattr(self.analyzer, 'simulator_state', 'unknown')
                     if freq is not None:
@@ -1140,21 +1142,21 @@ class FrequencyMonitor:
                         source = "Unknown"
                         avar_10s, std_freq, kurtosis, quality_score = None, None, None, None
                     elif len(self.freq_buffer) >= samples_needed:
-                    # We have enough data - use 30-second analysis window (most recent samples)
-                    # Take the most recent samples up to the analysis window size
-                    samples_to_use = min(samples_for_analysis, len(self.freq_buffer))
-                    self.logger.debug(f"Analysis with {len(self.freq_buffer)} samples in buffer (using last {samples_to_use} samples = {samples_to_use * measurement_duration:.1f}s window)")
-                    recent_data = list(self.freq_buffer)[-samples_to_use:]
-                    
-                    # Simplified signal analysis (std_dev + allan_variance only)
-                    avar_10s, std_freq = self.analyzer.analyze_signal_quality(recent_data)
-                    source = self.analyzer.classify_power_source(avar_10s, std_freq, len(recent_data))
-                    
-                    # Debug logging for classification
-                    self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, source={source}")
-                    if len(recent_data) >= 2:
-                        freq_range = max(recent_data) - min(recent_data)
-                        self.logger.debug(f"Recent frequency range: {freq_range:.2f} Hz (min: {min(recent_data):.2f}, max: {max(recent_data):.2f})")
+                        # We have enough data - use 30-second analysis window (most recent samples)
+                        # Take the most recent samples up to the analysis window size
+                        samples_to_use = min(samples_for_analysis, len(self.freq_buffer))
+                        self.logger.debug(f"Analysis with {len(self.freq_buffer)} samples in buffer (using last {samples_to_use} samples = {samples_to_use * measurement_duration:.1f}s window)")
+                        recent_data = list(self.freq_buffer)[-samples_to_use:]
+                        
+                        # Simplified signal analysis (std_dev + allan_variance only)
+                        avar_10s, std_freq = self.analyzer.analyze_signal_quality(recent_data)
+                        source = self.analyzer.classify_power_source(avar_10s, std_freq, len(recent_data))
+                        
+                        # Debug logging for classification
+                        self.logger.debug(f"Analysis results: avar={avar_10s}, std={std_freq}, source={source}")
+                        if len(recent_data) >= 2:
+                            freq_range = max(recent_data) - min(recent_data)
+                            self.logger.debug(f"Recent frequency range: {freq_range:.2f} Hz (min: {min(recent_data):.2f}, max: {max(recent_data):.2f})")
                     else:
                         self.logger.debug(f"Not enough samples for analysis (have {len(self.freq_buffer)}, need {samples_needed} sample(s), each covering {measurement_duration}s)")
                         # Not enough data for analysis yet - stay in Unknown state
