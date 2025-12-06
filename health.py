@@ -305,89 +305,40 @@ class MemoryMonitor:
             f"GC Objects: {memory_info['gc_objects']}"
         )
     
-    def _atomic_write_csv(self, filepath: str, data_rows: list, headers: list = None):
-        """Write CSV data atomically with file locking."""
-        temp_file = f"{filepath}.tmp"
-        
+    def _append_csv_locked(self, filepath: str, data_rows: list, headers: list = None):
+        """Append CSV data with file locking (flock)."""
         try:
-            # Write to temporary file
-            with open(temp_file, 'w', newline='') as f:
-                # Acquire exclusive lock
+            # Check if file exists/is empty to decide on headers
+            file_exists = os.path.exists(filepath) and os.path.getsize(filepath) > 0
+            
+            with open(filepath, 'a', newline='') as f:
+                # Acquire exclusive lock for appending
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 
                 writer = csv.writer(f)
                 
-                # Write headers if provided
-                if headers:
+                # Write headers if file is new/empty and headers provided
+                if not file_exists and headers:
                     writer.writerow(headers)
                 
                 # Write data rows
                 for row in data_rows:
                     writer.writerow(row)
                 
-                # Flush to disk (let OS handle sync for better SD card life)
+                # Flush and sync to ensure data is written
                 f.flush()
-                # os.fsync(f.fileno()) - Removed to reduce SD card wear
-            
-            # Atomic rename
-            os.rename(temp_file, filepath)
-            self.logger.debug(f"Atomic write completed: {filepath}")
-            
-        except Exception as e:
-            # Clean up temp file on error
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            self.logger.error(f"Atomic write failed for {filepath}: {e}")
-            raise
-    
-    def _rotate_csv_file_if_needed(self, filepath: str, max_size: int) -> None:
-        """Rotate CSV file if it exceeds max_size, keeping backup_count files."""
-        try:
-            if not os.path.exists(filepath):
-                return
-            
-            file_size = os.path.getsize(filepath)
-            if file_size < max_size:
-                return
-            
-            self.logger.info(f"CSV file {filepath} size ({file_size} bytes) exceeds limit ({max_size} bytes), rotating...")
-            
-            # Remove oldest backup files beyond backup_count
-            base_name = filepath.replace('.csv', '')
-            backup_pattern = f"{base_name}.csv.*"
-            backup_files = sorted(glob.glob(backup_pattern), reverse=True)
-            
-            # Remove excess backup files
-            for old_backup in backup_files[self.csv_backup_count - 1:]:
-                try:
-                    os.remove(old_backup)
-                    self.logger.debug(f"Removed old backup file: {old_backup}")
-                except OSError as e:
-                    self.logger.warning(f"Failed to remove old backup file {old_backup}: {e}")
-            
-            # Shift existing backup files
-            for i in range(min(len(backup_files), self.csv_backup_count - 1), 0, -1):
-                old_name = f"{base_name}.csv.{i}"
-                new_name = f"{base_name}.csv.{i + 1}"
-                if os.path.exists(old_name):
-                    try:
-                        os.rename(old_name, new_name)
-                    except OSError as e:
-                        self.logger.warning(f"Failed to rename backup file {old_name} to {new_name}: {e}")
-            
-            # Move current file to .1
-            backup_name = f"{base_name}.csv.1"
-            try:
-                os.rename(filepath, backup_name)
-                self.logger.info(f"Rotated CSV file: {filepath} -> {backup_name}")
-            except OSError as e:
-                self.logger.error(f"Failed to rotate CSV file {filepath}: {e}")
+                # os.fsync(f.fileno()) - Optional: fsync for durability
                 
+                # Lock releases automatically on close
+                
+            self.logger.debug(f"Appended to CSV: {filepath}")
+            
         except Exception as e:
-            self.logger.error(f"Error during CSV file rotation for {filepath}: {e}")
-    
+            self.logger.error(f"Failed to append to CSV {filepath}: {e}")
+            raise
+
     def log_memory_to_csv(self, csv_file: str) -> None:
-        """Log memory information to CSV file using atomic writes."""
+        """Log memory information to CSV file using locked append."""
         try:
             # Check if file rotation is needed before writing
             self._rotate_csv_file_if_needed(csv_file, self.memory_log_max_size)
@@ -395,9 +346,6 @@ class MemoryMonitor:
             memory_info = self.get_memory_info()
             if not memory_info:
                 return
-            
-            # Check if file exists to determine if we need headers
-            file_exists = os.path.exists(csv_file)
             
             # Prepare data row
             data_row = [
@@ -412,17 +360,15 @@ class MemoryMonitor:
                 memory_info['process_status']
             ]
             
-            # Prepare headers if file doesn't exist
-            headers = None
-            if not file_exists:
-                headers = [
-                    'timestamp', 'datetime', 'process_memory_mb', 'process_memory_percent',
-                    'system_memory_percent', 'system_available_gb', 'gc_objects',
-                    'gc_collections', 'process_status'
-                ]
+            # Prepare headers if needed (handled inside _append_csv_locked)
+            headers = [
+                'timestamp', 'datetime', 'process_memory_mb', 'process_memory_percent',
+                'system_memory_percent', 'system_available_gb', 'gc_objects',
+                'gc_collections', 'process_status'
+            ]
             
-            # Use atomic write
-            self._atomic_write_csv(csv_file, [data_row], headers)
+            # Use locked append
+            self._append_csv_locked(csv_file, [data_row], headers)
                 
         except Exception as e:
             self.logger.error(f"Failed to log memory to CSV: {e}")

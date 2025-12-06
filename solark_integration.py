@@ -100,9 +100,10 @@ class SolArkIntegration:
         self.retry_thread_running = False
         if self.retry_thread and self.retry_thread.is_alive():
             self.logger.info("Waiting for retry thread to stop...")
-            self.retry_thread.join(timeout=5.0)
+            # With interruptible sleep, thread should stop within 1-2 seconds
+            self.retry_thread.join(timeout=3.0)
             if self.retry_thread.is_alive():
-                self.logger.warning("Retry thread did not stop within timeout")
+                self.logger.warning("Retry thread did not stop within timeout, continuing cleanup")
         
         # Wait for any active toggle threads to complete (with timeout)
         with self.operation_lock:
@@ -371,8 +372,17 @@ class SolArkIntegration:
         """
         while self.retry_thread_running:
             try:
-                # Sleep for the retry interval
-                time.sleep(self.network_retry_interval_seconds)
+                # Sleep for the retry interval, but check flag frequently for quick shutdown
+                # Sleep in 1-second chunks so we can respond to shutdown quickly
+                sleep_remaining = self.network_retry_interval_seconds
+                while sleep_remaining > 0 and self.retry_thread_running:
+                    sleep_chunk = min(1.0, sleep_remaining)  # Sleep in 1-second chunks
+                    time.sleep(sleep_chunk)
+                    sleep_remaining -= sleep_chunk
+                
+                # Check if we should exit after sleep
+                if not self.retry_thread_running:
+                    break
                 
                 # Check if there are any pending operations
                 with self.pending_operations_lock:
@@ -534,9 +544,10 @@ class SolArkIntegration:
             return
         
         # Check if there's an active thread and handle timeout
-        if self.active_toggle_thread is not None and self.active_toggle_thread.is_alive():
+        current_active_thread = self.active_toggle_thread
+        if current_active_thread is not None and current_active_thread.is_alive():
             # Check if thread has been running too long (timeout after 60 seconds)
-            thread_start_time = getattr(self.active_toggle_thread, 'start_time', None)
+            thread_start_time = getattr(current_active_thread, 'start_time', None)
             if thread_start_time is not None and (time.time() - thread_start_time) > 60:
                 self.logger.warning("Previous TOU toggle thread has been running > 60 seconds, allowing new thread")
                 # Don't set to None - keep reference for cleanup tracking

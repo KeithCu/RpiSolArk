@@ -35,52 +35,50 @@ class DataLogger:
         if self.detailed_logging_enabled:
             self._initialize_detailed_log_file()
     
-    def _atomic_write_csv(self, filepath: str, data_rows: list, headers: list = None):
-        """Write CSV data atomically with file locking."""
-        temp_file = f"{filepath}.tmp"
-        
+    def _append_csv_locked(self, filepath: str, data_rows: list, headers: list = None):
+        """Append CSV data with file locking (flock)."""
         try:
-            # Write to temporary file
-            with open(temp_file, 'w', newline='') as f:
-                # Acquire exclusive lock
+            # Check if file exists/is empty to decide on headers
+            file_exists = os.path.exists(filepath) and os.path.getsize(filepath) > 0
+            
+            with open(filepath, 'a', newline='') as f:
+                # Acquire exclusive lock for appending
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 
                 writer = csv.writer(f)
                 
-                # Write headers if provided
-                if headers:
+                # Write headers if file is new/empty and headers provided
+                if not file_exists and headers:
                     writer.writerow(headers)
                 
                 # Write data rows
                 for row in data_rows:
                     writer.writerow(row)
                 
-                # Flush to disk (let OS handle sync for better SD card life)
+                # Flush and sync to ensure data is written
                 f.flush()
-                # os.fsync(f.fileno()) - Removed to reduce SD card wear
-            
-            # Atomic rename
-            os.rename(temp_file, filepath)
-            self.logger.debug(f"Atomic write completed: {filepath}")
+                # os.fsync(f.fileno()) - Optional: fsync for durability
+                
+                # Lock releases automatically on close
             
         except Exception as e:
-            # Clean up temp file on error
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            self.logger.error(f"Atomic write failed for {filepath}: {e}")
+            self.logger.error(f"Failed to append to CSV {filepath}: {e}")
             raise
-    
+
     def _initialize_detailed_log_file(self):
-        """Initialize the detailed log file with headers."""
+        """Initialize the detailed log file with headers if it doesn't exist."""
         try:
-            with open(self.detailed_log_file, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    'timestamp', 'datetime', 'unix_timestamp', 'elapsed_seconds',
-                    'frequency_hz', 'allan_variance', 'std_deviation', 'kurtosis',
-                    'power_source', 'confidence', 'sample_count', 'buffer_size'
-                ])
-            self.logger.info(f"Detailed logging enabled. Data will be written to: {self.detailed_log_file}")
+            if not os.path.exists(self.detailed_log_file) or os.path.getsize(self.detailed_log_file) == 0:
+                with open(self.detailed_log_file, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        'timestamp', 'datetime', 'unix_timestamp', 'elapsed_seconds',
+                        'frequency_hz', 'allan_variance', 'std_deviation', 'kurtosis',
+                        'power_source', 'confidence', 'sample_count', 'buffer_size'
+                    ])
+                self.logger.info(f"Detailed log file initialized: {self.detailed_log_file}")
+            else:
+                self.logger.info(f"Appending to existing detailed log file: {self.detailed_log_file}")
         except Exception as e:
             self.logger.error(f"Failed to initialize detailed log file: {e}")
     
@@ -133,13 +131,10 @@ class DataLogger:
     def log_hourly_status(self, timestamp: str, freq: float, source: str,
                          std_freq: Optional[float], kurtosis: Optional[float],
                          sample_count: int, state_info: Optional[Dict[str, Any]] = None):
-        """Log hourly status to CSV using atomic writes."""
+        """Log hourly status to CSV using locked append."""
         try:
             # Check if file rotation is needed before writing
             self._rotate_csv_file_if_needed(self.hourly_log_file, self.hourly_log_max_size)
-            
-            # Check if file exists to determine if we need headers
-            file_exists = os.path.exists(self.hourly_log_file)
             
             # Prepare data row
             power_state = state_info.get('current_state', 'unknown') if state_info else 'unknown'
@@ -152,15 +147,15 @@ class DataLogger:
                 sample_count, power_state, f"{state_duration:.1f}"
             ]
             
-            # Prepare headers if file doesn't exist
-            headers = None
-            if not file_exists:
-                headers = ['timestamp', 'frequency_hz', 'source',
-                          'std_dev_hz', 'kurtosis', 'samples_processed',
-                          'power_state', 'state_duration_seconds']
+            # Prepare headers if needed (handled inside _append_csv_locked)
+            headers = [
+                'timestamp', 'frequency_hz', 'source',
+                'std_dev_hz', 'kurtosis', 'samples_processed',
+                'power_state', 'state_duration_seconds'
+            ]
             
-            # Use atomic write
-            self._atomic_write_csv(self.hourly_log_file, [data_row], headers)
+            # Use locked append
+            self._append_csv_locked(self.hourly_log_file, [data_row], headers)
             
             self.logger.info(f"Hourly status logged: {source} at {freq:.2f} Hz, state: {power_state}")
             
@@ -204,8 +199,8 @@ class DataLogger:
                 buffer_size
             ]
             
-            # Use atomic write
-            self._atomic_write_csv(self.detailed_log_file, [data_row])
+            # Use locked append
+            self._append_csv_locked(self.detailed_log_file, [data_row])
             
             self.last_detailed_log_time = current_time
             

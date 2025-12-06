@@ -120,6 +120,13 @@ class SolArkCloud:
             
         except Exception as e:
             self.logger.error(f"Failed to initialize browser: {e}")
+            # Cleanup potential partial initialization
+            try:
+                if self.playwright:
+                    self.playwright.stop()
+                    self.playwright = None
+            except Exception as cleanup_e:
+                self.logger.error(f"Failed to cleanup after initialization error: {cleanup_e}")
             return False
     
     def cleanup(self):
