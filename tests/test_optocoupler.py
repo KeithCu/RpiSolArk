@@ -108,8 +108,8 @@ class OptocouplerTester:
             
         print(f"Counting pulses for {duration} seconds with high precision timing...")
         
-        # Count pulses over duration with debouncing
-        pulse_count, actual_elapsed = self.optocoupler.count_optocoupler_pulses(duration, debounce_time=0.001)
+        # Count pulses over duration (debounce configured at startup)
+        pulse_count, actual_elapsed = self.optocoupler.count_optocoupler_pulses(duration)
         
         # Calculate frequency using actual elapsed time for accuracy
         frequency = self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration, actual_duration=actual_elapsed)
@@ -163,7 +163,7 @@ class OptocouplerTester:
         
         for i in range(num_samples):
             # Count pulses - now returns both pulse_count and actual_elapsed
-            pulse_count, actual_elapsed = self.optocoupler.count_optocoupler_pulses(duration, debounce_time=0.0)
+            pulse_count, actual_elapsed = self.optocoupler.count_optocoupler_pulses(duration)
             
             # Calculate frequency with requested duration (old method - for comparison)
             freq_requested = self.optocoupler.calculate_frequency_from_pulses(pulse_count, duration)
@@ -235,7 +235,7 @@ class OptocouplerTester:
         
         for i in range(num_samples):
             # Count pulses - now returns both pulse_count and actual_elapsed
-            pulse_count, actual_elapsed = self.optocoupler.count_optocoupler_pulses(duration, debounce_time=0.0)
+            pulse_count, actual_elapsed = self.optocoupler.count_optocoupler_pulses(duration)
             
             pulse_counts.append(pulse_count)
             actual_times.append(actual_elapsed)
@@ -324,7 +324,7 @@ class OptocouplerTester:
             while time.time() - start_time < duration:
                 # Count pulses over the measurement interval
                 pulse_count, actual_elapsed = self.optocoupler.count_optocoupler_pulses(
-                    measurement_interval, debounce_time=0.001
+                    measurement_interval
                 )
                 
                 # Calculate frequency from the pulse count using actual elapsed time

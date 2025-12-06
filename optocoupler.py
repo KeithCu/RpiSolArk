@@ -199,7 +199,7 @@ class SingleOptocoupler:
                 self.measurement_active = False
                 return (True, 0, elapsed)
     
-    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0) -> Tuple[int, float]:
+    def count_optocoupler_pulses(self, duration: float = None) -> Tuple[int, float]:
         """
         Count optocoupler pulses over specified duration using working libgpiod.
         BLOCKING VERSION - Use start_measurement()/check_measurement() for non-blocking operation.
@@ -207,7 +207,6 @@ class SingleOptocoupler:
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
-            debounce_time: Minimum time between state changes to filter noise (0.0 for clean signals)
             
         Returns:
             Tuple of (pulse_count, actual_elapsed_time) where:
@@ -727,7 +726,7 @@ class OptocouplerManager:
         optocoupler = self.optocouplers[optocoupler_name]
         return optocoupler.check_measurement()
     
-    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
+    def count_optocoupler_pulses(self, duration: float = None, 
                                 optocoupler_name: str = 'primary') -> Tuple[int, float]:
         """
         Count optocoupler pulses over specified duration using working libgpiod.
@@ -736,7 +735,6 @@ class OptocouplerManager:
         
         Args:
             duration: Duration in seconds to count pulses (uses config default if None)
-            debounce_time: Minimum time between state changes to filter noise (0.0 for clean signals)
             optocoupler_name: Name of optocoupler to use ('primary' only)
             
         Returns:
@@ -751,7 +749,7 @@ class OptocouplerManager:
             return (0, 0.0)
         
         optocoupler = self.optocouplers[optocoupler_name]
-        return optocoupler.count_optocoupler_pulses(duration, debounce_time)
+        return optocoupler.count_optocoupler_pulses(duration)
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, 
                                        optocoupler_name: str = 'primary', actual_duration: float = None) -> Optional[float]:

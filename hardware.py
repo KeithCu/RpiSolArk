@@ -55,7 +55,7 @@ class HardwareManager:
         """
         return self.optocoupler.check_measurement(optocoupler_name)
     
-    def count_optocoupler_pulses(self, duration: float = None, debounce_time: float = 0.0, 
+    def count_optocoupler_pulses(self, duration: float = None, 
                                  optocoupler_name: str = 'primary') -> Tuple[int, float]:
         """Count optocoupler pulses over specified duration.
         BLOCKING VERSION - Use start_measurement()/check_measurement() for non-blocking operation.
@@ -63,7 +63,7 @@ class HardwareManager:
         Returns:
             Tuple of (pulse_count, actual_elapsed_time)
         """
-        return self.optocoupler.count_optocoupler_pulses(duration, debounce_time, optocoupler_name)
+        return self.optocoupler.count_optocoupler_pulses(duration, optocoupler_name)
     
     def calculate_frequency_from_pulses(self, pulse_count: int, duration: float = None, 
                                        optocoupler_name: str = 'primary', actual_duration: float = None) -> Optional[float]:

@@ -483,8 +483,8 @@ class FrequencyAnalyzer:
         Uses actual elapsed time for maximum accuracy.
         """
         try:
-            # Use optimized 2-second measurement with no debouncing for clean signals
-            pulse_count, actual_elapsed = self.hardware_manager.count_optocoupler_pulses(duration, debounce_time=0.0)
+            # Use optimized 2-second measurement (debounce configured at startup)
+            pulse_count, actual_elapsed = self.hardware_manager.count_optocoupler_pulses(duration)
             
             if pulse_count <= 0:
                 self.logger.debug(f"No pulses detected in {actual_elapsed:.3f} seconds (requested: {duration:.2f}s)")
