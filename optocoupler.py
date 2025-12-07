@@ -66,8 +66,10 @@ class SingleOptocoupler:
         self.measurement_lock = threading.Lock()
         
         # Initialize GIL-safe counter (required)
+        counter_start = time.perf_counter()
         self.counter = create_counter(self.logger)
-        self.logger.info(f"GIL-safe counter initialized for {self.name}")
+        counter_duration = (time.perf_counter() - counter_start) * 1000
+        self.logger.info(f"[COUNTER_INIT] GIL-safe counter initialized for {self.name} in {counter_duration:.1f}ms")
         
         if self.gpio_available:
             self._setup_optocoupler()
@@ -88,20 +90,24 @@ class SingleOptocoupler:
             return
         
         try:
-            self.logger.info(f"Setting up {self.name} optocoupler on GPIO pin {self.pin}")
+            setup_start = time.perf_counter()
+            self.logger.info(f"[OPTO_SETUP] Setting up {self.name} optocoupler on GPIO pin {self.pin}, pulses_per_cycle={self.pulses_per_cycle}, measurement_duration={self.measurement_duration}s")
             
             # Use libgpiod only - don't mix with RPi.GPIO to avoid conflicts
             # Set up GIL-free interrupt detection using working libgpiod
+            register_start = time.perf_counter()
             if self.counter.register_pin(self.pin):
-                self.logger.info(f"{self.name} optocoupler libgpiod interrupt detection configured")
+                register_duration = (time.perf_counter() - register_start) * 1000
+                self.logger.info(f"[OPTO_SETUP] {self.name} pin registered in {register_duration:.1f}ms")
                 self.initialized = True
             else:
                 raise Exception("libgpiod counter setup failed")
             
-            self.logger.info(f"{self.name} optocoupler setup completed successfully")
+            setup_duration = (time.perf_counter() - setup_start) * 1000
+            self.logger.info(f"[OPTO_SETUP] {self.name} optocoupler setup completed in {setup_duration:.1f}ms")
             
         except Exception as e:
-            self.logger.error(f"Failed to setup {self.name} optocoupler: {e}")
+            self.logger.error(f"[OPTO_SETUP] Failed to setup {self.name} optocoupler: {e}")
             self.initialized = False
     
     def start_measurement(self, duration: float = None) -> bool:
@@ -126,26 +132,50 @@ class SingleOptocoupler:
         if duration is None:
             duration = self.measurement_duration
         
+        # Calculate expected pulse count for comparison
+        expected_pulses = int(duration * 60 * self.pulses_per_cycle)  # 60Hz * pulses_per_cycle * duration
+        
+        # Track lock acquisition time
+        lock_start = time.perf_counter()
         with self.measurement_lock:
+            lock_duration = (time.perf_counter() - lock_start) * 1000
+            if lock_duration > 10.0:  # Warn if >10ms
+                self.logger.warning(f"[NB_MEASURE] {self.name} measurement_lock acquisition took {lock_duration:.2f}ms - possible contention")
+            
             # If a measurement is already active, don't start a new one
             if self.measurement_active:
-                self.logger.debug(f"{self.name} measurement already active, skipping start")
+                self.logger.debug(f"[NB_MEASURE] {self.name} measurement already active, skipping start")
                 return False
             
             try:
+                # Get pulse count before reset
+                pulse_count_before_reset = self.counter.get_count(self.pin)
+                start_time = time.perf_counter()
+                self.logger.info(f"[NB_MEASURE_START] {self.name} duration={duration:.2f}s expected_pulses=~{expected_pulses} count_before_reset={pulse_count_before_reset} time={start_time:.3f}")
+                
                 # Reset counter before measurement
+                reset_start = time.perf_counter()
                 self.counter.reset_count(self.pin)
+                reset_end = time.perf_counter()
+                reset_duration_ms = (reset_end - reset_start) * 1000
+                self.logger.info(f"[NB_RESET_COMPLETE] {self.name} reset_took={reset_duration_ms:.2f}ms")
+                
+                # Get pulse count immediately after reset (should be 0)
+                pulse_count_after_reset = self.counter.get_count(self.pin)
+                if pulse_count_after_reset != 0:
+                    self.logger.warning(f"[NB_RESET_VERIFY] {self.name} count after reset is {pulse_count_after_reset}, expected 0!")
                 
                 # Record measurement start time and duration
                 self.measurement_start_time = time.perf_counter()
                 self.measurement_duration = duration
                 self.measurement_active = True
                 
-                self.logger.debug(f"{self.name} started non-blocking measurement (duration: {duration:.2f}s)")
+                time_since_reset = (self.measurement_start_time - reset_end) * 1000
+                self.logger.info(f"[NB_MEASURE_ACTIVE] {self.name} measurement started, time_since_reset={time_since_reset:.2f}ms")
                 return True
                 
             except Exception as e:
-                self.logger.error(f"{self.name} failed to start measurement: {e}")
+                self.logger.error(f"[NB_MEASURE] {self.name} failed to start measurement: {e}")
                 self.measurement_active = False
                 return False
     
@@ -173,7 +203,24 @@ class SingleOptocoupler:
             
             # Measurement complete - retrieve results
             try:
+                # Calculate expected pulse count for comparison
+                expected_pulses = int(self.measurement_duration * 60 * self.pulses_per_cycle)
+                
+                count_start = time.perf_counter()
                 pulse_count = self.counter.get_count(self.pin)
+                count_end = time.perf_counter()
+                count_duration_ms = (count_end - count_start) * 1000
+                
+                # Get frequency stats for additional logging
+                stat_count, t_first, t_last = self.counter.get_frequency_info(self.pin)
+                
+                self.logger.info(f"[NB_COUNT_READ] {self.name} count={pulse_count} expected=~{expected_pulses} elapsed={elapsed:.3f}s count_took={count_duration_ms:.2f}ms")
+                
+                if stat_count > 0:
+                    stat_duration_ms = (t_last - t_first) / 1e6
+                    self.logger.info(f"[NB_FREQ_STATS] {self.name} stat_count={stat_count} duration={stat_duration_ms:.2f}ms")
+                else:
+                    self.logger.warning(f"[NB_FREQ_STATS] {self.name} NO TIMESTAMPS COLLECTED!")
                 
                 # Validate pulse count
                 if pulse_count < 0:
@@ -182,11 +229,16 @@ class SingleOptocoupler:
                     self.measurement_active = False
                     return (True, 0, elapsed)
                 
+                # Warn if count is much lower than expected
+                if pulse_count < expected_pulses * 0.5:
+                    self.logger.warning(f"[NB_COUNT_LOW] {self.name} count={pulse_count} is less than 50% of expected={expected_pulses}")
+                
                 # Reset error count on successful measurement
                 self.consecutive_errors = 0
                 self.last_successful_count = pulse_count
                 
-                self.logger.debug(f"{self.name} measurement complete: {pulse_count} pulses in {elapsed:.3f} seconds")
+                rate = pulse_count / elapsed if elapsed > 0 else 0
+                self.logger.info(f"[NB_MEASURE_END] {self.name} count={pulse_count} elapsed={elapsed:.3f}s rate={rate:.1f}/s")
                 
                 # Mark measurement as complete
                 self.measurement_active = False
@@ -195,7 +247,7 @@ class SingleOptocoupler:
                 
             except Exception as e:
                 self.consecutive_errors += 1
-                self.logger.error(f"{self.name} error checking measurement: {e}")
+                self.logger.error(f"[NB_MEASURE] {self.name} error checking measurement: {e}")
                 self.measurement_active = False
                 return (True, 0, elapsed)
     
@@ -225,34 +277,75 @@ class SingleOptocoupler:
         if duration is None:
             duration = self.measurement_duration
         
+        # Calculate expected pulse count for comparison
+        expected_pulses = int(duration * 60 * self.pulses_per_cycle)  # 60Hz * pulses_per_cycle * duration
+        
         try:
+            # Log before reset
+            pulse_count_before_reset = self.counter.get_count(self.pin)
+            measure_start = time.perf_counter()
+            self.logger.info(f"[MEASURE_START] {self.name} duration={duration:.2f}s expected_pulses=~{expected_pulses} count_before_reset={pulse_count_before_reset} time={measure_start:.3f}")
+            
             # Reset counter before measurement
+            reset_start = time.perf_counter()
             self.counter.reset_count(self.pin)
+            reset_end = time.perf_counter()
+            reset_duration_ms = (reset_end - reset_start) * 1000
+            self.logger.info(f"[RESET_COMPLETE] {self.name} reset_took={reset_duration_ms:.2f}ms")
+            
+            # Get pulse count immediately after reset (should be 0)
+            pulse_count_after_reset = self.counter.get_count(self.pin)
+            if pulse_count_after_reset != 0:
+                self.logger.warning(f"[RESET_VERIFY] {self.name} count after reset is {pulse_count_after_reset}, expected 0!")
             
             # Use libgpiod interrupt counting
-            start_time = time.perf_counter()
+            sleep_start = time.perf_counter()
+            time_since_reset = (sleep_start - reset_end) * 1000
+            self.logger.info(f"[SLEEP_START] {self.name} time_since_reset={time_since_reset:.2f}ms, sleeping for {duration:.2f}s")
             
             # Wait for the specified duration - libgpiod handles counting in background
             time.sleep(duration)
             
+            sleep_end = time.perf_counter()
+            actual_sleep = (sleep_end - sleep_start) * 1000
+            sleep_deviation = actual_sleep - (duration * 1000)
+            self.logger.info(f"[SLEEP_END] {self.name} actual_sleep={actual_sleep:.2f}ms expected={duration*1000:.2f}ms deviation={sleep_deviation:.2f}ms")
+            
             # Get final count from libgpiod
+            count_start = time.perf_counter()
             pulse_count = self.counter.get_count(self.pin)
-            elapsed = time.perf_counter() - start_time
+            count_end = time.perf_counter()
+            count_duration_ms = (count_end - count_start) * 1000
+            total_time_since_reset = (count_end - reset_start) * 1000
+            
+            self.logger.info(f"[COUNT_READ] {self.name} count={pulse_count} expected=~{expected_pulses} time_since_reset={total_time_since_reset:.2f}ms count_took={count_duration_ms:.2f}ms")
             
             # Retrieve frequency stats (count, first, last) directly to avoid list copy overhead
             stat_count, t_first, t_last = self.counter.get_frequency_info(self.pin)
+            
+            # Log frequency stats
+            if stat_count > 0:
+                stat_duration_ms = (t_last - t_first) / 1e6
+                self.logger.info(f"[FREQ_STATS] {self.name} stat_count={stat_count} duration={stat_duration_ms:.2f}ms first_ts={t_first} last_ts={t_last}")
+            else:
+                self.logger.warning(f"[FREQ_STATS] {self.name} NO TIMESTAMPS COLLECTED!")
             
             # Validate pulse count
             if pulse_count < 0:
                 self.consecutive_errors += 1
                 self.logger.warning(f"{self.name} invalid pulse count: {pulse_count}")
-                return (0, elapsed)
+                return (0, (count_end - sleep_start))
+            
+            # Warn if count is much lower than expected
+            if pulse_count < expected_pulses * 0.5:
+                self.logger.warning(f"[COUNT_LOW] {self.name} count={pulse_count} is less than 50% of expected={expected_pulses}")
             
             # Reset error count on successful measurement
             self.consecutive_errors = 0
             self.last_successful_count = pulse_count
             
-            self.logger.debug(f"{self.name} counted {pulse_count} pulses in {elapsed:.3f} seconds (libgpiod)")
+            elapsed = count_end - sleep_start
+            self.logger.info(f"[MEASURE_END] {self.name} count={pulse_count} elapsed={elapsed:.3f}s rate={pulse_count/elapsed:.1f}/s")
             return (pulse_count, elapsed)
             
         except Exception as e:
