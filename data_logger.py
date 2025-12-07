@@ -128,7 +128,7 @@ class DataLogger:
         except Exception as e:
             self.logger.error(f"Error during CSV file rotation for {filepath}: {e}")
     
-    def log_hourly_status(self, timestamp: str, freq: float, source: str,
+    def log_hourly_status(self, timestamp: str, freq: Optional[float], source: str,
                          std_freq: Optional[float], kurtosis: Optional[float],
                          sample_count: int, state_info: Optional[Dict[str, Any]] = None):
         """Log hourly status to CSV using locked append."""
@@ -141,7 +141,7 @@ class DataLogger:
             state_duration = state_info.get('state_duration', 0) if state_info else 0
             
             data_row = [
-                timestamp, f"{freq:.2f}", source,
+                timestamp, f"{freq:.2f}" if freq is not None else "N/A", source,
                 f"{std_freq:.4f}" if std_freq else "N/A",
                 f"{kurtosis:.2f}" if kurtosis else "N/A",
                 sample_count, power_state, f"{state_duration:.1f}"
@@ -157,7 +157,8 @@ class DataLogger:
             # Use locked append
             self._append_csv_locked(self.hourly_log_file, [data_row], headers)
             
-            self.logger.info(f"Hourly status logged: {source} at {freq:.2f} Hz, state: {power_state}")
+            freq_str = f"{freq:.2f}" if freq is not None else "N/A"
+            self.logger.info(f"Hourly status logged: {source} at {freq_str} Hz, state: {power_state}")
             
         except Exception as e:
             self.logger.error(f"Failed to log hourly status: {e}")
