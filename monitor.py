@@ -1347,7 +1347,7 @@ class FrequencyMonitor:
             if self.measurement_in_progress:
                 # Small sleep during measurement to avoid busy-waiting
                 # Still responsive enough for button checks and other tasks
-                loop_sleep_interval = self.config.get_float('app.loop_sleep_interval', 0.05)  # Default 50ms
+                loop_sleep_interval = self.config.get_float('app.loop_sleep_interval')  # Default 50ms
                 time.sleep(loop_sleep_interval)
             # When measurement completes, process immediately without sleep for best responsiveness
         except Exception as e:
