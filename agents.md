@@ -225,11 +225,15 @@ The system uses **two complementary analysis methods** (simplified for reliabili
 
 **Generator Detection**: Generators exhibit "hunting" patterns (oscillations around 60Hz). Utility grid is typically very stable.
 
-**Classification Logic**: Sample-count-aware and simplified:
+**Classification Logic**: Sample-count-aware and simplified with progressive logic:
 - <3 samples: no decision (Unknown)
 - 3–9 samples: std-dev only (Allan variance not yet reliable)
-- ≥10 samples: std-dev OR Allan variance (both metrics available and reliable)
-- Simple OR logic: if either metric exceeds threshold → generator, otherwise → utility grid
+- 10–12 samples: std-dev AND Allan variance (both metrics must exceed threshold)
+  - Extra protection against false positives from startup transients
+  - Conservative approach when Allan variance first becomes available
+- ≥13 samples: std-dev OR Allan variance (either metric beyond threshold → generator)
+  - With enough samples, Allan variance is fully reliable and startup transients are out of window
+  - std_dev catches wide swings, Allan variance catches hunting patterns
 
 **Why 10 samples for Allan variance?**
 - Allan variance requires sufficient data to be statistically reliable
@@ -237,6 +241,12 @@ The system uses **two complementary analysis methods** (simplified for reliabili
 - 10 samples = 20 seconds of data (with 2-second measurement duration), ensuring stable analysis
 - This matches the `analyze_signal_quality()` requirement of 10 samples minimum
 - std_dev alone is sufficient for early detection (3-9 samples) and correctly identifies utility grid
+
+**Why AND logic for 10-12 samples?**
+- Provides extra protection against false positives when Allan variance first becomes available
+- Startup transients (e.g., from returning from 0V state) may still be in the analysis window
+- Requires both metrics to agree before classifying as generator, reducing false positives
+- After 13+ samples (26+ seconds), startup transients are out of window, so OR logic is safe
 
 **Note**: Kurtosis was removed (only 25% effective) and confidence scoring was simplified to simple debouncing. See [SIMPLIFICATION_PROPOSAL.md](SIMPLIFICATION_PROPOSAL.md) for details.
 
