@@ -315,7 +315,7 @@ class MemoryMonitor:
             f"({memory_info['process_memory_percent']:.1f}%), "
             f"System: {memory_info['system_memory_percent']:.1f}%, "
             f"Available: {memory_info['system_available_gb']:.1f}GB, "
-            f"GC Objects: {memory_info['gc_objects']}"
+            f"GC Objects: {memory_info.get('gc_objects', 'N/A')}"
         )
     
     def _append_csv_locked(self, filepath: str, data_rows: list, headers: list = None):
@@ -432,7 +432,7 @@ class MemoryMonitor:
                 memory_info['process_memory_percent'],
                 memory_info['system_memory_percent'],
                 memory_info['system_available_gb'],
-                memory_info['gc_objects'],
+                memory_info.get('gc_objects'),
                 memory_info['gc_collections'],
                 memory_info['process_status']
             ]
