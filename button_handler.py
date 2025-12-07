@@ -115,7 +115,7 @@ class ButtonHandler:
                     self._handle_button_press()
                 
                 last_state = current_state
-                time.sleep(0.01)  # 10ms polling (very responsive)
+                time.sleep(0.05)  # 50ms polling (still responsive, reduces CPU by ~80%)
                 
             except Exception as e:
                 self.logger.error(f"Button monitoring error: {e}")

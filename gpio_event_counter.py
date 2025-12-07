@@ -192,8 +192,8 @@ class GPIOEventCounter:
 
 				if not ready:
 					timeout_count += 1
-					# Log every 10th timeout to avoid spam, but always log first few
-					if timeout_count <= 5 or timeout_count % 10 == 0:
+					# Log only first few timeouts, then every 100th to reduce CPU overhead
+					if timeout_count <= 3 or timeout_count % 100 == 0:
 						self.logger.debug(f"[EVENT_WAIT] timeout after {wait_duration:.1f}ms (timeout #{timeout_count}, total waits={wait_count})")
 					continue
 
@@ -206,7 +206,9 @@ class GPIOEventCounter:
 					self.logger.warning(f"[EVENT_READ] wait returned ready but read returned empty! wait_duration={wait_duration:.1f}ms")
 					continue
 
-				self.logger.debug(f"[EVENT_READ] got {len(events)} events, wait={wait_duration:.1f}ms, read={read_duration:.2f}ms")
+				# Only log event reads occasionally to reduce CPU overhead (every 1000 events or if read takes >10ms)
+				if event_count % 1000 == 0 or read_duration > 10.0:
+					self.logger.debug(f"[EVENT_READ] got {len(events)} events, wait={wait_duration:.1f}ms, read={read_duration:.2f}ms")
 				
 				with self._counts_lock:
 					for ev in events:
@@ -251,8 +253,9 @@ class GPIOEventCounter:
 						# Store timestamp (ns)
 						if pin in self.timestamps:
 							self.timestamps[pin].append(current_ts)
-							if event_count <= 1:
-								self.logger.debug(f"[EVENT] Stored timestamp for pin {pin}: {current_ts}")
+							# Only log first event timestamp to reduce CPU overhead
+							if event_count == 1:
+								self.logger.debug(f"[EVENT] Stored first timestamp for pin {pin}: {current_ts}")
 						else:
 							self.logger.warning(f"[EVENT] Pin {pin} not in timestamps dict! Keys: {list(self.timestamps.keys())}")
 							
@@ -411,10 +414,14 @@ class GPIOEventCounter:
 			self.logger.error(f"[POLL] Error polling events: {e}")
 			return 0
 	
-	def get_event_statistics(self, pin: int) -> Dict[str, any]:
+	def get_event_statistics(self, pin: int, include_intervals: bool = False) -> Dict[str, any]:
 		"""
 		Get event statistics for a pin including received, debounced, accepted counts
-		and interval statistics (min, max, mean, std dev, median).
+		and optionally interval statistics (min, max, mean, std dev, median).
+		
+		Args:
+			pin: GPIO pin number
+			include_intervals: If True, calculate expensive interval statistics (default: False for performance)
 		
 		Returns:
 			Dictionary with statistics or None if pin not found
@@ -426,7 +433,6 @@ class GPIOEventCounter:
 			received = self._events_received.get(pin, 0)
 			debounced = self._events_debounced.get(pin, 0)
 			accepted = self._events_accepted.get(pin, 0)
-			intervals_ns = self._interval_stats.get(pin, [])
 			
 			stats = {
 				'received': received,
@@ -436,34 +442,39 @@ class GPIOEventCounter:
 				'timestamp_count': len(self.timestamps.get(pin, [])),
 			}
 			
-			# Calculate interval statistics if we have intervals
-			if len(intervals_ns) > 0:
-				intervals_us = [i / 1000.0 for i in intervals_ns]
-				intervals_ms = [i / 1000000.0 for i in intervals_ns]
-				stats['intervals'] = {
-					'count': len(intervals_ns),
-					'min_us': min(intervals_us),
-					'max_us': max(intervals_us),
-					'mean_us': sum(intervals_us) / len(intervals_us),
-					'min_ms': min(intervals_ms),
-					'max_ms': max(intervals_ms),
-					'mean_ms': sum(intervals_ms) / len(intervals_ms),
-				}
-				
-				# Calculate std dev
-				mean_us = stats['intervals']['mean_us']
-				variance = sum((x - mean_us) ** 2 for x in intervals_us) / len(intervals_us)
-				stats['intervals']['std_dev_us'] = variance ** 0.5
-				stats['intervals']['std_dev_ms'] = stats['intervals']['std_dev_us'] / 1000.0
-				
-				# Calculate median
-				sorted_intervals_us = sorted(intervals_us)
-				mid = len(sorted_intervals_us) // 2
-				if len(sorted_intervals_us) % 2 == 0:
-					stats['intervals']['median_us'] = (sorted_intervals_us[mid - 1] + sorted_intervals_us[mid]) / 2.0
+			# Only calculate expensive interval statistics if explicitly requested
+			# This avoids O(n log n) sorting and multiple list passes on every measurement
+			if include_intervals:
+				intervals_ns = self._interval_stats.get(pin, [])
+				if len(intervals_ns) > 0:
+					intervals_us = [i / 1000.0 for i in intervals_ns]
+					intervals_ms = [i / 1000000.0 for i in intervals_ns]
+					stats['intervals'] = {
+						'count': len(intervals_ns),
+						'min_us': min(intervals_us),
+						'max_us': max(intervals_us),
+						'mean_us': sum(intervals_us) / len(intervals_us),
+						'min_ms': min(intervals_ms),
+						'max_ms': max(intervals_ms),
+						'mean_ms': sum(intervals_ms) / len(intervals_ms),
+					}
+					
+					# Calculate std dev
+					mean_us = stats['intervals']['mean_us']
+					variance = sum((x - mean_us) ** 2 for x in intervals_us) / len(intervals_us)
+					stats['intervals']['std_dev_us'] = variance ** 0.5
+					stats['intervals']['std_dev_ms'] = stats['intervals']['std_dev_us'] / 1000.0
+					
+					# Calculate median (expensive - requires sorting)
+					sorted_intervals_us = sorted(intervals_us)
+					mid = len(sorted_intervals_us) // 2
+					if len(sorted_intervals_us) % 2 == 0:
+						stats['intervals']['median_us'] = (sorted_intervals_us[mid - 1] + sorted_intervals_us[mid]) / 2.0
+					else:
+						stats['intervals']['median_us'] = sorted_intervals_us[mid]
+					stats['intervals']['median_ms'] = stats['intervals']['median_us'] / 1000.0
 				else:
-					stats['intervals']['median_us'] = sorted_intervals_us[mid]
-				stats['intervals']['median_ms'] = stats['intervals']['median_us'] / 1000.0
+					stats['intervals'] = None
 			else:
 				stats['intervals'] = None
 			

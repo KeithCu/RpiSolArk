@@ -761,17 +761,30 @@ class FrequencyMonitor:
         notify_socket = os.getenv('NOTIFY_SOCKET')
         if not notify_socket:
             return
-            
-        if notify_socket.startswith('@'):
-            notify_socket = '\0' + notify_socket[1:]
-            
+        
+        # Cache socket connection to avoid creating new socket every iteration
+        # This significantly reduces CPU overhead from socket creation/teardown
+        if not hasattr(self, '_sd_notify_sock') or self._sd_notify_sock is None:
+            try:
+                if notify_socket.startswith('@'):
+                    notify_socket = '\0' + notify_socket[1:]
+                self._sd_notify_sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+                self._sd_notify_sock.connect(notify_socket)
+            except Exception as e:
+                self.logger.debug(f"Failed to create systemd notification socket: {e}")
+                self._sd_notify_sock = None
+                return
+        
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            sock.connect(notify_socket)
-            sock.sendall(state.encode('utf-8'))
-            sock.close()
+            self._sd_notify_sock.sendall(state.encode('utf-8'))
         except Exception as e:
+            # Socket may have been closed, reset and try again next time
             self.logger.debug(f"Failed to send systemd notification: {e}")
+            try:
+                self._sd_notify_sock.close()
+            except:
+                pass
+            self._sd_notify_sock = None
 
     def __init__(self):
         self.config = Config("config.yaml")
@@ -887,6 +900,10 @@ class FrequencyMonitor:
         self.last_buffer_validation = 0
         self.buffer_validation_interval = 100  # Validate every 100 samples
         self.buffer_corruption_count = 0
+        
+        # Memory monitoring tracking (run every 100 iterations = ~5 seconds with 50ms sleep)
+        self.loop_iteration_count = 0
+        self.memory_monitoring_interval = 100  # Run memory monitoring every 100 loop iterations (reduced frequency for CPU optimization)
     
     def _start_background_services(self):
         """Start background services and health check reporter."""
@@ -1353,14 +1370,17 @@ class FrequencyMonitor:
             return False
     
     def _loop_sleep(self):
-        """Sleep to prevent busy-waiting when measurement is in progress."""
+        """Sleep to prevent busy-waiting in main loop."""
         try:
+            loop_sleep_interval = self.config.get_float('app.loop_sleep_interval')  # Default 50ms
             if self.measurement_in_progress:
-                # Small sleep during measurement to avoid busy-waiting
+                # Sleep during measurement to avoid busy-waiting
                 # Still responsive enough for button checks and other tasks
-                loop_sleep_interval = self.config.get_float('app.loop_sleep_interval')  # Default 50ms
                 time.sleep(loop_sleep_interval)
-            # When measurement completes, process immediately without sleep for best responsiveness
+            else:
+                # When measurement completes, still sleep a small amount to prevent tight looping
+                # Use a shorter sleep (10ms) for better responsiveness after measurement completes
+                time.sleep(0.01)  # 10ms minimum sleep to prevent CPU spinning
         except Exception as e:
             self.logger.error(f"Error in loop sleep: {e}", exc_info=True)
     
@@ -1425,13 +1445,14 @@ class FrequencyMonitor:
                 # 7. Systemd watchdog
                 self._sd_notify("WATCHDOG=1")
                 
-                # 8. Memory monitoring and cleanup
-                try:
-                    memory_info = self.memory_monitor.get_memory_info()
-                    self.memory_monitor.check_memory_thresholds(memory_info)
-                    self.memory_monitor.perform_cleanup()
-                except Exception as e:
-                    self.logger.error(f"Error in memory monitoring: {e}", exc_info=True)
+                # 8. Memory monitoring and cleanup (run every N iterations to reduce CPU)
+                if self.loop_iteration_count % self.memory_monitoring_interval == 0:
+                    try:
+                        memory_info = self.memory_monitor.get_memory_info()
+                        self.memory_monitor.check_memory_thresholds(memory_info)
+                        self.memory_monitor.perform_cleanup()
+                    except Exception as e:
+                        self.logger.error(f"Error in memory monitoring: {e}", exc_info=True)
                 
                 # 9. Check reset button (debounced, check every 0.5 seconds)
                 try:
@@ -1560,6 +1581,14 @@ class FrequencyMonitor:
     def cleanup(self):
         """Cleanup resources with verification."""
         self.logger.info("Cleaning up resources...")
+        
+        # Close systemd notification socket
+        if hasattr(self, '_sd_notify_sock') and self._sd_notify_sock is not None:
+            try:
+                self._sd_notify_sock.close()
+            except:
+                pass
+            self._sd_notify_sock = None
         
         # Stop health check reporter
         if self.health_check_reporter is not None:

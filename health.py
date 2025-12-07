@@ -48,7 +48,7 @@ class HealthMonitor:
         while self.running:
             try:
                 self._check_system_health()
-                time.sleep(10)  # Check every 10 seconds
+                time.sleep(30)  # Check every 30 seconds (reduced frequency for CPU optimization)
             except Exception as e:
                 self.logger.error(f"Health monitoring error: {e}")
     
@@ -60,8 +60,9 @@ class HealthMonitor:
             if memory.percent > self.memory_threshold * 100:
                 self.logger.warning(f"High memory usage: {memory.percent:.1f}%")
             
-            # CPU usage
-            cpu_percent = psutil.cpu_percent(interval=1)
+            # CPU usage (use non-blocking call - interval=None uses last measurement)
+            # Note: First call returns 0, subsequent calls return actual percentage
+            cpu_percent = psutil.cpu_percent(interval=None)
             if cpu_percent > self.cpu_threshold * 100:
                 self.logger.warning(f"High CPU usage: {cpu_percent:.1f}%")
             
@@ -198,21 +199,30 @@ class MemoryMonitor:
         
         self.logger.info("Memory monitor initialized")
     
-    def get_memory_info(self) -> Dict[str, Any]:
-        """Get current memory information."""
+    def get_memory_info(self, include_gc_details: bool = False) -> Dict[str, Any]:
+        """
+        Get current memory information.
+        
+        Args:
+            include_gc_details: If True, include expensive GC object counting (default: False for performance)
+        """
         try:
-            # Process memory
+            # Process memory (relatively fast - reads /proc/self/status)
             process_memory = self.process.memory_info()
             process_mb = process_memory.rss / 1024 / 1024  # Convert to MB
             
-            # System memory
+            # System memory (reads /proc/meminfo - can be expensive)
             system_memory = psutil.virtual_memory()
             system_percent = system_memory.percent
             system_available_gb = system_memory.available / 1024 / 1024 / 1024
             
             # Python garbage collection info
+            # NOTE: gc.get_objects() is VERY expensive - it traverses all Python objects
+            # Only calculate if explicitly requested (e.g., for debugging)
             gc_stats = gc.get_stats()
-            gc_objects = len(gc.get_objects())
+            gc_objects = None
+            if include_gc_details:
+                gc_objects = len(gc.get_objects())  # Expensive operation - skip in production
             
             memory_info = {
                 'timestamp': time.time(),
@@ -220,10 +230,13 @@ class MemoryMonitor:
                 'process_memory_percent': round((process_mb / (system_memory.total / 1024 / 1024)) * 100, 2),
                 'system_memory_percent': round(system_percent, 2),
                 'system_available_gb': round(system_available_gb, 2),
-                'gc_objects': gc_objects,
                 'gc_collections': sum(stat['collections'] for stat in gc_stats),
                 'process_status': self._get_process_status(process_mb, system_percent)
             }
+            
+            # Only include gc_objects if calculated
+            if gc_objects is not None:
+                memory_info['gc_objects'] = gc_objects
             
             # Add to history
             self.memory_history.append(memory_info)
