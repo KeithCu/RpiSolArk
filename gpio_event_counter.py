@@ -34,6 +34,11 @@ class GPIOEventCounter:
 		# Debug tracking
 		self._reset_count_calls = 0
 		self._last_reset_time: Optional[float] = None
+		# Event statistics tracking per pin
+		self._events_received: Dict[int, int] = {}  # pin -> total events from hardware
+		self._events_debounced: Dict[int, int] = {}  # pin -> events rejected by debounce
+		self._events_accepted: Dict[int, int] = {}  # pin -> events accepted
+		self._interval_stats: Dict[int, list] = {}  # pin -> list of intervals (ns) for statistics
 		self.logger.info("Using pure-Python libgpiod v2 counter backend")
 
 	def _start_request(self):
@@ -54,7 +59,7 @@ class GPIOEventCounter:
 
 		settings = gpiod.LineSettings()
 		settings.direction = gpiod.line.Direction.INPUT
-		settings.edge_detection = gpiod.line.Edge.BOTH  # Count both rising and falling edges
+		settings.edge_detection = gpiod.line.Edge.RISING  # Count only rising edges (fixes double-counting issue)
 		# Enable internal pull-up for optocoupler (H11AA1 needs pull-up)
 		settings.bias = gpiod.line.Bias.PULL_UP
 		# Note: Hardware debounce causes issues with libgpiod v2, using software debounce only
@@ -141,6 +146,10 @@ class GPIOEventCounter:
 			self.counts.setdefault(pin, 0)
 			self.timestamps.setdefault(pin, [])
 			self.last_valid_timestamp.setdefault(pin, 0)
+			self._events_received.setdefault(pin, 0)
+			self._events_debounced.setdefault(pin, 0)
+			self._events_accepted.setdefault(pin, 0)
+			self._interval_stats.setdefault(pin, [])
 		# If already running, reconfigure to include the new pin
 		if self._running:
 			self.logger.info(f"[PIN_REGISTER] Request already running, will reconfigure")
@@ -199,21 +208,13 @@ class GPIOEventCounter:
 
 				self.logger.debug(f"[EVENT_READ] got {len(events)} events, wait={wait_duration:.1f}ms, read={read_duration:.2f}ms")
 				
-				# Events are ready - read them
-				read_start = time.perf_counter()
-				events = self._request.read_edge_events()
-				read_duration = (time.perf_counter() - read_start) * 1000
-
-				if not events:
-					self.logger.warning(f"[EVENT_READ] wait returned ready but read returned empty! wait_duration={wait_duration:.1f}ms, request={self._request}")
-					continue
-
-				self.logger.info(f"[EVENT_READ] got {len(events)} events, wait={wait_duration:.1f}ms, read={read_duration:.2f}ms")
-				
 				with self._counts_lock:
 					for ev in events:
 						pin = ev.line_offset
 						current_ts = ev.timestamp_ns
+						
+						# Track total events received from hardware
+						self._events_received[pin] = self._events_received.get(pin, 0) + 1
 						
 						# Calculate interval since last event (for gap detection)
 						if last_event_time_ns > 0:
@@ -222,17 +223,26 @@ class GPIOEventCounter:
 								self.logger.warning(f"[EVENT_GAP] Large gap: {interval_ms:.1f}ms since last event (pin={pin}, count={event_count})")
 						
 						# Software filtering / Debounce
-						# Reject if interval < debounce_ns (e.g. 2ms)
+						# Reject if interval < debounce_ns (e.g. 0.2ms)
 						last_ts = self.last_valid_timestamp.get(pin, 0)
 						if last_ts > 0 and (current_ts - last_ts) < self.debounce_ns:
 							# Noise detected, skip this event
 							interval_us = (current_ts - last_ts) / 1000
+							self._events_debounced[pin] = self._events_debounced.get(pin, 0) + 1
 							if event_count < 20:  # Log first debounced events
 								self.logger.debug(f"[EVENT_DEBOUNCE] Rejected event on pin {pin}, interval={interval_us:.1f}us < {self.debounce_ns/1000:.1f}us")
 							continue
 						
 						# Valid event - update last event time for gap detection
 						last_event_time_ns = current_ts
+						
+						# Track accepted events
+						self._events_accepted[pin] = self._events_accepted.get(pin, 0) + 1
+						
+						# Calculate and store interval for statistics
+						if last_ts > 0:
+							interval_ns = current_ts - last_ts
+							self._interval_stats[pin].append(interval_ns)
 						
 						# Valid event
 						self.counts[pin] = self.counts.get(pin, 0) + 1
@@ -401,6 +411,64 @@ class GPIOEventCounter:
 			self.logger.error(f"[POLL] Error polling events: {e}")
 			return 0
 	
+	def get_event_statistics(self, pin: int) -> Dict[str, any]:
+		"""
+		Get event statistics for a pin including received, debounced, accepted counts
+		and interval statistics (min, max, mean, std dev, median).
+		
+		Returns:
+			Dictionary with statistics or None if pin not found
+		"""
+		with self._counts_lock:
+			if pin not in self.counts:
+				return None
+			
+			received = self._events_received.get(pin, 0)
+			debounced = self._events_debounced.get(pin, 0)
+			accepted = self._events_accepted.get(pin, 0)
+			intervals_ns = self._interval_stats.get(pin, [])
+			
+			stats = {
+				'received': received,
+				'debounced': debounced,
+				'accepted': accepted,
+				'count': self.counts.get(pin, 0),
+				'timestamp_count': len(self.timestamps.get(pin, [])),
+			}
+			
+			# Calculate interval statistics if we have intervals
+			if len(intervals_ns) > 0:
+				intervals_us = [i / 1000.0 for i in intervals_ns]
+				intervals_ms = [i / 1000000.0 for i in intervals_ns]
+				stats['intervals'] = {
+					'count': len(intervals_ns),
+					'min_us': min(intervals_us),
+					'max_us': max(intervals_us),
+					'mean_us': sum(intervals_us) / len(intervals_us),
+					'min_ms': min(intervals_ms),
+					'max_ms': max(intervals_ms),
+					'mean_ms': sum(intervals_ms) / len(intervals_ms),
+				}
+				
+				# Calculate std dev
+				mean_us = stats['intervals']['mean_us']
+				variance = sum((x - mean_us) ** 2 for x in intervals_us) / len(intervals_us)
+				stats['intervals']['std_dev_us'] = variance ** 0.5
+				stats['intervals']['std_dev_ms'] = stats['intervals']['std_dev_us'] / 1000.0
+				
+				# Calculate median
+				sorted_intervals_us = sorted(intervals_us)
+				mid = len(sorted_intervals_us) // 2
+				if len(sorted_intervals_us) % 2 == 0:
+					stats['intervals']['median_us'] = (sorted_intervals_us[mid - 1] + sorted_intervals_us[mid]) / 2.0
+				else:
+					stats['intervals']['median_us'] = sorted_intervals_us[mid]
+				stats['intervals']['median_ms'] = stats['intervals']['median_us'] / 1000.0
+			else:
+				stats['intervals'] = None
+			
+			return stats
+	
 	def cleanup(self):
 		try:
 			self.stop()
@@ -408,6 +476,10 @@ class GPIOEventCounter:
 			with self._counts_lock:
 				self.counts.clear()
 				self.timestamps.clear()
+				self._events_received.clear()
+				self._events_debounced.clear()
+				self._events_accepted.clear()
+				self._interval_stats.clear()
 			self.registered_pins.clear()
 
 

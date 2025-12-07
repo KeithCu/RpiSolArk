@@ -110,6 +110,28 @@ The system uses **two complementary analysis methods** (simplified for maximum r
 
 **Simple OR Logic**: If EITHER metric exceeds threshold → Generator detected. This maintains 100% accuracy while keeping the code simple and maintainable.
 
+**Sample-Count-Aware Classification**:
+- **<3 samples**: No decision (returns "Unknown") - insufficient data
+- **3-9 samples**: Uses **std-dev only** - Allan variance not yet statistically reliable
+- **10-12 samples**: Uses **std-dev AND Allan variance** - both metrics must exceed threshold
+  - Extra protection against false positives from startup transients
+  - Conservative approach when Allan variance first becomes available
+- **≥13 samples**: Uses **std-dev OR Allan variance** - either metric beyond threshold → generator
+  - With enough samples, Allan variance is fully reliable and startup transients are out of window
+  - std_dev catches wide swings, Allan variance catches hunting patterns
+
+**Why 10 samples for Allan variance?**
+- Allan variance requires sufficient data to be statistically reliable
+- With fewer samples (6-9), Allan variance can produce false positives from startup transients (e.g., when returning from 0V state)
+- 10 samples = 20 seconds of data (with 2-second measurement duration), ensuring stable analysis
+- std-dev alone is sufficient for early detection (3-9 samples) and correctly identifies utility grid
+
+**Why AND logic for 10-12 samples?**
+- Provides extra protection against false positives when Allan variance first becomes available
+- Startup transients may still be in the analysis window at 10 samples
+- Requires both metrics to agree before classifying as generator, reducing false positives
+- After 13+ samples (26+ seconds), startup transients are out of window, so OR logic is safe
+
 *For detailed mathematical formulas, implementation details, and metric effectiveness analysis, see [FREQUENCY_ANALYSIS.md](FREQUENCY_ANALYSIS.md) and [SIMPLIFICATION_PROPOSAL.md](SIMPLIFICATION_PROPOSAL.md).*
 
 ### 🎯 **Why This Works So Well**
@@ -688,6 +710,7 @@ findmnt /tmp
 |    📺**LCD Not Displaying**    |    Blank screen    | Check I2C address and connections |
 | ☁️**Cloud Connection Failed** | Sol-Ark sync errors |   Check credentials and network   |
 | 📊**Frequency Reading Errors** |    Invalid data    |  Verify optocoupler connections  |
+| ⚠️**False Generator Detection** | Shows "Generator" when utility returns after outage | Fixed in latest version - system now requires 10 samples (20s) before using Allan variance to prevent false positives from startup transients |
 
 ### 🔍 Diagnostic Steps
 

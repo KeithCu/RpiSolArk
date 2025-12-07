@@ -227,9 +227,16 @@ The system uses **two complementary analysis methods** (simplified for reliabili
 
 **Classification Logic**: Sample-count-aware and simplified:
 - <3 samples: no decision (Unknown)
-- 3–5 samples: std-dev only
-- ≥6 samples: std-dev OR Allan variance
-- Future analysis: consider entry/exit hysteresis to further damp transitions.
+- 3–9 samples: std-dev only (Allan variance not yet reliable)
+- ≥10 samples: std-dev OR Allan variance (both metrics available and reliable)
+- Simple OR logic: if either metric exceeds threshold → generator, otherwise → utility grid
+
+**Why 10 samples for Allan variance?**
+- Allan variance requires sufficient data to be statistically reliable
+- With fewer samples (6-9), Allan variance can produce false positives from startup transients
+- 10 samples = 20 seconds of data (with 2-second measurement duration), ensuring stable analysis
+- This matches the `analyze_signal_quality()` requirement of 10 samples minimum
+- std_dev alone is sufficient for early detection (3-9 samples) and correctly identifies utility grid
 
 **Note**: Kurtosis was removed (only 25% effective) and confidence scoring was simplified to simple debouncing. See [SIMPLIFICATION_PROPOSAL.md](SIMPLIFICATION_PROPOSAL.md) for details.
 

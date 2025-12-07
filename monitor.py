@@ -726,17 +726,28 @@ class FrequencyAnalyzer:
         # Normalize sample count
         sample_count = sample_count or 0
         min_samples_for_any = 3
-        min_samples_for_avar = 6  # allow Allan variance to stabilize
+        min_samples_for_avar = 10  # allow Allan variance to stabilize (matches analyze_signal_quality requirement)
+        min_samples_for_or_logic = 13  # switch to OR logic after more samples (extra protection against startup transients)
         
         # Not enough data yet
         if sample_count < min_samples_for_any:
             return "Unknown"
         
         # Until Allan variance has enough samples (or is missing), rely on std-dev only
+        # This prevents false positives from Allan variance with insufficient data (e.g., startup transients)
         if sample_count < min_samples_for_avar or avar_10s is None:
             return "Generac Generator" if std_freq > std_thresh else "Utility Grid"
         
-        # Stable window: simple OR logic
+        # For 10-12 samples: Use AND logic (both metrics must exceed threshold) for extra protection
+        # This prevents false positives from startup transients that might still be in the window
+        if sample_count < min_samples_for_or_logic:
+            if avar_10s > avar_thresh and std_freq > std_thresh:
+                return "Generac Generator"
+            return "Utility Grid"
+        
+        # For 13+ samples: Use OR logic (either metric beyond threshold => generator)
+        # With enough samples, Allan variance is fully reliable and startup transients are out of window
+        # std_dev catches wide swings, Allan variance catches hunting patterns - either indicates generator
         if avar_10s > avar_thresh or std_freq > std_thresh:
             return "Generac Generator"
         return "Utility Grid"

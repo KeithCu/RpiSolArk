@@ -214,13 +214,29 @@ class SingleOptocoupler:
                 # Get frequency stats for additional logging
                 stat_count, t_first, t_last = self.counter.get_frequency_info(self.pin)
                 
+                # Get event statistics for detailed analysis
+                event_stats = self.counter.get_event_statistics(self.pin)
+                
                 self.logger.info(f"[NB_COUNT_READ] {self.name} count={pulse_count} expected=~{expected_pulses} elapsed={elapsed:.3f}s count_took={count_duration_ms:.2f}ms")
                 
                 if stat_count > 0:
                     stat_duration_ms = (t_last - t_first) / 1e6
-                    self.logger.info(f"[NB_FREQ_STATS] {self.name} stat_count={stat_count} duration={stat_duration_ms:.2f}ms")
+                    self.logger.info(f"[NB_FREQ_STATS] {self.name} stat_count={stat_count} duration={stat_duration_ms:.2f}ms first_ts={t_first} last_ts={t_last}")
                 else:
                     self.logger.warning(f"[NB_FREQ_STATS] {self.name} NO TIMESTAMPS COLLECTED!")
+                
+                # Log event statistics if available
+                if event_stats:
+                    self.logger.info(f"[NB_EVENT_STATS] {self.name} received={event_stats['received']} debounced={event_stats['debounced']} accepted={event_stats['accepted']} count={event_stats['count']} timestamp_count={event_stats['timestamp_count']}")
+                    
+                    # Compare pulse_count vs stat_count
+                    if pulse_count != stat_count:
+                        self.logger.warning(f"[NB_COUNT_MISMATCH] {self.name} pulse_count={pulse_count} != stat_count={stat_count} (diff={abs(pulse_count - stat_count)})")
+                    
+                    # Log interval statistics if available
+                    if event_stats.get('intervals'):
+                        intervals = event_stats['intervals']
+                        self.logger.info(f"[NB_INTERVAL_STATS] {self.name} count={intervals['count']} min={intervals['min_us']:.1f}us max={intervals['max_us']:.1f}us mean={intervals['mean_us']:.1f}us median={intervals['median_us']:.1f}us std_dev={intervals['std_dev_us']:.1f}us")
                 
                 # Validate pulse count
                 if pulse_count < 0:
@@ -233,12 +249,17 @@ class SingleOptocoupler:
                 if pulse_count < expected_pulses * 0.5:
                     self.logger.warning(f"[NB_COUNT_LOW] {self.name} count={pulse_count} is less than 50% of expected={expected_pulses}")
                 
+                # Calculate pulse loss percentage
+                pulse_loss_pct = (1.0 - (pulse_count / expected_pulses)) * 100 if expected_pulses > 0 else 0
+                if pulse_loss_pct > 5.0:  # Warn if more than 5% loss
+                    self.logger.warning(f"[NB_PULSE_LOSS] {self.name} pulse_loss={pulse_loss_pct:.1f}% (expected={expected_pulses} got={pulse_count})")
+                
                 # Reset error count on successful measurement
                 self.consecutive_errors = 0
                 self.last_successful_count = pulse_count
                 
                 rate = pulse_count / elapsed if elapsed > 0 else 0
-                self.logger.info(f"[NB_MEASURE_END] {self.name} count={pulse_count} elapsed={elapsed:.3f}s rate={rate:.1f}/s")
+                self.logger.info(f"[NB_MEASURE_END] {self.name} count={pulse_count} elapsed={elapsed:.3f}s rate={rate:.1f}/s expected_rate=120.0/s loss={pulse_loss_pct:.1f}%")
                 
                 # Mark measurement as complete
                 self.measurement_active = False
@@ -323,12 +344,49 @@ class SingleOptocoupler:
             # Retrieve frequency stats (count, first, last) directly to avoid list copy overhead
             stat_count, t_first, t_last = self.counter.get_frequency_info(self.pin)
             
+            # Get event statistics for detailed analysis
+            event_stats = self.counter.get_event_statistics(self.pin)
+            
             # Log frequency stats
             if stat_count > 0:
                 stat_duration_ms = (t_last - t_first) / 1e6
                 self.logger.info(f"[FREQ_STATS] {self.name} stat_count={stat_count} duration={stat_duration_ms:.2f}ms first_ts={t_first} last_ts={t_last}")
+                
+                # Calculate timing precision: reset to first pulse, last pulse to count read
+                # Convert reset_end to nanoseconds (approximate, using perf_counter reference)
+                # Note: t_first and t_last are in nanoseconds from kernel, reset_end is perf_counter
+                # We can't directly compare, but we can calculate dead time from measurement window
+                reset_to_first_ms = "N/A"  # Can't directly compare perf_counter to kernel timestamps
+                last_to_count_ms = "N/A"
+                
+                # Calculate dead time: time before first pulse and after last pulse within measurement window
+                # Measurement window: reset_end to count_end
+                measurement_window_ns = (count_end - reset_end) * 1e9
+                pulse_window_ns = t_last - t_first
+                dead_time_before_ns = t_first - (reset_end * 1e9)  # Approximate, may be negative if first pulse before reset
+                dead_time_after_ns = (count_end * 1e9) - t_last
+                
+                self.logger.debug(f"[TIMING_ANALYSIS] {self.name} measurement_window={measurement_window_ns/1e6:.2f}ms pulse_window={pulse_window_ns/1e6:.2f}ms dead_time_before={dead_time_before_ns/1e6:.2f}ms dead_time_after={dead_time_after_ns/1e6:.2f}ms")
             else:
                 self.logger.warning(f"[FREQ_STATS] {self.name} NO TIMESTAMPS COLLECTED!")
+            
+            # Log event statistics if available
+            if event_stats:
+                self.logger.info(f"[EVENT_STATS] {self.name} received={event_stats['received']} debounced={event_stats['debounced']} accepted={event_stats['accepted']} count={event_stats['count']} timestamp_count={event_stats['timestamp_count']}")
+                
+                # Compare pulse_count vs stat_count
+                if pulse_count != stat_count:
+                    self.logger.warning(f"[COUNT_MISMATCH] {self.name} pulse_count={pulse_count} != stat_count={stat_count} (diff={abs(pulse_count - stat_count)})")
+                
+                # Log interval statistics if available
+                if event_stats.get('intervals'):
+                    intervals = event_stats['intervals']
+                    self.logger.info(f"[INTERVAL_STATS] {self.name} count={intervals['count']} min={intervals['min_us']:.1f}us max={intervals['max_us']:.1f}us mean={intervals['mean_us']:.1f}us median={intervals['median_us']:.1f}us std_dev={intervals['std_dev_us']:.1f}us")
+                    
+                    # Calculate expected interval for 60Hz AC (120 pulses/second = 8333.33us per pulse)
+                    expected_interval_60hz_us = 1_000_000 / 120  # 8333.33us
+                    interval_error_pct = abs(intervals['mean_us'] - expected_interval_60hz_us) / expected_interval_60hz_us * 100
+                    self.logger.debug(f"[INTERVAL_ANALYSIS] {self.name} expected_60hz_interval={expected_interval_60hz_us:.2f}us actual_mean={intervals['mean_us']:.2f}us error={interval_error_pct:.2f}%")
             
             # Validate pulse count
             if pulse_count < 0:
@@ -340,12 +398,17 @@ class SingleOptocoupler:
             if pulse_count < expected_pulses * 0.5:
                 self.logger.warning(f"[COUNT_LOW] {self.name} count={pulse_count} is less than 50% of expected={expected_pulses}")
             
+            # Calculate pulse loss percentage
+            pulse_loss_pct = (1.0 - (pulse_count / expected_pulses)) * 100 if expected_pulses > 0 else 0
+            if pulse_loss_pct > 5.0:  # Warn if more than 5% loss
+                self.logger.warning(f"[PULSE_LOSS] {self.name} pulse_loss={pulse_loss_pct:.1f}% (expected={expected_pulses} got={pulse_count})")
+            
             # Reset error count on successful measurement
             self.consecutive_errors = 0
             self.last_successful_count = pulse_count
             
             elapsed = count_end - sleep_start
-            self.logger.info(f"[MEASURE_END] {self.name} count={pulse_count} elapsed={elapsed:.3f}s rate={pulse_count/elapsed:.1f}/s")
+            self.logger.info(f"[MEASURE_END] {self.name} count={pulse_count} elapsed={elapsed:.3f}s rate={pulse_count/elapsed:.1f}/s expected_rate=120.0/s loss={pulse_loss_pct:.1f}%")
             return (pulse_count, elapsed)
             
         except Exception as e:
@@ -453,6 +516,7 @@ class SingleOptocoupler:
             if stat_count >= 2:
                 # Calculate total duration of the observed pulses
                 duration_ns = t_last - t_first
+                duration_sec = duration_ns / 1e9
                 
                 # Calculate number of full intervals observed
                 # If we have N pulses, we have N-1 intervals between them
@@ -469,9 +533,12 @@ class SingleOptocoupler:
                     # Total: 2 events per AC cycle.
                     freq_first_last = (num_intervals * 1e9) / (duration_ns * self.pulses_per_cycle)
                     
+                    # Log detailed calculation breakdown
+                    self.logger.debug(f"[FREQ_CALC_FIRST_LAST] {self.name} stat_count={stat_count} num_intervals={num_intervals} duration_ns={duration_ns} duration_sec={duration_sec:.6f} pulses_per_cycle={self.pulses_per_cycle} calculated={freq_first_last:.6f} Hz")
+                    
                     # Sanity check (40-80Hz range) to prevent gross outliers from single glitches
                     if 40 <= freq_first_last <= 80:
-                        self.logger.debug(f"{self.name} precision frequency: {freq_first_last:.3f} Hz (from {stat_count} pulses over {duration_ns/1e9:.3f}s)")
+                        self.logger.debug(f"{self.name} precision frequency: {freq_first_last:.3f} Hz (from {stat_count} pulses over {duration_sec:.3f}s)")
                     else:
                         self.logger.warning(f"{self.name} precision frequency {freq_first_last:.3f} Hz out of range, falling back to average")
                         freq_first_last = None
@@ -500,6 +567,10 @@ class SingleOptocoupler:
         # UPDATE: With 0.2ms debounce, we filter the falling edge (pulse width ~33us).
         # So we count 2 edges per cycle.
         frequency = pulse_count / (measurement_duration * self.pulses_per_cycle)  # 2 edges per AC cycle (Debounced)
+        
+        # Log detailed calculation breakdown
+        divisor = measurement_duration * self.pulses_per_cycle
+        self.logger.debug(f"[FREQ_CALC_AVERAGE] {self.name} pulse_count={pulse_count} measurement_duration={measurement_duration:.6f} pulses_per_cycle={self.pulses_per_cycle} divisor={divisor:.6f} calculated={frequency:.6f} Hz")
         
         if actual_duration is not None and abs(actual_duration - duration) > 0.001:
             self.logger.debug(f"{self.name} calculated frequency: {frequency:.3f} Hz from {pulse_count} pulses in {actual_duration:.3f}s (requested: {duration:.3f}s)")
