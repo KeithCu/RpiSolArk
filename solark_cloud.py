@@ -12,10 +12,12 @@ import json
 import time
 import logging
 import threading
+import queue
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
+from concurrent.futures import Future
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
 
 
@@ -53,6 +55,12 @@ class SolArkCloud:
         # Thread safety: Playwright page objects must be used from the same thread
         self._playwright_lock = threading.RLock()  # Reentrant lock for thread safety
         
+        # Queue infrastructure for cross-thread Playwright operations
+        self._operation_queue = queue.Queue()
+        self._playwright_thread_id: Optional[int] = None  # Thread ID where Playwright was initialized
+        self._playwright_worker_thread: Optional[threading.Thread] = None
+        self._playwright_worker_running = False
+        
         # Browser components
         self.playwright = None  # Playwright instance (must be stopped in cleanup)
         self.browser: Optional[Browser] = None
@@ -83,6 +91,76 @@ class SolArkCloud:
         
         if not self.username or not self.password:
             self.logger.warning("Sol-Ark credentials not configured in config.yaml")
+    
+    def _is_playwright_thread(self) -> bool:
+        """
+        Check if the current thread is the Playwright thread
+        
+        Returns:
+            bool: True if current thread is the Playwright thread
+        """
+        if self._playwright_thread_id is None:
+            return False
+        return threading.current_thread().ident == self._playwright_thread_id
+    
+    def _queue_operation(self, operation_type: str, *args, **kwargs) -> Future:
+        """
+        Queue a Playwright operation to be executed on the Playwright thread
+        
+        Args:
+            operation_type: Type of operation ('get_time_of_use_state' or 'toggle_time_of_use')
+            *args: Positional arguments for the operation
+            **kwargs: Keyword arguments for the operation
+            
+        Returns:
+            Future: Future object that will contain the result
+        """
+        future = Future()
+        self._operation_queue.put({
+            'type': operation_type,
+            'args': args,
+            'kwargs': kwargs,
+            'future': future
+        })
+        return future
+    
+    def _playwright_worker(self):
+        """
+        Worker thread that processes Playwright operations from the queue.
+        This must run on the thread where Playwright was initialized.
+        """
+        self.logger.debug("Playwright worker thread started")
+        while self._playwright_worker_running:
+            try:
+                # Get operation from queue with timeout to allow checking _playwright_worker_running
+                try:
+                    operation = self._operation_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                
+                operation_type = operation['type']
+                args = operation['args']
+                kwargs = operation['kwargs']
+                future = operation['future']
+                
+                try:
+                    if operation_type == 'get_time_of_use_state':
+                        result = self._get_time_of_use_state_impl(*args, **kwargs)
+                        future.set_result(result)
+                    elif operation_type == 'toggle_time_of_use':
+                        result = self._toggle_time_of_use_impl(*args, **kwargs)
+                        future.set_result(result)
+                    else:
+                        future.set_exception(ValueError(f"Unknown operation type: {operation_type}"))
+                except Exception as e:
+                    future.set_exception(e)
+                finally:
+                    self._operation_queue.task_done()
+                    
+            except Exception as e:
+                self.logger.error(f"Error in Playwright worker thread: {e}")
+        
+        self.logger.debug("Playwright worker thread stopped")
     
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load configuration from YAML file"""
@@ -152,6 +230,20 @@ class SolArkCloud:
             # Set default timeout
             self.page.set_default_timeout(self.timeout)
             
+            # Track the thread where Playwright was initialized
+            self._playwright_thread_id = threading.current_thread().ident
+            self.logger.debug(f"Playwright initialized on thread {self._playwright_thread_id}")
+            
+            # Start the Playwright worker thread
+            self._playwright_worker_running = True
+            self._playwright_worker_thread = threading.Thread(
+                target=self._playwright_worker,
+                name="PlaywrightWorker",
+                daemon=True
+            )
+            self._playwright_worker_thread.start()
+            self.logger.debug("Playwright worker thread started")
+            
             self.logger.info("Browser initialized successfully")
             return True
             
@@ -169,19 +261,60 @@ class SolArkCloud:
     def cleanup(self):
         """Cleanup browser resources"""
         try:
+            # Stop Playwright worker thread first
+            if self._playwright_worker_running:
+                self.logger.debug("Stopping Playwright worker thread...")
+                self._playwright_worker_running = False
+                
+                # Wait for worker thread to finish processing current operation
+                if self._playwright_worker_thread and self._playwright_worker_thread.is_alive():
+                    # Wait a bit for the thread to finish
+                    self._playwright_worker_thread.join(timeout=5.0)
+                    if self._playwright_worker_thread.is_alive():
+                        self.logger.warning("Playwright worker thread did not stop within timeout")
+                
+                # Process any remaining operations in the queue (they will fail, but we should clear them)
+                remaining_ops = 0
+                while not self._operation_queue.empty():
+                    try:
+                        operation = self._operation_queue.get_nowait()
+                        if 'future' in operation:
+                            operation['future'].set_exception(SolArkCloudError("Operation cancelled during cleanup"))
+                        remaining_ops += 1
+                    except queue.Empty:
+                        break
+                
+                if remaining_ops > 0:
+                    self.logger.warning(f"Cancelled {remaining_ops} pending Playwright operations during cleanup")
+            
             # Save session before closing browser
             if self.is_logged_in and self.session_persistence:
-                self._save_session()
+                try:
+                    self._save_session()
+                except Exception as e:
+                    self.logger.warning(f"Failed to save session during cleanup: {e}")
             
             if self.page:
-                self.page.close()
+                try:
+                    self.page.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing page: {e}")
             if self.context:
-                self.context.close()
+                try:
+                    self.context.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing context: {e}")
             if self.browser:
-                self.browser.close()
+                try:
+                    self.browser.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing browser: {e}")
             # Stop playwright instance to prevent resource leaks
             if self.playwright:
-                self.playwright.stop()
+                try:
+                    self.playwright.stop()
+                except Exception as e:
+                    self.logger.warning(f"Error stopping playwright: {e}")
             self.logger.info("Browser cleanup completed")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
@@ -192,6 +325,9 @@ class SolArkCloud:
             self.browser = None
             self.playwright = None
             self.is_logged_in = False
+            self._playwright_thread_id = None
+            self._playwright_worker_thread = None
+            self._playwright_worker_running = False
     
     def login(self) -> bool:
         """
@@ -829,18 +965,39 @@ class SolArkCloud:
             # Click the dropdown
             dropdown_button.click()
             self.logger.info("Clicked on 3 dots dropdown")
-            # Wait for dropdown menu to appear in DOM
-            self.page.wait_for_selector('.el-dropdown-menu', timeout=5000)
-            # Wait a bit longer for the menu to become visible (CSS transitions, positioning, etc.)
-            self.page.wait_for_timeout(1000)
             
-            # Save HTML and screenshot after clicking dropdown
+            # Wait for dropdown menu to appear and become visible
+            # Try to find a visible menu with retries
+            visible_menu = None
+            for attempt in range(10):  # Try up to 10 times (5 seconds total)
+                self.page.wait_for_timeout(500)  # Wait 500ms between attempts
+                all_menus = self.page.query_selector_all('.el-dropdown-menu')
+                self.logger.debug(f"Attempt {attempt + 1}: Found {len(all_menus)} dropdown menus")
+                
+                for i, menu in enumerate(all_menus):
+                    try:
+                        if menu.is_visible():
+                            visible_menu = menu
+                            self.logger.info(f"Found visible dropdown menu {i+1} after {attempt + 1} attempt(s)")
+                            break
+                    except Exception as e:
+                        self.logger.debug(f"Error checking menu {i+1} visibility: {e}")
+                        continue
+                
+                if visible_menu:
+                    break
+            
+            # Save HTML and screenshot after clicking dropdown (whether menu is visible or not)
             html_content = self.page.content()
             html_file = self.cache_dir / f"{html_prefix}dropdown_opened_{plant_id}_{inverter_id}.html"
             with open(html_file, 'w', encoding='utf-8') as f:
                 f.write(html_content)
             self.logger.info(f"Saved dropdown opened HTML: {html_file}")
             self._save_screenshot_to_cache(f"{html_prefix}dropdown_opened_{plant_id}_{inverter_id}.png")
+            
+            if not visible_menu:
+                self.logger.warning("No visible dropdown menu found after clicking, but continuing anyway - _navigate_to_parameters_setting will retry")
+            
             return dropdown_button
         else:
             self.logger.error("Could not find 3 dots dropdown button")
@@ -870,31 +1027,37 @@ class SolArkCloud:
             # Wait for the dropdown menu to appear and be visible
             self.logger.info("Waiting for dropdown menu to appear...")
             
-            # Find all dropdown menus and check which one is visible
-            # Don't use :visible selector as it may timeout - instead check is_visible() manually
-            all_menus = self.page.query_selector_all('.el-dropdown-menu')
-            self.logger.info(f"Found {len(all_menus)} dropdown menus on page")
-            
-            # Wait a bit more for menus to become visible
-            self.page.wait_for_timeout(500)
-            
-            # Find the visible menu by checking each one
+            # Find visible menu with retries (menu may take time to appear after click)
             visible_menu = None
-            for i, menu in enumerate(all_menus):
-                try:
-                    is_visible = menu.is_visible()
-                    self.logger.info(f"Menu {i+1} visible: {is_visible}")
-                    if is_visible:
-                        visible_menu = menu
-                        self.logger.info(f"Found visible dropdown menu {i+1}")
-                        break
-                except Exception as e:
-                    self.logger.debug(f"Error checking menu {i+1} visibility: {e}")
-                    continue
+            for attempt in range(10):  # Try up to 10 times (5 seconds total)
+                self.page.wait_for_timeout(500)  # Wait 500ms between attempts
+                
+                # Find all dropdown menus and check which one is visible
+                all_menus = self.page.query_selector_all('.el-dropdown-menu')
+                if attempt == 0:
+                    self.logger.info(f"Found {len(all_menus)} dropdown menus on page")
+                
+                # Find the visible menu by checking each one
+                for i, menu in enumerate(all_menus):
+                    try:
+                        is_visible = menu.is_visible()
+                        if attempt == 0 or attempt == 9:  # Log on first and last attempt
+                            self.logger.info(f"Menu {i+1} visible: {is_visible}")
+                        if is_visible:
+                            visible_menu = menu
+                            self.logger.info(f"Found visible dropdown menu {i+1} after {attempt + 1} attempt(s)")
+                            break
+                    except Exception as e:
+                        if attempt == 0:
+                            self.logger.debug(f"Error checking menu {i+1} visibility: {e}")
+                        continue
+                
+                if visible_menu:
+                    break
             
             # If no menu is visible, try scrolling the page to bring it into view
-            if not visible_menu and all_menus:
-                self.logger.warning("No visible menu found, trying to scroll page to bring menus into view...")
+            if not visible_menu:
+                self.logger.warning("No visible menu found after retries, trying to scroll page to bring menus into view...")
                 # Scroll to the dropdown button area
                 dropdown_button = self.page.query_selector('.el-dropdown-link.el-dropdown-selfdefine')
                 if dropdown_button:
@@ -904,25 +1067,12 @@ class SolArkCloud:
                 self.page.evaluate("window.scrollBy(0, 200)")
                 self.page.wait_for_timeout(500)
                 # Check again
+                all_menus = self.page.query_selector_all('.el-dropdown-menu')
                 for i, menu in enumerate(all_menus):
                     try:
                         if menu.is_visible():
                             visible_menu = menu
                             self.logger.info(f"Found visible dropdown menu {i+1} after scrolling")
-                            break
-                    except:
-                        continue
-            
-            # visible_menu should already be found above, but if not, try again
-            if not visible_menu:
-                all_menus = self.page.query_selector_all('.el-dropdown-menu')
-                self.logger.info(f"Re-checking {len(all_menus)} dropdown menus on page")
-                for i, menu in enumerate(all_menus):
-                    try:
-                        is_visible = menu.is_visible()
-                        if is_visible:
-                            visible_menu = menu
-                            self.logger.info(f"Found visible dropdown menu {i+1}")
                             break
                     except:
                         continue
@@ -1452,19 +1602,36 @@ class SolArkCloud:
         Returns:
             bool: True if TOU is enabled, False if disabled, None if unable to determine
         """
-        # Handle iframe if present (save original page reference)
+        # Handle iframe if present - navigate to iframe URL (like _navigate_to_tou_settings does)
         original_page = self.page
         try:
             iframe = self.page.query_selector('iframe.testiframe')
             if iframe:
-                self.logger.info("Found iframe, switching to iframe context...")
-                iframe_content = iframe.content_frame()
-                if iframe_content:
-                    # Use iframe content for reading, but keep original page reference
-                    page_to_use = iframe_content
-                    self.logger.info("Switched to iframe context")
-                else:
-                    page_to_use = self.page
+                iframe_src = iframe.get_attribute('src')
+                self.logger.info(f"Found iframe with URL: {iframe_src}")
+                
+                # Navigate directly to the iframe URL (same approach as _navigate_to_tou_settings)
+                self.logger.info("Navigating to iframe URL...")
+                try:
+                    self.page.goto(iframe_src)
+                    self.page.wait_for_load_state('networkidle')
+                    self.logger.info("Successfully navigated to iframe URL")
+                except (PlaywrightTimeoutError, Exception) as e:
+                    error_msg = str(e).lower()
+                    if any(keyword in error_msg for keyword in ['timeout', 'network', 'connection', 'dns', 'refused', 'unreachable', 'failed to connect']):
+                        self.logger.error(f"Network error during iframe navigation: {e}")
+                        raise NetworkError(f"Network connectivity issue: {e}") from e
+                    raise
+                
+                # Save HTML after navigating to iframe
+                html_content = self.page.content()
+                html_file = self.cache_dir / f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.html"
+                with open(html_file, 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+                self.logger.info(f"Saved iframe page HTML: {html_file}")
+                self._save_screenshot_to_cache(f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.png")
+                
+                page_to_use = self.page
             else:
                 self.logger.debug("No iframe found, using main page")
                 page_to_use = self.page
@@ -1472,7 +1639,7 @@ class SolArkCloud:
             self.logger.warning(f"Error handling iframe: {e}")
             page_to_use = self.page
         
-        # Find TOU switch (use page_to_use which may be iframe or main page)
+        # Find TOU switch (use page_to_use which is now the iframe page or main page)
         tou_element = None
         checkbox_element = None
         try:
@@ -1536,6 +1703,104 @@ class SolArkCloud:
                     except Exception as e:
                         self.logger.debug(f"Error with selector {selector}: {e}")
                         continue
+            
+            # If TOU switch not found directly, try System Work Mode (like _navigate_to_tou_settings does)
+            if not checkbox_element:
+                self.logger.info("TOU switch not found directly, looking for System Work Mode link...")
+                
+                system_work_mode_selectors = [
+                    'text=System Work Mode',
+                    'span:has-text("System Work Mode")',
+                    'el-link:has-text("System Work Mode")',
+                    '.item-box:has-text("System Work Mode")',
+                    '.item-box-rlink:has-text("System Work Mode")'
+                ]
+                
+                system_work_mode_element = None
+                system_found_selector = None
+                
+                for i, selector in enumerate(system_work_mode_selectors):
+                    try:
+                        self.logger.debug(f"Trying System Work Mode selector {i+1}/{len(system_work_mode_selectors)}: {selector}")
+                        system_work_mode_element = page_to_use.query_selector(selector)
+                        if system_work_mode_element:
+                            is_visible = system_work_mode_element.is_visible()
+                            if is_visible:
+                                self.logger.info(f"Found System Work Mode with selector: {selector}")
+                                system_found_selector = selector
+                                break
+                    except Exception as e:
+                        self.logger.debug(f"Error with selector: {e}")
+                        continue
+                
+                if system_work_mode_element:
+                    self.logger.info(f"Found System Work Mode using selector: {system_found_selector}")
+                    
+                    # Click the System Work Mode link
+                    self.logger.info("Clicking System Work Mode link...")
+                    system_work_mode_element.click()
+                    page_to_use.wait_for_load_state('networkidle')
+                    page_to_use.wait_for_timeout(2000)
+                    self.logger.info("Successfully clicked System Work Mode link!")
+                    
+                    # Save HTML after clicking System Work Mode
+                    html_content = page_to_use.content()
+                    html_file = self.cache_dir / f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.html"
+                    with open(html_file, 'w', encoding='utf-8') as f:
+                        f.write(html_content)
+                    self.logger.info(f"Saved System Work Mode HTML: {html_file}")
+                    self._save_screenshot_to_cache(f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.png")
+                    
+                    # Now look for TOU switch on the System Work Mode page
+                    self.logger.info("Looking for TOU switch element on System Work Mode page...")
+                    
+                    # Try container selectors again
+                    for container_selector in container_selectors:
+                        try:
+                            container = page_to_use.query_selector(container_selector)
+                            if container:
+                                self.logger.info(f"Found container with 'Time Of Use' using selector: {container_selector}")
+                                switch_element = container.query_selector('.el-switch')
+                                if switch_element:
+                                    self.logger.info("Found .el-switch element within container")
+                                    checkbox_element = switch_element.query_selector('.el-switch__input')
+                                    if checkbox_element:
+                                        tou_element = checkbox_element
+                                        self.logger.info("Found TOU checkbox within switch element after System Work Mode")
+                                        break
+                                if not checkbox_element:
+                                    checkbox_element = container.query_selector('.el-switch__input')
+                                    if checkbox_element:
+                                        tou_element = checkbox_element
+                                        self.logger.info("Found TOU checkbox directly in container after System Work Mode")
+                                        break
+                        except Exception as e:
+                            self.logger.debug(f"Error with container selector {container_selector}: {e}")
+                            continue
+                    
+                    # If still not found, try direct selectors
+                    if not checkbox_element:
+                        for selector in tou_switch_selectors:
+                            try:
+                                checkbox_element = page_to_use.query_selector(selector)
+                                if checkbox_element:
+                                    tou_element = checkbox_element
+                                    self.logger.info(f"Found TOU checkbox with selector: {selector} after System Work Mode")
+                                    break
+                            except Exception as e:
+                                self.logger.debug(f"Error with selector {selector}: {e}")
+                                continue
+                else:
+                    self.logger.error("Could not find System Work Mode link and TOU switch not found directly")
+                    # Save HTML for debugging
+                    html_content = page_to_use.content()
+                    html_file = self.cache_dir / f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.html"
+                    with open(html_file, 'w', encoding='utf-8') as f:
+                        f.write(html_content)
+                    self.logger.info(f"Saved TOU page HTML when not found: {html_file}")
+                    # Restore original page reference
+                    self.page = original_page
+                    return None
         except Exception as e:
             self.logger.error(f"Error finding TOU switch: {e}")
             # Restore original page reference
@@ -1669,9 +1934,9 @@ class SolArkCloud:
                 self.page = original_page
             return None
     
-    def toggle_time_of_use(self, enable: bool, inverter_id: str, plant_id: str = "") -> bool:
+    def _toggle_time_of_use_impl(self, enable: bool, inverter_id: str, plant_id: str = "") -> bool:
         """
-        Toggle Time of Use setting in inverter settings
+        Internal implementation of toggle_time_of_use (must be called from Playwright thread)
         
         Args:
             enable: True to enable TOU, False to disable
@@ -1746,9 +2011,9 @@ class SolArkCloud:
     
 
 
-    def get_time_of_use_state(self, inverter_id: str, plant_id: str = "") -> Optional[bool]:
+    def _get_time_of_use_state_impl(self, inverter_id: str, plant_id: str = "") -> Optional[bool]:
         """
-        Get current Time of Use setting state for an inverter without toggling
+        Internal implementation of get_time_of_use_state (must be called from Playwright thread)
         
         Args:
             inverter_id: Sol-Ark inverter ID
@@ -1806,6 +2071,63 @@ class SolArkCloud:
             except Exception as e:
                 self.logger.error(f"Failed to read Time of Use state: {e}")
                 return None
+    
+    def toggle_time_of_use(self, enable: bool, inverter_id: str, plant_id: str = "") -> bool:
+        """
+        Toggle Time of Use setting in inverter settings (thread-safe wrapper)
+        
+        Args:
+            enable: True to enable TOU, False to disable
+            inverter_id: Sol-Ark inverter ID (required - should come from optocoupler config)
+            plant_id: Sol-Ark plant ID (required for new navigation flow)
+            
+        Returns:
+            bool: True if toggle successful
+            
+        Raises:
+            NetworkError: If network connectivity issues occur
+        """
+        # If called from Playwright thread, execute directly
+        if self._is_playwright_thread():
+            return self._toggle_time_of_use_impl(enable, inverter_id, plant_id)
+        
+        # Otherwise, queue the operation
+        future = self._queue_operation('toggle_time_of_use', enable, inverter_id, plant_id)
+        try:
+            return future.result(timeout=300)  # 5 minute timeout
+        except Exception as e:
+            # Re-raise NetworkError if that's what happened
+            if isinstance(e, NetworkError):
+                raise
+            # Wrap other exceptions
+            raise SolArkCloudError(f"Failed to toggle Time of Use: {e}") from e
+    
+    def get_time_of_use_state(self, inverter_id: str, plant_id: str = "") -> Optional[bool]:
+        """
+        Get current Time of Use setting state for an inverter without toggling (thread-safe wrapper)
+        
+        Args:
+            inverter_id: Sol-Ark inverter ID
+            plant_id: Sol-Ark plant ID (required for new navigation flow)
+            
+        Returns:
+            bool: True if TOU is enabled, False if disabled, None if unable to determine
+        """
+        # If called from Playwright thread, execute directly
+        if self._is_playwright_thread():
+            return self._get_time_of_use_state_impl(inverter_id, plant_id)
+        
+        # Otherwise, queue the operation
+        future = self._queue_operation('get_time_of_use_state', inverter_id, plant_id)
+        try:
+            return future.result(timeout=300)  # 5 minute timeout
+        except Exception as e:
+            # Re-raise NetworkError if that's what happened
+            if isinstance(e, NetworkError):
+                raise
+            # Wrap other exceptions
+            self.logger.error(f"Failed to read Time of Use state: {e}")
+            return None
 
 
 # Example usage and testing
