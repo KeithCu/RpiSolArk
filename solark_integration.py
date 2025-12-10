@@ -814,9 +814,9 @@ def main():
     if args.read_only:
         print("TOU State Read-Only Mode")
     else:
-        print("TOU Integration Test with Real Cloud Verification")
+        print("TOU Toggle Operation")
     print("=" * 70)
-    print(f"\nTesting {len(inverter_infos)} inverter(s): {', '.join(inverter_ids)}")
+    print(f"\nProcessing {len(inverter_infos)} inverter(s): {', '.join(inverter_ids)}")
     print(f"Optocoupler: {optocoupler_name}\n")
     
     # Initialize browser for state reading
@@ -855,114 +855,122 @@ def main():
             print("No changes will be made to inverter settings.\n")
             return
         
-        # Helper function to verify TOU state after change
-        def verify_tou_state(power_source: str, expected_enabled: bool, wait_seconds: int = 20):
-            """Verify TOU state matches expected value after power source change"""
-            print(f"\n{'='*70}")
-            print(f"Testing: {power_source.upper()} power → TOU should be {'ON' if expected_enabled else 'OFF'}")
-            print(f"{'='*70}")
-            
-            # Check if browser is still valid before triggering change
-            try:
-                if integration.solark_cloud.page and integration.solark_cloud.page.is_closed():
-                    print("WARNING: Browser page was closed, re-initializing...")
-                    if not integration.solark_cloud.initialize() or not integration.solark_cloud.login():
-                        print("ERROR: Failed to re-initialize browser")
-                        return False
-            except Exception as e:
-                print(f"WARNING: Error checking browser state: {e}, re-initializing...")
-                if not integration.solark_cloud.initialize() or not integration.solark_cloud.login():
-                    print("ERROR: Failed to re-initialize browser")
-                    return False
-            
-            # Trigger power source change
-            integration.on_power_source_change(power_source, {'frequency': 60.0, 'stability': 'high'}, optocoupler_name)
-            
-            # Wait for operations to complete
-            print(f"Waiting {wait_seconds} seconds for operations to complete...")
-            time.sleep(wait_seconds)
-            
-            # Check browser again before verification
-            try:
-                if integration.solark_cloud.page and integration.solark_cloud.page.is_closed():
-                    print("WARNING: Browser page was closed before verification, re-initializing...")
-                    if not integration.solark_cloud.initialize() or not integration.solark_cloud.login():
-                        print("ERROR: Failed to re-initialize browser for verification")
-                        return False
-            except Exception as e:
-                print(f"WARNING: Error checking browser state before verification: {e}")
-                if not integration.solark_cloud.initialize() or not integration.solark_cloud.login():
-                    print("ERROR: Failed to re-initialize browser for verification")
-                    return False
-            
-            # Verify state for each inverter
-            print("\nVerifying TOU state in cloud...")
-            all_correct = True
-            for inverter_id in inverter_ids:
-                plant_id = inverter_plant_map.get(inverter_id, '')
-                if not plant_id:
-                    print(f"  ? Inverter {inverter_id}: No plant_id configured, skipping verification")
-                    continue
-                actual_state = integration.solark_cloud.get_time_of_use_state(inverter_id, plant_id)
-                if actual_state is not None:
-                    if actual_state == expected_enabled:
-                        print(f"  ✓ Inverter {inverter_id}: TOU is {'ON' if actual_state else 'OFF'} (CORRECT)")
-                    else:
-                        print(f"  ✗ Inverter {inverter_id}: TOU is {'ON' if actual_state else 'OFF'} (EXPECTED: {'ON' if expected_enabled else 'OFF'})")
-                        all_correct = False
-                else:
-                    print(f"  ? Inverter {inverter_id}: Unable to read state")
-                    all_correct = False
-            
-            if all_correct:
-                print(f"\n✓ SUCCESS: All inverters have correct TOU state for {power_source} power")
-            else:
-                print(f"\n✗ WARNING: Some inverters have incorrect TOU state for {power_source} power")
-            
-            return all_correct
+        # Determine desired state for each inverter (toggle: ON→OFF, OFF→ON)
+        print("Determining toggle actions...")
+        inverters_to_enable = []
+        inverters_to_disable = []
+        inverters_unknown_ids = set()
         
-        # Test 1: Grid power → TOU should be enabled
-        verify_tou_state('grid', True, wait_seconds=15)
-        time.sleep(5)
-        
-        # Test 2: Generator power → TOU should be disabled
-        verify_tou_state('generator', False, wait_seconds=15)
-        time.sleep(5)
-        
-        # Test 3: Back to Grid → TOU should be enabled again
-        verify_tou_state('grid', True, wait_seconds=15)
-        time.sleep(5)
-        
-        # Test 4: Off-grid → TOU should be disabled
-        verify_tou_state('off_grid', False, wait_seconds=15)
-        time.sleep(5)
-        
-        # Final summary
-        print(f"\n{'='*70}")
-        print("TEST SUMMARY")
-        print(f"{'='*70}")
-        print(f"\nFinal TOU state:")
-        for inverter_id in inverter_ids:
-            plant_id = inverter_plant_map.get(inverter_id, '')
-            if not plant_id:
-                print(f"  Inverter {inverter_id}: No plant_id configured, skipping")
+        for inverter_info in inverter_infos:
+            inverter_id = inverter_info['id']
+            current_state = initial_states.get(inverter_id)
+            
+            if current_state is None:
+                print(f"  Inverter {inverter_id}: Unknown state, skipping")
+                inverters_unknown_ids.add(inverter_id)
                 continue
-            final_state = integration.solark_cloud.get_time_of_use_state(inverter_id, plant_id)
-            if final_state is not None:
-                print(f"  Inverter {inverter_id}: TOU is {'ON' if final_state else 'OFF'}")
+            elif current_state:
+                # Currently ON, toggle to OFF
+                print(f"  Inverter {inverter_id}: Currently ON → will toggle to OFF")
+                inverters_to_disable.append(inverter_info)
             else:
-                print(f"  Inverter {inverter_id}: Unable to read state")
+                # Currently OFF, toggle to ON
+                print(f"  Inverter {inverter_id}: Currently OFF → will toggle to ON")
+                inverters_to_enable.append(inverter_info)
+        print()
         
-        # Show integration status
-        status = integration.get_status()
-        print(f"\nIntegration status:")
-        print(f"  Enabled: {status['enabled']}")
-        print(f"  Last power source: {status['last_power_source']}")
-        print(f"  TOU enabled: {status['time_of_use_enabled']}")
-        print(f"  Inverter mappings: {status['optocoupler_mappings']}")
+        if not inverters_to_enable and not inverters_to_disable:
+            print("No inverters need to be toggled (all are unknown state or already in desired state).")
+            return
+        
+        # Perform toggle operations
+        print("=" * 70)
+        print("TOGGLING TOU STATE")
+        print("=" * 70)
+        
+        def wait_for_toggle_completion(operation_name: str, max_wait_time: int = 120):
+            """Wait for toggle operation to complete"""
+            print(f"\nWaiting for {operation_name} to complete...")
+            wait_interval = 1  # Check every second
+            elapsed = 0
+            
+            while elapsed < max_wait_time:
+                with integration.operation_lock:
+                    if integration.active_toggle_thread is None or not integration.active_toggle_thread.is_alive():
+                        # Operation completed
+                        break
+                time.sleep(wait_interval)
+                elapsed += wait_interval
+                if elapsed % 10 == 0:
+                    print(f"  Still waiting... ({elapsed}s elapsed)")
+            
+            if elapsed >= max_wait_time:
+                print(f"WARNING: {operation_name} did not complete within timeout period")
+                return False
+            else:
+                print(f"{operation_name} completed in {elapsed}s")
+                return True
+        
+        # Toggle inverters that need to be enabled
+        if inverters_to_enable:
+            print(f"\nEnabling TOU for {len(inverters_to_enable)} inverter(s)...")
+            integration._toggle_time_of_use(True, inverters_to_enable, "manual_toggle", optocoupler_name)
+            wait_for_toggle_completion("Enable operation")
+        
+        # Toggle inverters that need to be disabled
+        if inverters_to_disable:
+            print(f"\nDisabling TOU for {len(inverters_to_disable)} inverter(s)...")
+            integration._toggle_time_of_use(False, inverters_to_disable, "manual_toggle", optocoupler_name)
+            wait_for_toggle_completion("Disable operation")
+        
+        # Wait a bit more for cloud to sync
+        print("Waiting 5 seconds for cloud to sync...")
+        time.sleep(5)
+        
+        # Verify final state
+        print(f"\n{'='*70}")
+        print("VERIFICATION")
+        print(f"{'='*70}")
+        print("\nReading final TOU state from cloud...")
+        
+        all_correct = True
+        for inverter_info in inverter_infos:
+            inverter_id = inverter_info['id']
+            plant_id = inverter_info.get('plant_id', '')
+            
+            if not plant_id:
+                print(f"  Inverter {inverter_id}: No plant_id configured, skipping verification")
+                continue
+            
+            if inverter_id in inverters_unknown_ids:
+                print(f"  Inverter {inverter_id}: Skipped (unknown initial state)")
+                continue
+            
+            initial_state = initial_states.get(inverter_id)
+            expected_state = not initial_state if initial_state is not None else None
+            
+            final_state = integration.solark_cloud.get_time_of_use_state(inverter_id, plant_id)
+            
+            if final_state is not None:
+                if expected_state is not None and final_state == expected_state:
+                    print(f"  ✓ Inverter {inverter_id}: TOU is {'ON' if final_state else 'OFF'} (CORRECT - toggled from {'ON' if initial_state else 'OFF'})")
+                elif expected_state is not None:
+                    print(f"  ✗ Inverter {inverter_id}: TOU is {'ON' if final_state else 'OFF'} (EXPECTED: {'ON' if expected_state else 'OFF'})")
+                    all_correct = False
+                else:
+                    print(f"  ? Inverter {inverter_id}: TOU is {'ON' if final_state else 'OFF'} (initial state was unknown)")
+            else:
+                print(f"  ? Inverter {inverter_id}: Unable to read final state")
+                all_correct = False
+        
+        print()
+        if all_correct:
+            print("✓ SUCCESS: All inverters have been toggled correctly")
+        else:
+            print("✗ WARNING: Some inverters may not have been toggled correctly")
         
         print(f"\n{'='*70}")
-        print("Test completed!")
+        print("Toggle operation completed!")
         print(f"{'='*70}\n")
         
     except KeyboardInterrupt:

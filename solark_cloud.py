@@ -153,15 +153,54 @@ class SolArkCloud:
                     elif operation_type == 'login':
                         result = self._login_impl()
                         future.set_result(result)
+                    elif operation_type == 'cleanup':
+                        # Cleanup operation - no return value needed
+                        self._cleanup_impl()
+                        if future:
+                            future.set_result(None)
                     else:
-                        future.set_exception(ValueError(f"Unknown operation type: {operation_type}"))
+                        if future:
+                            future.set_exception(ValueError(f"Unknown operation type: {operation_type}"))
                 except Exception as e:
-                    future.set_exception(e)
+                    if future:
+                        future.set_exception(e)
                 finally:
                     self._operation_queue.task_done()
                     
             except Exception as e:
                 self.logger.error(f"Error in Playwright worker thread: {e}")
+        
+        # After main loop exits, process any remaining cleanup operations
+        # This ensures cleanup happens even if _playwright_worker_running was set to False
+        try:
+            while True:
+                try:
+                    operation = self._operation_queue.get_nowait()
+                    if operation.get('type') == 'cleanup':
+                        operation_type = operation['type']
+                        future = operation.get('future')
+                        try:
+                            self._cleanup_impl()
+                            if future:
+                                future.set_result(None)
+                        except Exception as e:
+                            if future:
+                                future.set_exception(e)
+                        finally:
+                            self._operation_queue.task_done()
+                    else:
+                        # Cancel non-cleanup operations
+                        future = operation.get('future')
+                        if future:
+                            try:
+                                future.set_exception(SolArkCloudError("Operation cancelled during shutdown"))
+                            except Exception:
+                                pass
+                        self._operation_queue.task_done()
+                except queue.Empty:
+                    break
+        except Exception as e:
+            self.logger.error(f"Error processing final cleanup operations: {e}")
         
         self.logger.debug("Playwright worker thread stopped")
     
@@ -291,35 +330,12 @@ class SolArkCloud:
         self.logger.info("Browser initialized successfully in worker thread")
         return True
     
-    def cleanup(self):
-        """Cleanup browser resources"""
+    def _cleanup_impl(self):
+        """
+        Internal cleanup implementation (must be called from Playwright thread)
+        This closes all Playwright resources in the correct thread context.
+        """
         try:
-            # Stop Playwright worker thread first
-            if self._playwright_worker_running:
-                self.logger.debug("Stopping Playwright worker thread...")
-                self._playwright_worker_running = False
-                
-                # Wait for worker thread to finish processing current operation
-                if self._playwright_worker_thread and self._playwright_worker_thread.is_alive():
-                    # Wait a bit for the thread to finish
-                    self._playwright_worker_thread.join(timeout=5.0)
-                    if self._playwright_worker_thread.is_alive():
-                        self.logger.warning("Playwright worker thread did not stop within timeout")
-                
-                # Process any remaining operations in the queue (they will fail, but we should clear them)
-                remaining_ops = 0
-                while not self._operation_queue.empty():
-                    try:
-                        operation = self._operation_queue.get_nowait()
-                        if 'future' in operation:
-                            operation['future'].set_exception(SolArkCloudError("Operation cancelled during cleanup"))
-                        remaining_ops += 1
-                    except queue.Empty:
-                        break
-                
-                if remaining_ops > 0:
-                    self.logger.warning(f"Cancelled {remaining_ops} pending Playwright operations during cleanup")
-            
             # Save session before closing browser
             if self.is_logged_in and self.session_persistence:
                 try:
@@ -327,6 +343,7 @@ class SolArkCloud:
                 except Exception as e:
                     self.logger.warning(f"Failed to save session during cleanup: {e}")
             
+            # Close Playwright resources in the correct thread
             if self.page:
                 try:
                     self.page.close()
@@ -348,6 +365,72 @@ class SolArkCloud:
                     self.playwright.stop()
                 except Exception as e:
                     self.logger.warning(f"Error stopping playwright: {e}")
+            self.logger.info("Browser cleanup completed in worker thread")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup in worker thread: {e}")
+    
+    def cleanup(self):
+        """Cleanup browser resources"""
+        try:
+            # If worker thread is running, queue cleanup operation to it
+            if self._playwright_worker_running and self._playwright_worker_thread and self._playwright_worker_thread.is_alive():
+                self.logger.debug("Queuing cleanup operation to Playwright worker thread...")
+                
+                # Create a future for the cleanup operation
+                cleanup_future = Future()
+                
+                # Queue the cleanup operation
+                try:
+                    self._operation_queue.put({
+                        'type': 'cleanup',
+                        'args': [],
+                        'kwargs': {},
+                        'future': cleanup_future
+                    }, timeout=2.0)
+                    
+                    # Wait for cleanup to complete (with timeout)
+                    cleanup_timeout = 10.0
+                    start_time = time.time()
+                    while not cleanup_future.done() and (time.time() - start_time) < cleanup_timeout:
+                        time.sleep(0.1)
+                    
+                    if cleanup_future.done():
+                        try:
+                            cleanup_future.result()  # Get any exception that occurred
+                        except Exception as e:
+                            self.logger.warning(f"Error during cleanup operation: {e}")
+                    else:
+                        self.logger.warning("Cleanup operation timed out in worker thread")
+                except queue.Full:
+                    self.logger.warning("Could not queue cleanup operation, queue is full")
+                
+                # Stop the worker thread after cleanup
+                self.logger.debug("Stopping Playwright worker thread...")
+                self._playwright_worker_running = False
+                
+                # Wait for worker thread to finish
+                if self._playwright_worker_thread.is_alive():
+                    self._playwright_worker_thread.join(timeout=5.0)
+                    if self._playwright_worker_thread.is_alive():
+                        self.logger.warning("Playwright worker thread did not stop within timeout")
+            else:
+                # Worker thread not running, just clear any pending operations
+                remaining_ops = 0
+                while not self._operation_queue.empty():
+                    try:
+                        operation = self._operation_queue.get_nowait()
+                        if 'future' in operation and operation['future']:
+                            try:
+                                operation['future'].set_exception(SolArkCloudError("Operation cancelled during cleanup"))
+                            except Exception:
+                                pass  # Future may already be set
+                        remaining_ops += 1
+                    except queue.Empty:
+                        break
+                
+                if remaining_ops > 0:
+                    self.logger.warning(f"Cancelled {remaining_ops} pending Playwright operations during cleanup")
+            
             self.logger.info("Browser cleanup completed")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
