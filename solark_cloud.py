@@ -150,6 +150,9 @@ class SolArkCloud:
                     elif operation_type == 'toggle_time_of_use':
                         result = self._toggle_time_of_use_impl(*args, **kwargs)
                         future.set_result(result)
+                    elif operation_type == 'login':
+                        result = self._login_impl()
+                        future.set_result(result)
                     else:
                         future.set_exception(ValueError(f"Unknown operation type: {operation_type}"))
                 except Exception as e:
@@ -172,91 +175,121 @@ class SolArkCloud:
     
     def initialize(self) -> bool:
         """
-        Initialize browser and context
+        Initialize browser and context in a dedicated worker thread
         
         Returns:
             bool: True if initialization successful
         """
-        try:
-            self.logger.info("Initializing Sol-Ark Cloud browser...")
-            
-            self.playwright = sync_playwright().start()
-            
-            # Force window size to match viewport - use window-size argument
-            window_width = 1366
-            window_height = 768
-            
-            launch_args = [
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                f'--window-size={window_width},{window_height}',
-                f'--window-position=0,0'  # Position at top-left
-            ]
-            
-            self.browser = self.playwright.chromium.launch(
-                headless=self.headless,
-                args=launch_args
-            )
-            
-            # Use full screen viewport to ensure dropdowns are visible
-            # Set viewport to None to use actual window size, or match window size
-            self.context = self.browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                viewport={'width': window_width, 'height': window_height},  # Match window size
-                java_script_enabled=True
-            )
-            
-            self.page = self.context.new_page()
-            
-            # Force viewport size to match window size
+        # If already initialized, return True
+        if self._playwright_thread_id is not None and self.page is not None:
             try:
-                self.page.set_viewport_size({'width': window_width, 'height': window_height})
-                self.logger.info(f"Set viewport and window size to {window_width}x{window_height}")
-            except Exception as e:
-                self.logger.warning(f"Could not set viewport size: {e}")
-            
-            # In non-headless mode, try to ensure the window is actually the right size
-            if not self.headless:
+                if not self.page.is_closed():
+                    return True
+            except:
+                pass
+        
+        # Start worker thread that will initialize Playwright and process queue
+        self._playwright_worker_running = True
+        init_complete = threading.Event()
+        init_error = [None]  # Use list to allow modification from nested function
+        
+        def worker_with_init():
+            try:
+                # Initialize Playwright in the worker thread
+                self.logger.info("Initializing Sol-Ark Cloud browser in worker thread...")
+                self.playwright = sync_playwright().start()
+                
+                # Force window size to match viewport
+                window_width = 1366
+                window_height = 768
+                
+                launch_args = [
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    f'--window-size={window_width},{window_height}',
+                    f'--window-position=0,0'
+                ]
+                
+                self.browser = self.playwright.chromium.launch(
+                    headless=self.headless,
+                    args=launch_args
+                )
+                
+                self.context = self.browser.new_context(
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    viewport={'width': window_width, 'height': window_height},
+                    java_script_enabled=True
+                )
+                
+                self.page = self.context.new_page()
+                
+                # Force viewport size to match window size
                 try:
-                    # Wait a moment for window to initialize
-                    self.page.wait_for_timeout(500)
-                    # Verify viewport size
-                    viewport_size = self.page.viewport_size
-                    if viewport_size:
-                        self.logger.info(f"Actual viewport size: {viewport_size['width']}x{viewport_size['height']}")
+                    self.page.set_viewport_size({'width': window_width, 'height': window_height})
+                    self.logger.info(f"Set viewport and window size to {window_width}x{window_height}")
                 except Exception as e:
-                    self.logger.warning(f"Could not verify viewport size: {e}")
-            
-            # Set default timeout
-            self.page.set_default_timeout(self.timeout)
-            
-            # Track the thread where Playwright was initialized
-            self._playwright_thread_id = threading.current_thread().ident
-            self.logger.debug(f"Playwright initialized on thread {self._playwright_thread_id}")
-            
-            # Start the Playwright worker thread
-            self._playwright_worker_running = True
-            self._playwright_worker_thread = threading.Thread(
-                target=self._playwright_worker,
-                name="PlaywrightWorker",
-                daemon=True
-            )
-            self._playwright_worker_thread.start()
-            self.logger.debug("Playwright worker thread started")
-            
-            self.logger.info("Browser initialized successfully")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to initialize browser: {e}")
-            # Cleanup potential partial initialization
-            try:
-                if self.playwright:
-                    self.playwright.stop()
-                    self.playwright = None
-            except Exception as cleanup_e:
-                self.logger.error(f"Failed to cleanup after initialization error: {cleanup_e}")
-            return False
+                    self.logger.warning(f"Could not set viewport size: {e}")
+                
+                # In non-headless mode, try to ensure the window is actually the right size
+                if not self.headless:
+                    try:
+                        # Wait a moment for window to initialize
+                        self.page.wait_for_timeout(500)
+                        # Verify viewport size
+                        viewport_size = self.page.viewport_size
+                        if viewport_size:
+                            self.logger.info(f"Actual viewport size: {viewport_size['width']}x{viewport_size['height']}")
+                    except Exception as e:
+                        self.logger.warning(f"Could not verify viewport size: {e}")
+                
+                self.page.set_default_timeout(self.timeout)
+                
+                # Track this as the Playwright thread
+                self._playwright_thread_id = threading.current_thread().ident
+                self.logger.debug(f"Playwright initialized in worker thread {self._playwright_thread_id}")
+                
+                # Signal that initialization is complete BEFORE processing queue
+                # This ensures _is_playwright_thread() will return True for the worker thread
+                # Signal that initialization is complete
+                init_complete.set()
+                
+                # Small delay to ensure Playwright greenlet context is fully initialized
+                time.sleep(0.2)
+                
+                # Verify we can actually use Playwright on this thread
+                try:
+                    # Try a simple operation to ensure greenlet context is ready
+                    _ = self.page.url
+                    self.logger.debug("Playwright greenlet context verified")
+                except Exception as e:
+                    self.logger.warning(f"Warning: Could not verify Playwright context: {e}")
+                
+                # Now process the queue
+                self._playwright_worker()
+            except Exception as e:
+                init_error[0] = e
+                init_complete.set()
+                self.logger.error(f"Failed to initialize Playwright in worker thread: {e}")
+        
+        self._playwright_worker_thread = threading.Thread(
+            target=worker_with_init,
+            name="PlaywrightWorker",
+            daemon=True
+        )
+        self._playwright_worker_thread.start()
+        
+        # Wait for initialization to complete
+        init_complete.wait(timeout=30.0)
+        if init_error[0]:
+            self._playwright_worker_running = False
+            raise init_error[0]
+        
+        if not self.page:
+            self._playwright_worker_running = False
+            raise SolArkCloudError("Failed to initialize Playwright in worker thread")
+        
+        self.logger.info("Browser initialized successfully in worker thread")
+        return True
     
     def cleanup(self):
         """Cleanup browser resources"""
@@ -329,9 +362,9 @@ class SolArkCloud:
             self._playwright_worker_thread = None
             self._playwright_worker_running = False
     
-    def login(self) -> bool:
+    def _login_impl(self) -> bool:
         """
-        Login to Sol-Ark cloud platform
+        Internal implementation of login (must be called from Playwright thread)
         
         Returns:
             bool: True if login successful
@@ -343,11 +376,10 @@ class SolArkCloud:
             self.logger.error("Username or password not configured")
             return False
         
-        # Initialize browser if not already done
+        # Ensure browser is initialized (should already be done by worker thread)
         if not self.page:
-            if not self.initialize():
-                self.logger.error("Failed to initialize browser")
-                return False
+            self.logger.error("Browser not initialized - initialize() must be called first")
+            return False
         
         try:
             # Try to restore existing session first
@@ -505,6 +537,31 @@ class SolArkCloud:
         except Exception as e:
             self.logger.error(f"Login failed: {e}")
             return False
+    
+    def login(self) -> bool:
+        """
+        Login to Sol-Ark cloud platform (thread-safe wrapper)
+        
+        Returns:
+            bool: True if login successful
+            
+        Raises:
+            NetworkError: If network connectivity issues occur
+        """
+        # If called from Playwright thread, execute directly
+        if self._is_playwright_thread():
+            return self._login_impl()
+        
+        # Otherwise, queue the operation
+        future = self._queue_operation('login')
+        try:
+            return future.result(timeout=300)  # 5 minute timeout
+        except Exception as e:
+            # Re-raise NetworkError if that's what happened
+            if isinstance(e, NetworkError):
+                raise
+            # Wrap other exceptions
+            raise SolArkCloudError(f"Failed to login: {e}") from e
     
     def _save_page_to_cache(self, filename: str):
         """Save current page content to cache directory"""
