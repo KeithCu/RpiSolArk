@@ -732,6 +732,40 @@ class SolArkCloud:
         except Exception as e:
             self.logger.warning(f"Failed to save page to cache: {e}")
     
+    def _save_html_to_cache(self, filename: str, page: Optional[Page] = None, html_content: Optional[str] = None, log_level: str = "info"):
+        """
+        Save HTML content to cache directory (wrapper that respects cache_pages setting)
+        
+        Args:
+            filename: Name of the file to save (can include path variables)
+            page: Optional Page object to get content from (defaults to self.page)
+            html_content: Optional HTML content string (if not provided, gets from page)
+            log_level: Log level for success message ("info", "debug", "warning")
+        """
+        if not self.cache_pages:
+            return
+        try:
+            if html_content is None:
+                page_to_use = page if page is not None else self.page
+                if page_to_use is None:
+                    self.logger.warning(f"Cannot save HTML to cache: no page available for {filename}")
+                    return
+                html_content = page_to_use.content()
+            
+            html_file = self.cache_dir / filename
+            with open(html_file, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            
+            log_msg = f"Saved HTML to cache: {html_file}"
+            if log_level == "info":
+                self.logger.info(log_msg)
+            elif log_level == "debug":
+                self.logger.debug(log_msg)
+            elif log_level == "warning":
+                self.logger.warning(log_msg)
+        except Exception as e:
+            self.logger.warning(f"Failed to save HTML to cache ({filename}): {e}")
+    
     def _save_screenshot_to_cache(self, filename: str):
         """Save current page screenshot to cache directory"""
         if not self.cache_screenshots:
@@ -982,15 +1016,7 @@ class SolArkCloud:
             raise
         
         # Save HTML and screenshot after navigating to plant page
-        if self.cache_pages:
-            try:
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"{html_prefix}plant_overview_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                self.logger.info(f"Saved plant overview HTML to: {html_file}")
-            except Exception as e:
-                self.logger.warning(f"Failed to save plant overview HTML to cache: {e}")
+        self._save_html_to_cache(f"{html_prefix}plant_overview_{plant_id}_{inverter_id}.html")
         self._save_screenshot_to_cache(f"{html_prefix}plant_overview_{plant_id}_{inverter_id}.png")
         
         # Check if we got redirected to login page
@@ -1052,10 +1078,7 @@ class SolArkCloud:
             if not equipment_element:
                 self.logger.error("Could not find Equipment tab")
                 # Save HTML for debugging
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"{html_prefix}equipment_tab_not_found_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
+                self._save_html_to_cache(f"{html_prefix}equipment_tab_not_found_{plant_id}_{inverter_id}.html", log_level="warning")
                 self._save_screenshot_to_cache(f"{html_prefix}equipment_tab_not_found_{plant_id}_{inverter_id}.png")
                 return False
             
@@ -1068,11 +1091,7 @@ class SolArkCloud:
             self.page.wait_for_timeout(3000)  # Wait for tab content to load
             
             # Save HTML and screenshot after clicking Equipment
-            html_content = self.page.content()
-            html_file = self.cache_dir / f"{html_prefix}equipment_page_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            self.logger.info(f"Saved equipment page HTML to: {html_file}")
+            self._save_html_to_cache(f"{html_prefix}equipment_page_{plant_id}_{inverter_id}.html")
             self._save_screenshot_to_cache(f"{html_prefix}equipment_page_{plant_id}_{inverter_id}.png")
             
             return True
@@ -1098,11 +1117,7 @@ class SolArkCloud:
         self.page.wait_for_timeout(2000)
         
         # Save HTML before looking for inverter
-        html_content = self.page.content()
-        html_file = self.cache_dir / f"{html_prefix}equipment_before_inverter_search_{plant_id}_{inverter_id}.html"
-        with open(html_file, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        self.logger.info(f"Saved equipment page HTML before inverter search: {html_file}")
+        self._save_html_to_cache(f"{html_prefix}equipment_before_inverter_search_{plant_id}_{inverter_id}.html")
         self._save_screenshot_to_cache(f"{html_prefix}equipment_before_inverter_search_{plant_id}_{inverter_id}.png")
         
         # Find the inverter in the collapsible list structure
@@ -1116,10 +1131,7 @@ class SolArkCloud:
             except Exception as e:
                 self.logger.error(f"Timeout waiting for inverter {inverter_id} to appear: {e}")
                 # Save HTML for debugging
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"{html_prefix}inverter_not_found_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
+                self._save_html_to_cache(f"{html_prefix}inverter_not_found_{plant_id}_{inverter_id}.html", log_level="warning")
                 self._save_screenshot_to_cache(f"{html_prefix}inverter_not_found_{plant_id}_{inverter_id}.png")
                 return None
             
@@ -1169,10 +1181,7 @@ class SolArkCloud:
         except Exception as e:
             self.logger.error(f"Error finding inverter dropdown: {e}")
             # Save HTML for debugging
-            html_content = self.page.content()
-            html_file = self.cache_dir / f"{html_prefix}dropdown_error_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
+            self._save_html_to_cache(f"{html_prefix}dropdown_error_{plant_id}_{inverter_id}.html", log_level="warning")
             self._save_screenshot_to_cache(f"{html_prefix}dropdown_error_{plant_id}_{inverter_id}.png")
             return None
         
@@ -1207,11 +1216,7 @@ class SolArkCloud:
                     break
             
             # Save HTML and screenshot after clicking dropdown (whether menu is visible or not)
-            html_content = self.page.content()
-            html_file = self.cache_dir / f"{html_prefix}dropdown_opened_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            self.logger.info(f"Saved dropdown opened HTML: {html_file}")
+            self._save_html_to_cache(f"{html_prefix}dropdown_opened_{plant_id}_{inverter_id}.html")
             self._save_screenshot_to_cache(f"{html_prefix}dropdown_opened_{plant_id}_{inverter_id}.png")
             
             if not visible_menu:
@@ -1221,10 +1226,7 @@ class SolArkCloud:
         else:
             self.logger.error("Could not find 3 dots dropdown button")
             # Save HTML for debugging
-            html_content = self.page.content()
-            html_file = self.cache_dir / f"{html_prefix}dropdown_not_found_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
+            self._save_html_to_cache(f"{html_prefix}dropdown_not_found_{plant_id}_{inverter_id}.html", log_level="warning")
             self._save_screenshot_to_cache(f"{html_prefix}dropdown_not_found_{plant_id}_{inverter_id}.png")
             return None
     
@@ -1403,11 +1405,7 @@ class SolArkCloud:
             self.page.wait_for_timeout(2000)
             
             # Save HTML and screenshot of inverter settings page
-            html_content = self.page.content()
-            html_file = self.cache_dir / f"{html_prefix}inverter_settings_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            self.logger.info(f"Saved inverter settings page HTML: {html_file}")
+            self._save_html_to_cache(f"{html_prefix}inverter_settings_{plant_id}_{inverter_id}.html")
             self._save_screenshot_to_cache(f"{html_prefix}inverter_settings_{plant_id}_{inverter_id}.png")
             
             return True
@@ -1453,11 +1451,7 @@ class SolArkCloud:
                     raise
                 
                 # Save HTML after navigating to iframe
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                self.logger.info(f"Saved iframe page HTML: {html_file}")
+                self._save_html_to_cache(f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.html")
                 self._save_screenshot_to_cache(f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.png")
                 
                 # First, try to find TOU switch directly on the page
@@ -1528,11 +1522,7 @@ class SolArkCloud:
                         self.logger.info("Successfully clicked System Work Mode link!")
                         
                         # Save HTML after clicking System Work Mode
-                        html_content = self.page.content()
-                        html_file = self.cache_dir / f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.html"
-                        with open(html_file, 'w', encoding='utf-8') as f:
-                            f.write(html_content)
-                        self.logger.info(f"Saved System Work Mode HTML: {html_file}")
+                        self._save_html_to_cache(f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.html")
                         self._save_screenshot_to_cache(f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.png")
                         
                         # Now look for TOU switch on the System Work Mode page
@@ -1554,19 +1544,13 @@ class SolArkCloud:
                     else:
                         self.logger.error("Could not find System Work Mode link and TOU switch not found directly")
                         # Save HTML for debugging
-                        html_content = self.page.content()
-                        html_file = self.cache_dir / f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.html"
-                        with open(html_file, 'w', encoding='utf-8') as f:
-                            f.write(html_content)
+                        self._save_html_to_cache(f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.html", log_level="warning")
                         self._save_screenshot_to_cache(f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.png")
                         return None
             else:
                 self.logger.error("Could not find iframe.testiframe")
                 # Save HTML for debugging
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"{html_prefix}iframe_not_found_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
+                self._save_html_to_cache(f"{html_prefix}iframe_not_found_{plant_id}_{inverter_id}.html", log_level="warning")
                 self._save_screenshot_to_cache(f"{html_prefix}iframe_not_found_{plant_id}_{inverter_id}.png")
                 return None
             
@@ -1626,15 +1610,7 @@ class SolArkCloud:
                 
                 # Toggle is needed - proceed with toggle and save
                 # Save HTML and screenshot before TOU toggle
-                if self.cache_pages:
-                    try:
-                        html_content = self.page.content()
-                        html_file = self.cache_dir / f"tou_before_{plant_id}_{inverter_id}.html"
-                        with open(html_file, 'w', encoding='utf-8') as f:
-                            f.write(html_content)
-                        self.logger.info(f"Saved TOU before HTML: {html_file}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to save TOU before HTML to cache: {e}")
+                self._save_html_to_cache(f"tou_before_{plant_id}_{inverter_id}.html")
                 self._save_screenshot_to_cache(f"tou_before_{plant_id}_{inverter_id}.png")
                 
                 self.logger.info(f"Toggling TOU switch from {'ON' if is_checked else 'OFF'} to {'ON' if enable else 'OFF'}...")
@@ -1662,15 +1638,7 @@ class SolArkCloud:
                 self.logger.info(f"TOU switch new state: {'ON' if new_state else 'OFF'}")
                 
                 # Save HTML and screenshot after TOU toggle
-                if self.cache_pages:
-                    try:
-                        html_content = self.page.content()
-                        html_file = self.cache_dir / f"tou_after_{plant_id}_{inverter_id}.html"
-                        with open(html_file, 'w', encoding='utf-8') as f:
-                            f.write(html_content)
-                        self.logger.info(f"Saved TOU after HTML: {html_file}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to save TOU after HTML to cache: {e}")
+                self._save_html_to_cache(f"tou_after_{plant_id}_{inverter_id}.html")
                 self._save_screenshot_to_cache(f"tou_after_{plant_id}_{inverter_id}.png")
                 
                 if new_state != is_checked:
@@ -1864,11 +1832,7 @@ class SolArkCloud:
                     raise
                 
                 # Save HTML after navigating to iframe
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                self.logger.info(f"Saved iframe page HTML: {html_file}")
+                self._save_html_to_cache(f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.html")
                 self._save_screenshot_to_cache(f"{html_prefix}iframe_page_{plant_id}_{inverter_id}.png")
                 
                 page_to_use = self.page
@@ -1886,11 +1850,7 @@ class SolArkCloud:
         try:
             # Save HTML before looking for TOU switch
             self.logger.info("Saving page HTML and screenshot before TOU search...")
-            html_content = page_to_use.content()
-            html_file = self.cache_dir / f"{html_prefix}tou_before_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            self.logger.info(f"Saved TOU page HTML before search: {html_file}")
+            self._save_html_to_cache(f"{html_prefix}tou_before_{plant_id}_{inverter_id}.html", page=page_to_use)
             self._save_screenshot_to_cache(f"{html_prefix}tou_before_{plant_id}_{inverter_id}.png")
             
             # Strategy: Find the form item with "Time Of Use" label first, then find the checkbox within it
@@ -1989,11 +1949,7 @@ class SolArkCloud:
                     self.logger.info("Successfully clicked System Work Mode link!")
                     
                     # Save HTML after clicking System Work Mode
-                    html_content = page_to_use.content()
-                    html_file = self.cache_dir / f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.html"
-                    with open(html_file, 'w', encoding='utf-8') as f:
-                        f.write(html_content)
-                    self.logger.info(f"Saved System Work Mode HTML: {html_file}")
+                    self._save_html_to_cache(f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.html", page=page_to_use)
                     self._save_screenshot_to_cache(f"{html_prefix}system_work_mode_{plant_id}_{inverter_id}.png")
                     
                     # Now look for TOU switch on the System Work Mode page
@@ -2038,11 +1994,7 @@ class SolArkCloud:
                 else:
                     self.logger.error("Could not find System Work Mode link and TOU switch not found directly")
                     # Save HTML for debugging
-                    html_content = page_to_use.content()
-                    html_file = self.cache_dir / f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.html"
-                    with open(html_file, 'w', encoding='utf-8') as f:
-                        f.write(html_content)
-                    self.logger.info(f"Saved TOU page HTML when not found: {html_file}")
+                    self._save_html_to_cache(f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.html", page=page_to_use, log_level="warning")
                     # Restore original page reference
                     self.page = original_page
                     return None
@@ -2055,11 +2007,7 @@ class SolArkCloud:
         if not checkbox_element:
             self.logger.error("Could not find TOU switch checkbox")
             # Save HTML for debugging
-            html_content = page_to_use.content()
-            html_file = self.cache_dir / f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            self.logger.info(f"Saved TOU page HTML when not found: {html_file}")
+            self._save_html_to_cache(f"{html_prefix}tou_not_found_{plant_id}_{inverter_id}.html", page=page_to_use, log_level="warning")
             # Restore original page reference
             self.page = original_page
             return None
@@ -2151,11 +2099,7 @@ class SolArkCloud:
             if is_checked is None:
                 self.logger.error("Could not determine TOU state using any method")
                 # Save HTML for debugging
-                html_content = page_to_use.content()
-                html_file = self.cache_dir / f"{html_prefix}tou_read_error_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                self.logger.info(f"Saved TOU page HTML after read error: {html_file}")
+                self._save_html_to_cache(f"{html_prefix}tou_read_error_{plant_id}_{inverter_id}.html", page=page_to_use, log_level="warning")
                 # Restore original page reference
                 self.page = original_page
                 return None
@@ -2163,11 +2107,7 @@ class SolArkCloud:
             self.logger.info(f"TOU switch current state: {'ON' if is_checked else 'OFF'}")
             
             # Save HTML after reading state
-            html_content = page_to_use.content()
-            html_file = self.cache_dir / f"{html_prefix}tou_after_{plant_id}_{inverter_id}.html"
-            with open(html_file, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            self.logger.info(f"Saved TOU page HTML after reading: {html_file}")
+            self._save_html_to_cache(f"{html_prefix}tou_after_{plant_id}_{inverter_id}.html", page=page_to_use)
             
             # Restore original page reference
             self.page = original_page
