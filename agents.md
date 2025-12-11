@@ -496,6 +496,22 @@ To automate a new setting (e.g., "Battery Charge Current"):
 3.  **Cache**: Clear the `solark_session.json` file to force a fresh login.
 4.  **Selectors**: Sol-Ark may have updated their UI. Check `solark_cloud.py` selectors against the actual website HTML.
 
+### Playwright and Systemd Service
+
+**Important**: When running as a systemd service, Playwright **MUST** run in headless mode.
+
+**Why**: Systemd services run without a display server (X11/Wayland) or user session. Non-headless browsers require:
+- A display server connection
+- A user session with display access
+- Proper `DISPLAY` environment variable
+
+**Configuration**:
+- Set `headless: true` in `config.yaml` under `solark_cloud` section for production/systemd use
+- Use `headless: false` only for manual testing/debugging when running interactively
+- The `solark_cloud.py` module automatically reads this setting and configures Playwright accordingly
+
+**Note**: The test file `tests/test_playwright_simple.py` uses `headless=False` for visibility during manual testing, but this will fail if run via systemd. For systemd compatibility, ensure `config.yaml` has `headless: true`.
+
 ### No Frequency Reading
 
 **Symptoms**: "No pulses detected" or 0Hz reading.

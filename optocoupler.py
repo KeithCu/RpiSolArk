@@ -219,7 +219,7 @@ class SingleOptocoupler:
                 include_intervals = self.logger.isEnabledFor(logging.DEBUG)
                 event_stats = self.counter.get_event_statistics(self.pin, include_intervals=include_intervals)
                 
-                self.logger.info(f"[NB_COUNT_READ] {self.name} count={pulse_count} expected=~{expected_pulses} elapsed={elapsed:.3f}s count_took={count_duration_ms:.2f}ms")
+                self.logger.debug(f"[NB_COUNT_READ] {self.name} count={pulse_count} expected=~{expected_pulses} elapsed={elapsed:.3f}s count_took={count_duration_ms:.2f}ms")
                 
                 if stat_count > 0:
                     stat_duration_ms = (t_last - t_first) / 1e6

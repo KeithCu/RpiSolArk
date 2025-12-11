@@ -15,11 +15,24 @@ from typing import Optional, Dict, Tuple
 
 import gpiod  # libgpiod v2 Python bindings
 
+# Module-specific log level override (empty string or None to use default from config.yaml)
+MODULE_LOG_LEVEL = None  # Use default log level from config.yaml
+
+
 class GPIOEventCounter:
 	"""Pure-Python counter backend using libgpiod v2 edge events."""
 
 	def __init__(self, logger: logging.Logger, chip_name: str = "/dev/gpiochip0"):
 		self.logger = logger
+		
+		# Apply module-specific log level if set
+		if MODULE_LOG_LEVEL and MODULE_LOG_LEVEL.strip():
+			try:
+				log_level = getattr(logging, MODULE_LOG_LEVEL.strip().upper())
+				self.logger.setLevel(log_level)
+			except AttributeError:
+				self.logger.warning(f"Invalid MODULE_LOG_LEVEL '{MODULE_LOG_LEVEL}', using default")
+		
 		self.chip_name = chip_name
 		self.registered_pins: Dict[int, int] = {}  # pin -> index (0..1)
 		self.counts: Dict[int, int] = {}

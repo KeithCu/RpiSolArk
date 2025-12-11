@@ -19,6 +19,9 @@ import json
 
 from solark_cloud import SolArkCloud, SolArkCloudError, NetworkError
 
+# Module-specific log level override (empty string or None to use default from config.yaml)
+MODULE_LOG_LEVEL = "INFO"  # Override default log level for this module
+
 
 class SolArkIntegration:
     """
@@ -33,6 +36,15 @@ class SolArkIntegration:
             config_path: Path to configuration file
         """
         self.logger = logging.getLogger(__name__)
+        
+        # Apply module-specific log level if set
+        if MODULE_LOG_LEVEL and MODULE_LOG_LEVEL.strip():
+            try:
+                log_level = getattr(logging, MODULE_LOG_LEVEL.strip().upper())
+                self.logger.setLevel(log_level)
+            except AttributeError:
+                self.logger.warning(f"Invalid MODULE_LOG_LEVEL '{MODULE_LOG_LEVEL}', using default")
+        
         self.config_path = config_path
         
         # Load configuration

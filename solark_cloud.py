@@ -20,6 +20,9 @@ from datetime import datetime, timedelta
 from concurrent.futures import Future
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
 
+# Module-specific log level override (empty string or None to use default from config.yaml)
+MODULE_LOG_LEVEL = "INFO"  # Override default log level for this module
+
 
 class SolArkCloudError(Exception):
     """Custom exception for Sol-Ark cloud operations"""
@@ -51,6 +54,14 @@ class SolArkCloud:
         
         # Setup logging
         self.logger = logging.getLogger(__name__)
+        
+        # Apply module-specific log level if set
+        if MODULE_LOG_LEVEL and MODULE_LOG_LEVEL.strip():
+            try:
+                log_level = getattr(logging, MODULE_LOG_LEVEL.strip().upper())
+                self.logger.setLevel(log_level)
+            except AttributeError:
+                self.logger.warning(f"Invalid MODULE_LOG_LEVEL '{MODULE_LOG_LEVEL}', using default")
         
         # Thread safety: Playwright page objects must be used from the same thread
         self._playwright_lock = threading.RLock()  # Reentrant lock for thread safety
