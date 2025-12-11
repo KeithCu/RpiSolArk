@@ -373,7 +373,7 @@ class SolArkIntegration:
         self.logger.info(f"No stored state found for inverter {inverter_id}, defaulting to ON (enabled)")
         return True
     
-    def _update_tou_state(self, inverter_id: str, enabled: bool, power_source: str, last_attempt_time: Optional[float] = None):
+    def _update_tou_state(self, inverter_id: str, enabled: bool, power_source: str, last_attempt_time: Optional[float] = None, pending_desired_state: Optional[bool] = None, pending_power_source: Optional[str] = None):
         """
         Update stored TOU state for an inverter.
         
@@ -382,18 +382,29 @@ class SolArkIntegration:
             enabled: TOU enabled state
             power_source: Power source that triggered this change
             last_attempt_time: Timestamp of last change attempt (defaults to current time)
+            pending_desired_state: Desired state that was skipped due to cooldown (for execution after cooldown)
+            pending_power_source: Power source for the pending operation
         """
         self.logger.info(f"Updating TOU state for inverter {inverter_id}: {'ON' if enabled else 'OFF'} (power source: {power_source})")
         if 'inverters' not in self.tou_state:
             self.tou_state['inverters'] = {}
         
         current_time = time.time()
-        self.tou_state['inverters'][inverter_id] = {
+        inverter_data = {
             'tou_enabled': enabled,
             'last_updated': current_time,
             'last_power_source': power_source,
             'last_attempt_time': last_attempt_time if last_attempt_time is not None else current_time
         }
+        
+        # Store pending operation if provided
+        if pending_desired_state is not None:
+            inverter_data['pending_desired_state'] = pending_desired_state
+            if pending_power_source:
+                inverter_data['pending_power_source'] = pending_power_source
+            self.logger.info(f"Stored pending operation for inverter {inverter_id}: TOU={'ON' if pending_desired_state else 'OFF'} (will execute after cooldown)")
+        
+        self.tou_state['inverters'][inverter_id] = inverter_data
         
         self._save_tou_state()
         self.logger.info(f"Successfully updated TOU state for inverter {inverter_id}: {'enabled' if enabled else 'disabled'} (power source: {power_source})")
@@ -468,9 +479,27 @@ class SolArkIntegration:
                     self.logger.info("Retry thread stopping (retry_thread_running=False)")
                     break
                 
-                self.logger.info("Waking from sleep, checking for pending operations...")
+                self.logger.info("Waking from sleep, checking for pending operations and expired cooldowns...")
                 
-                # Check if there are any pending operations
+                # Check for expired cooldowns that have pending operations
+                expired_cooldowns = []
+                with self.operation_lock:
+                    inverters = self.tou_state.get('inverters', {})
+                    for inv_id, inv_data in list(inverters.items()):
+                        if isinstance(inv_data, dict) and 'pending_desired_state' in inv_data:
+                            last_attempt_time = inv_data.get('last_attempt_time')
+                            if last_attempt_time:
+                                time_since_attempt = time.time() - last_attempt_time
+                                if time_since_attempt >= self.tou_cooldown_seconds:
+                                    # Cooldown expired, add to list for execution
+                                    expired_cooldowns.append((inv_id, inv_data.copy()))
+                
+                # Execute expired cooldown operations outside the lock (method will acquire its own lock)
+                for inv_id, inv_data in expired_cooldowns:
+                    self.logger.info(f"Cooldown expired for inverter {inv_id} in retry loop, executing pending operation")
+                    self._check_and_execute_pending_after_cooldown(inv_id, inv_data)
+                
+                # Check if there are any pending operations (network failures)
                 with self.pending_operations_lock:
                     pending_ops = list(self.pending_operations.items())
                 
@@ -546,6 +575,7 @@ class SolArkIntegration:
     def _is_in_cooldown(self, inverter_id: str) -> bool:
         """
         Check if an inverter is currently in cooldown period.
+        Also checks if cooldown has expired and executes any pending operations.
         
         Args:
             inverter_id: Inverter ID to check
@@ -574,8 +604,89 @@ class SolArkIntegration:
             self.logger.info(f"Inverter {inverter_id} is in cooldown: {cooldown_remaining:.0f}s remaining (cooldown period: {self.tou_cooldown_seconds}s)")
         else:
             self.logger.info(f"Inverter {inverter_id} is not in cooldown (last attempt was {time_since_attempt:.0f}s ago, cooldown period: {self.tou_cooldown_seconds}s)")
+            # Check if there's a pending operation that should be executed now that cooldown expired
+            self._check_and_execute_pending_after_cooldown(inverter_id, inverter_data)
         
         return in_cooldown
+    
+    def _check_and_execute_pending_after_cooldown(self, inverter_id: str, inverter_data: dict):
+        """
+        Check if cooldown has expired and execute any pending operation.
+        
+        Args:
+            inverter_id: Inverter ID to check
+            inverter_data: Inverter data dictionary
+        """
+        pending_desired_state = inverter_data.get('pending_desired_state')
+        if pending_desired_state is None:
+            # No pending operation
+            return
+        
+        pending_power_source = inverter_data.get('pending_power_source', 'unknown')
+        self.logger.info(f"Cooldown expired for inverter {inverter_id}, executing pending operation: TOU={'ON' if pending_desired_state else 'OFF'} (power_source: {pending_power_source})")
+        
+        # Find the optocoupler and plant_id for this inverter
+        optocoupler_name = None
+        plant_id = ""
+        for opt_name, inverter_infos in self.optocoupler_plants.items():
+            for inv_info in inverter_infos:
+                if inv_info['id'] == inverter_id:
+                    optocoupler_name = opt_name
+                    plant_id = inv_info.get('plant_id', '')
+                    break
+            if optocoupler_name:
+                break
+        
+        if not optocoupler_name:
+            self.logger.warning(f"Could not find optocoupler mapping for inverter {inverter_id}, cannot execute pending operation")
+            # Clear pending operation since we can't execute it
+            with self.operation_lock:
+                inverter_data.pop('pending_desired_state', None)
+                inverter_data.pop('pending_power_source', None)
+                self.tou_state['inverters'][inverter_id] = inverter_data
+                self._save_tou_state()
+            return
+        
+        # Execute the pending operation by creating a single-inverter toggle
+        try:
+            self.logger.info(f"Executing pending TOU toggle for inverter {inverter_id}: TOU={'ON' if pending_desired_state else 'OFF'}")
+            result = self.solark_cloud.toggle_time_of_use(pending_desired_state, inverter_id, plant_id)
+            
+            with self.operation_lock:
+                if result:
+                    self.logger.info(f"Successfully executed pending operation for inverter {inverter_id}: TOU={'ON' if pending_desired_state else 'OFF'}")
+                    # Update state (this will save)
+                    attempt_time = time.time()
+                    self._update_tou_state(inverter_id, pending_desired_state, pending_power_source, last_attempt_time=attempt_time)
+                    # Clear pending flags (update_tou_state doesn't clear them, so we do it manually)
+                    if 'inverters' in self.tou_state and inverter_id in self.tou_state['inverters']:
+                        self.tou_state['inverters'][inverter_id].pop('pending_desired_state', None)
+                        self.tou_state['inverters'][inverter_id].pop('pending_power_source', None)
+                        self._save_tou_state()
+                else:
+                    self.logger.warning(f"Failed to execute pending operation for inverter {inverter_id} (non-network error), keeping pending state")
+                    # Update attempt time for cooldown, but keep pending operation
+                    attempt_time = time.time()
+                    self._update_tou_state(inverter_id, inverter_data.get('tou_enabled', pending_desired_state), 
+                                         pending_power_source, last_attempt_time=attempt_time,
+                                         pending_desired_state=pending_desired_state, 
+                                         pending_power_source=pending_power_source)
+                    
+        except NetworkError as e:
+            self.logger.warning(f"Network error executing pending operation for inverter {inverter_id}: {e}. "
+                              f"Adding to pending operations queue for retry")
+            # Add to pending operations queue for network retry
+            with self.operation_lock:
+                self._add_pending_operation(inverter_id, pending_desired_state, pending_power_source, optocoupler_name, plant_id)
+                # Clear the pending_desired_state flag since it's now in the pending_operations queue
+                inverter_data = self.tou_state['inverters'].get(inverter_id, {})
+                inverter_data.pop('pending_desired_state', None)
+                inverter_data.pop('pending_power_source', None)
+                self.tou_state['inverters'][inverter_id] = inverter_data
+                self._save_tou_state()
+        except Exception as e:
+            self.logger.error(f"Unexpected error executing pending operation for inverter {inverter_id}: {e}")
+            # Keep pending operation for next attempt
     
     
     def on_power_source_change(self, power_source: str, frequency_data: Dict[str, Any], optocoupler_name: str = None):
@@ -719,6 +830,15 @@ class SolArkIntegration:
                             # Update stored state to match cloud state (requires lock)
                             with self.operation_lock:
                                 self._update_tou_state(inverter_id, enable, power_source)
+                                # Clear any pending operations since state already matches desired state
+                                inverters = self.tou_state.get('inverters', {})
+                                inverter_data = inverters.get(inverter_id, {})
+                                if 'pending_desired_state' in inverter_data:
+                                    inverter_data.pop('pending_desired_state', None)
+                                    inverter_data.pop('pending_power_source', None)
+                                    self.tou_state['inverters'][inverter_id] = inverter_data
+                                    self._save_tou_state()
+                                    self.logger.info(f"Cleared pending operation for inverter {inverter_id} since state already matches")
                             success_count += 1
                             continue
                         
@@ -733,10 +853,15 @@ class SolArkIntegration:
                                 
                                 self.logger.info(f"TOU change for inverter {inverter_id} skipped due to cooldown "
                                                f"({cooldown_remaining:.0f}s remaining). "
-                                               f"Assuming previous attempt succeeded, optimistically setting state to {'enabled' if enable else 'disabled'}")
+                                               f"Storing pending operation to execute after cooldown expires: TOU={'ON' if enable else 'OFF'}")
                                 
-                                # Optimistically update state to match desired state (assume previous attempt succeeded)
-                                self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=last_attempt_time)
+                                # Store pending operation to execute after cooldown expires
+                                # Keep current state but mark what we want to do after cooldown
+                                current_stored_state = inverter_data.get('tou_enabled', current_state)
+                                self._update_tou_state(inverter_id, current_stored_state, power_source, 
+                                                     last_attempt_time=last_attempt_time,
+                                                     pending_desired_state=enable,
+                                                     pending_power_source=power_source)
                                 success_count += 1
                                 continue
                         
@@ -759,7 +884,16 @@ class SolArkIntegration:
                                     # Update state after successful cloud call
                                     attempt_time = time.time()
                                     self._update_tou_state(inverter_id, enable, power_source, last_attempt_time=attempt_time)
-                                    # Remove from pending operations if it was there
+                                    # Clear any pending operations since we successfully executed
+                                    inverters = self.tou_state.get('inverters', {})
+                                    inverter_data = inverters.get(inverter_id, {})
+                                    if 'pending_desired_state' in inverter_data:
+                                        inverter_data.pop('pending_desired_state', None)
+                                        inverter_data.pop('pending_power_source', None)
+                                        self.tou_state['inverters'][inverter_id] = inverter_data
+                                        self._save_tou_state()
+                                        self.logger.info(f"Cleared pending operation for inverter {inverter_id} after successful execution")
+                                    # Remove from pending operations queue if it was there
                                     self._remove_pending_operation(inverter_id)
                                 else:
                                     # Non-network failure (e.g., element not found, authentication issue)
