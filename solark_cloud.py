@@ -721,6 +721,8 @@ class SolArkCloud:
     
     def _save_page_to_cache(self, filename: str):
         """Save current page content to cache directory"""
+        if not self.cache_pages:
+            return
         try:
             content = self.page.content()
             cache_file = self.cache_dir / filename
@@ -728,7 +730,7 @@ class SolArkCloud:
                 f.write(content)
             self.logger.debug(f"Saved page to cache: {cache_file}")
         except Exception as e:
-            self.logger.error(f"Failed to save page to cache: {e}")
+            self.logger.warning(f"Failed to save page to cache: {e}")
     
     def _save_screenshot_to_cache(self, filename: str):
         """Save current page screenshot to cache directory"""
@@ -980,11 +982,15 @@ class SolArkCloud:
             raise
         
         # Save HTML and screenshot after navigating to plant page
-        html_content = self.page.content()
-        html_file = self.cache_dir / f"{html_prefix}plant_overview_{plant_id}_{inverter_id}.html"
-        with open(html_file, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        self.logger.info(f"Saved plant overview HTML to: {html_file}")
+        if self.cache_pages:
+            try:
+                html_content = self.page.content()
+                html_file = self.cache_dir / f"{html_prefix}plant_overview_{plant_id}_{inverter_id}.html"
+                with open(html_file, 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+                self.logger.info(f"Saved plant overview HTML to: {html_file}")
+            except Exception as e:
+                self.logger.warning(f"Failed to save plant overview HTML to cache: {e}")
         self._save_screenshot_to_cache(f"{html_prefix}plant_overview_{plant_id}_{inverter_id}.png")
         
         # Check if we got redirected to login page
@@ -1620,11 +1626,15 @@ class SolArkCloud:
                 
                 # Toggle is needed - proceed with toggle and save
                 # Save HTML and screenshot before TOU toggle
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"tou_before_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                self.logger.info(f"Saved TOU before HTML: {html_file}")
+                if self.cache_pages:
+                    try:
+                        html_content = self.page.content()
+                        html_file = self.cache_dir / f"tou_before_{plant_id}_{inverter_id}.html"
+                        with open(html_file, 'w', encoding='utf-8') as f:
+                            f.write(html_content)
+                        self.logger.info(f"Saved TOU before HTML: {html_file}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to save TOU before HTML to cache: {e}")
                 self._save_screenshot_to_cache(f"tou_before_{plant_id}_{inverter_id}.png")
                 
                 self.logger.info(f"Toggling TOU switch from {'ON' if is_checked else 'OFF'} to {'ON' if enable else 'OFF'}...")
@@ -1652,11 +1662,15 @@ class SolArkCloud:
                 self.logger.info(f"TOU switch new state: {'ON' if new_state else 'OFF'}")
                 
                 # Save HTML and screenshot after TOU toggle
-                html_content = self.page.content()
-                html_file = self.cache_dir / f"tou_after_{plant_id}_{inverter_id}.html"
-                with open(html_file, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                self.logger.info(f"Saved TOU after HTML: {html_file}")
+                if self.cache_pages:
+                    try:
+                        html_content = self.page.content()
+                        html_file = self.cache_dir / f"tou_after_{plant_id}_{inverter_id}.html"
+                        with open(html_file, 'w', encoding='utf-8') as f:
+                            f.write(html_content)
+                        self.logger.info(f"Saved TOU after HTML: {html_file}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to save TOU after HTML to cache: {e}")
                 self._save_screenshot_to_cache(f"tou_after_{plant_id}_{inverter_id}.png")
                 
                 if new_state != is_checked:
