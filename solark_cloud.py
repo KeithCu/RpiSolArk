@@ -311,11 +311,23 @@ class SolArkCloud:
                 
                 self.logger.info(f"Browser launched successfully (headless={self.headless})")
                 
-                self.context = self.browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    viewport={'width': window_width, 'height': window_height},
-                    java_script_enabled=True
-                )
+                # Add headless detection evasion for better compatibility
+                # Some websites detect headless browsers and behave differently
+                context_options = {
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'viewport': {'width': window_width, 'height': window_height},
+                    'java_script_enabled': True,
+                }
+                
+                # Add headless detection evasion (helps with websites that detect headless browsers)
+                if self.headless:
+                    # In headless mode, add extra evasion
+                    context_options['extra_http_headers'] = {
+                        'Accept-Language': 'en-US,en;q=0.9',
+                    }
+                    self.logger.info("Headless mode: Added detection evasion headers")
+                
+                self.context = self.browser.new_context(**context_options)
                 
                 self.page = self.context.new_page()
                 
@@ -1371,7 +1383,17 @@ class SolArkCloud:
             self.logger.info("Successfully navigated to inverter settings!")
             
             # Wait for page to load
-            self.page.wait_for_load_state('networkidle')
+            # Note: networkidle can be unreliable in headless mode
+            # Use a more lenient wait strategy
+            try:
+                self.page.wait_for_load_state('networkidle', timeout=30000)
+                self.logger.info("Page reached networkidle state")
+            except Exception as e:
+                self.logger.warning(f"networkidle timeout (this is common in headless mode): {e}")
+                # Fallback: wait for DOM to be ready
+                self.page.wait_for_load_state('domcontentloaded', timeout=10000)
+                self.logger.info("Page reached domcontentloaded state (fallback)")
+            
             self.page.wait_for_timeout(2000)
             
             # Save HTML and screenshot of inverter settings page
