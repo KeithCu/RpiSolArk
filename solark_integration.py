@@ -28,12 +28,13 @@ class SolArkIntegration:
     Integration class that connects Sol-Ark cloud with the frequency monitor
     """
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", single_inverter_mode: bool = False):
         """
         Initialize Sol-Ark integration
         
         Args:
             config_path: Path to configuration file
+            single_inverter_mode: If True, only use the first inverter for each optocoupler (for testing)
         """
         self.logger = logging.getLogger(__name__)
         
@@ -46,6 +47,7 @@ class SolArkIntegration:
                 self.logger.warning(f"Invalid MODULE_LOG_LEVEL '{MODULE_LOG_LEVEL}', using default")
         
         self.config_path = config_path
+        self.single_inverter_mode = single_inverter_mode
         
         # Load configuration
         self.solark_cloud = SolArkCloud(config_path)
@@ -84,6 +86,10 @@ class SolArkIntegration:
         
         # Optocoupler to plant mapping
         self.optocoupler_plants = self._build_optocoupler_plant_mapping()
+        
+        # Log single inverter mode status
+        if self.single_inverter_mode:
+            self.logger.info("SINGLE INVERTER MODE ENABLED: Only the first inverter will be used for each optocoupler")
         
         # Validate configuration
         self.validate_configuration()
@@ -741,6 +747,12 @@ class SolArkIntegration:
             self.logger.warning(f"No inverters configured for optocoupler '{optocoupler_name}'")
             return
         
+        # Filter to first inverter only if single_inverter_mode is enabled
+        if self.single_inverter_mode and len(inverter_infos) > 1:
+            original_count = len(inverter_infos)
+            inverter_infos = inverter_infos[:1]
+            self.logger.info(f"SINGLE INVERTER MODE: Using only first inverter (filtered from {original_count} inverters)")
+        
         # Apply changes to all inverters for this optocoupler
         inverter_ids = [inv['id'] for inv in inverter_infos]
         self.logger.info(f"Applying power source changes to {len(inverter_infos)} inverters: {inverter_ids}")
@@ -1012,6 +1024,8 @@ def main():
     parser = argparse.ArgumentParser(description='Sol-Ark TOU Integration Test')
     parser.add_argument('--read-only', action='store_true',
                         help='Read TOU values only, do not attempt to adjust them')
+    parser.add_argument('--single-inverter', action='store_true',
+                        help='Only use the first inverter for testing (temporarily disables other inverters)')
     args = parser.parse_args()
     
     # Setup logging
@@ -1021,7 +1035,7 @@ def main():
     )
     
     # Create integration
-    integration = SolArkIntegration()
+    integration = SolArkIntegration(single_inverter_mode=args.single_inverter)
     
     # For testing: reduce cooldown to allow faster testing (only if not read-only)
     if not args.read_only:
@@ -1051,6 +1065,12 @@ def main():
     if not inverter_infos:
         print("ERROR: No inverters configured for optocoupler")
         return
+    
+    # Filter to first inverter only if single_inverter_mode is enabled
+    if integration.single_inverter_mode and len(inverter_infos) > 1:
+        original_count = len(inverter_infos)
+        inverter_infos = inverter_infos[:1]
+        print(f"NOTE: SINGLE INVERTER MODE enabled - using only first inverter (filtered from {original_count} inverters)")
     
     inverter_ids = [inv['id'] for inv in inverter_infos]
     inverter_plant_map = {inv['id']: inv.get('plant_id', '') for inv in inverter_infos}
