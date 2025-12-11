@@ -39,12 +39,13 @@ class SolArkCloud:
     Sol-Ark Cloud integration class using Playwright for web automation
     """
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", headless: Optional[bool] = None):
         """
         Initialize Sol-Ark Cloud integration
         
         Args:
             config_path: Path to configuration file
+            headless: Optional override for headless mode. If None, uses value from config.yaml
         """
         self.config = self._load_config(config_path)
         try:
@@ -93,7 +94,8 @@ class SolArkCloud:
         self.password = self.solark_config['password']
         self.timeout = self.solark_config['timeout'] * 1000  # Convert to ms
         self.retry_attempts = self.solark_config['retry_attempts']
-        self.headless = self.solark_config['headless']
+        # Allow headless mode to be overridden via parameter
+        self.headless = headless if headless is not None else self.solark_config['headless']
         self.cache_pages = self.solark_config['cache_pages']
         self.cache_screenshots = self.solark_config.get('cache_screenshots')
         self.session_persistence = self.solark_config['session_persistence']
