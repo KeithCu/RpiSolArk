@@ -127,6 +127,7 @@ class SolArkCloud:
             Future: Future object that will contain the result
         """
         self.logger.info(f"Queueing operation '{operation_type}' with args={args}, kwargs={kwargs}")
+        self.logger.info(f"Queue status before put: size={self._operation_queue.qsize()}, worker_running={self._playwright_worker_running}, worker_alive={self._playwright_worker_thread.is_alive() if self._playwright_worker_thread else False}")
         future = Future()
         self._operation_queue.put({
             'type': operation_type,
@@ -134,7 +135,7 @@ class SolArkCloud:
             'kwargs': kwargs,
             'future': future
         })
-        self.logger.info(f"Operation '{operation_type}' successfully queued")
+        self.logger.info(f"Operation '{operation_type}' successfully queued (queue size after put: {self._operation_queue.qsize()})")
         return future
     
     def _playwright_worker(self):
@@ -143,12 +144,19 @@ class SolArkCloud:
         This must run on the thread where Playwright was initialized.
         """
         self.logger.info("Playwright worker thread started")
+        empty_queue_count = 0
         while self._playwright_worker_running:
             try:
                 # Get operation from queue with timeout to allow checking _playwright_worker_running
                 try:
+                    self.logger.debug("Worker thread: Waiting for operation from queue (timeout: 1.0s)...")
                     operation = self._operation_queue.get(timeout=1.0)
+                    empty_queue_count = 0  # Reset counter when we get an operation
                 except queue.Empty:
+                    empty_queue_count += 1
+                    # Log every 30 seconds (30 empty checks) to show thread is alive
+                    if empty_queue_count % 30 == 0:
+                        self.logger.info(f"Worker thread: Still waiting for operations (checked {empty_queue_count} times, queue size: {self._operation_queue.qsize()})")
                     continue
                 
                 operation_type = operation['type']
@@ -156,36 +164,58 @@ class SolArkCloud:
                 kwargs = operation['kwargs']
                 future = operation['future']
                 
-                self.logger.info(f"Worker thread: Retrieved operation '{operation_type}' from queue")
+                self.logger.info(f"Worker thread: Retrieved operation '{operation_type}' from queue (args={args}, kwargs={kwargs})")
                 
                 try:
                     if operation_type == 'get_time_of_use_state':
                         self.logger.info(f"Worker thread: Processing get_time_of_use_state operation with args={args}, kwargs={kwargs}")
                         result = self._get_time_of_use_state_impl(*args, **kwargs)
                         self.logger.info(f"Worker thread: get_time_of_use_state completed with result: {result}")
+                        self.logger.info(f"Worker thread: Setting result on future for get_time_of_use_state...")
                         future.set_result(result)
+                        self.logger.info(f"Worker thread: Successfully set result on future for get_time_of_use_state")
                     elif operation_type == 'toggle_time_of_use':
+                        self.logger.info(f"Worker thread: Processing toggle_time_of_use operation with args={args}, kwargs={kwargs}")
                         result = self._toggle_time_of_use_impl(*args, **kwargs)
+                        self.logger.info(f"Worker thread: toggle_time_of_use completed with result: {result}")
+                        self.logger.info(f"Worker thread: Setting result on future for toggle_time_of_use...")
                         future.set_result(result)
+                        self.logger.info(f"Worker thread: Successfully set result on future for toggle_time_of_use")
                     elif operation_type == 'login':
+                        self.logger.info(f"Worker thread: Processing login operation...")
                         result = self._login_impl()
+                        self.logger.info(f"Worker thread: login completed with result: {result}")
+                        self.logger.info(f"Worker thread: Setting result on future for login...")
                         future.set_result(result)
+                        self.logger.info(f"Worker thread: Successfully set result on future for login")
                     elif operation_type == 'cleanup':
+                        self.logger.info(f"Worker thread: Processing cleanup operation...")
                         # Cleanup operation - no return value needed
                         self._cleanup_impl()
                         if future:
+                            self.logger.info(f"Worker thread: Setting result on future for cleanup...")
                             future.set_result(None)
+                            self.logger.info(f"Worker thread: Successfully set result on future for cleanup")
                     else:
+                        error_msg = f"Unknown operation type: {operation_type}"
+                        self.logger.error(f"Worker thread: {error_msg}")
                         if future:
-                            future.set_exception(ValueError(f"Unknown operation type: {operation_type}"))
+                            future.set_exception(ValueError(error_msg))
                 except Exception as e:
+                    self.logger.error(f"Worker thread: Exception processing operation '{operation_type}': {e}", exc_info=True)
                     if future:
+                        self.logger.info(f"Worker thread: Setting exception on future for operation '{operation_type}'...")
                         future.set_exception(e)
+                        self.logger.info(f"Worker thread: Successfully set exception on future for operation '{operation_type}'")
                 finally:
+                    self.logger.debug(f"Worker thread: Marking operation '{operation_type}' as done in queue")
                     self._operation_queue.task_done()
+                    self.logger.debug(f"Worker thread: Operation '{operation_type}' marked as done")
                     
             except Exception as e:
-                self.logger.error(f"Error in Playwright worker thread: {e}")
+                self.logger.error(f"Error in Playwright worker thread: {e}", exc_info=True)
+        
+        self.logger.info("Playwright worker thread exiting (worker_running=False)")
         
         # After main loop exits, process any remaining cleanup operations
         # This ensures cleanup happens even if _playwright_worker_running was set to False
@@ -2311,10 +2341,12 @@ class SolArkCloud:
         # Otherwise, queue the operation
         self.logger.info("Queuing operation for Playwright thread...")
         future = self._queue_operation('get_time_of_use_state', inverter_id, plant_id)
-        self.logger.info("Operation queued, waiting for result (timeout: 300s)...")
+        self.logger.info(f"Operation queued, waiting for result (timeout: 300s)... (queue size: {self._operation_queue.qsize()}, worker running: {self._playwright_worker_running}, worker alive: {self._playwright_worker_thread.is_alive() if self._playwright_worker_thread else False})")
         try:
+            wait_start_time = time.time()
             result = future.result(timeout=300)  # 5 minute timeout
-            self.logger.info(f"Operation completed, result: {result}")
+            wait_duration = time.time() - wait_start_time
+            self.logger.info(f"Operation completed in {wait_duration:.1f}s, result: {result}")
             return result
         except Exception as e:
             # Re-raise NetworkError if that's what happened
