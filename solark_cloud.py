@@ -2306,14 +2306,30 @@ class SolArkCloud:
         Raises:
             NetworkError: If network connectivity issues occur
         """
+        self.logger.info(f"toggle_time_of_use called: enable={enable}, inverter_id={inverter_id}, plant_id={plant_id}")
+        
+        # Auto-initialize if not already initialized
+        if not self._playwright_worker_running or (self._playwright_worker_thread and not self._playwright_worker_thread.is_alive()):
+            self.logger.info("Browser not initialized, auto-initializing...")
+            if not self.initialize():
+                self.logger.error("Failed to auto-initialize browser")
+                return False
+        
         # If called from Playwright thread, execute directly
         if self._is_playwright_thread():
+            self.logger.info("Executing directly on Playwright thread")
             return self._toggle_time_of_use_impl(enable, inverter_id, plant_id)
         
         # Otherwise, queue the operation
+        self.logger.info("Queuing operation for Playwright thread...")
         future = self._queue_operation('toggle_time_of_use', enable, inverter_id, plant_id)
+        self.logger.info(f"Operation queued, waiting for result (timeout: 300s)... (queue size: {self._operation_queue.qsize()}, worker running: {self._playwright_worker_running}, worker alive: {self._playwright_worker_thread.is_alive() if self._playwright_worker_thread else False})")
         try:
-            return future.result(timeout=300)  # 5 minute timeout
+            wait_start_time = time.time()
+            result = future.result(timeout=300)  # 5 minute timeout
+            wait_duration = time.time() - wait_start_time
+            self.logger.info(f"Operation completed in {wait_duration:.1f}s, result: {result}")
+            return result
         except Exception as e:
             # Re-raise NetworkError if that's what happened
             if isinstance(e, NetworkError):
@@ -2333,6 +2349,14 @@ class SolArkCloud:
             bool: True if TOU is enabled, False if disabled, None if unable to determine
         """
         self.logger.info(f"get_time_of_use_state called for inverter {inverter_id}, plant {plant_id}")
+        
+        # Auto-initialize if not already initialized
+        if not self._playwright_worker_running or (self._playwright_worker_thread and not self._playwright_worker_thread.is_alive()):
+            self.logger.info("Browser not initialized, auto-initializing...")
+            if not self.initialize():
+                self.logger.error("Failed to auto-initialize browser")
+                return None
+        
         # If called from Playwright thread, execute directly
         if self._is_playwright_thread():
             self.logger.info("Executing directly on Playwright thread")
