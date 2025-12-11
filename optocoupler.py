@@ -225,7 +225,7 @@ class SingleOptocoupler:
                     stat_duration_ms = (t_last - t_first) / 1e6
                     self.logger.info(f"[NB_FREQ_STATS] {self.name} stat_count={stat_count} duration={stat_duration_ms:.2f}ms first_ts={t_first} last_ts={t_last}")
                 else:
-                    self.logger.warning(f"[NB_FREQ_STATS] {self.name} NO TIMESTAMPS COLLECTED!")
+                    self.logger.info(f"[NB_FREQ_STATS] {self.name} NO TIMESTAMPS COLLECTED!")
                 
                 # Log event statistics if available
                 if event_stats:
@@ -249,12 +249,12 @@ class SingleOptocoupler:
                 
                 # Warn if count is much lower than expected
                 if pulse_count < expected_pulses * 0.5:
-                    self.logger.warning(f"[NB_COUNT_LOW] {self.name} count={pulse_count} is less than 50% of expected={expected_pulses}")
+                    self.logger.info(f"[NB_COUNT_LOW] {self.name} count={pulse_count} is less than 50% of expected={expected_pulses}")
                 
                 # Calculate pulse loss percentage
                 pulse_loss_pct = (1.0 - (pulse_count / expected_pulses)) * 100 if expected_pulses > 0 else 0
                 if pulse_loss_pct > 5.0:  # Warn if more than 5% loss
-                    self.logger.warning(f"[NB_PULSE_LOSS] {self.name} pulse_loss={pulse_loss_pct:.1f}% (expected={expected_pulses} got={pulse_count})")
+                    self.logger.info(f"[NB_PULSE_LOSS] {self.name} pulse_loss={pulse_loss_pct:.1f}% (expected={expected_pulses} got={pulse_count})")
                 
                 # Reset error count on successful measurement
                 self.consecutive_errors = 0
