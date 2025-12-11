@@ -1753,9 +1753,11 @@ class SolArkCloud:
         Returns:
             bool: True if TOU is enabled, False if disabled, None if unable to determine
         """
+        self.logger.info("Starting TOU state read operation...")
         # Handle iframe if present - navigate to iframe URL (like _navigate_to_tou_settings does)
         original_page = self.page
         try:
+            self.logger.info("Checking for iframe...")
             iframe = self.page.query_selector('iframe.testiframe')
             if iframe:
                 iframe_src = iframe.get_attribute('src')
@@ -1765,6 +1767,7 @@ class SolArkCloud:
                 self.logger.info("Navigating to iframe URL...")
                 try:
                     self.page.goto(iframe_src)
+                    self.logger.info("Waiting for iframe page to load (networkidle)...")
                     self.page.wait_for_load_state('networkidle')
                     self.logger.info("Successfully navigated to iframe URL")
                 except (PlaywrightTimeoutError, Exception) as e:
@@ -1784,17 +1787,19 @@ class SolArkCloud:
                 
                 page_to_use = self.page
             else:
-                self.logger.debug("No iframe found, using main page")
+                self.logger.info("No iframe found, using main page")
                 page_to_use = self.page
         except Exception as e:
             self.logger.warning(f"Error handling iframe: {e}")
             page_to_use = self.page
         
         # Find TOU switch (use page_to_use which is now the iframe page or main page)
+        self.logger.info("Searching for TOU switch element on page...")
         tou_element = None
         checkbox_element = None
         try:
             # Save HTML before looking for TOU switch
+            self.logger.info("Saving page HTML and screenshot before TOU search...")
             html_content = page_to_use.content()
             html_file = self.cache_dir / f"{html_prefix}tou_before_{plant_id}_{inverter_id}.html"
             with open(html_file, 'w', encoding='utf-8') as f:
@@ -1804,6 +1809,7 @@ class SolArkCloud:
             
             # Strategy: Find the form item with "Time Of Use" label first, then find the checkbox within it
             # This ensures we get the correct checkbox, not other switches on the page
+            self.logger.info("Trying container selectors to find TOU switch...")
             container_selectors = [
                 '.el-form-item:has-text("Time Of Use")',
                 'div:has-text("Time Of Use")',
@@ -1890,7 +1896,9 @@ class SolArkCloud:
                     # Click the System Work Mode link
                     self.logger.info("Clicking System Work Mode link...")
                     system_work_mode_element.click()
+                    self.logger.info("Waiting for System Work Mode page to load (networkidle)...")
                     page_to_use.wait_for_load_state('networkidle')
+                    self.logger.info("Waiting additional 2 seconds for page to stabilize...")
                     page_to_use.wait_for_timeout(2000)
                     self.logger.info("Successfully clicked System Work Mode link!")
                     
@@ -2194,28 +2202,48 @@ class SolArkCloud:
                         return None
                 
                 if not self.is_logged_in:
+                    self.logger.info("Not logged in, attempting login...")
                     if not self.login():
                         return None
+                    self.logger.info("Login successful")
                 
                 # Navigate to plant overview page
+                self.logger.info(f"Navigating to plant overview page for plant {plant_id}...")
                 if not self._navigate_to_plant_overview(plant_id, inverter_id, "get_state_"):
+                    self.logger.error("Failed to navigate to plant overview page")
                     return None
+                self.logger.info("Successfully navigated to plant overview page")
                 
                 # Click on Equipment tab
+                self.logger.info("Clicking Equipment tab...")
                 if not self._click_equipment_tab(plant_id, inverter_id, "get_state_"):
+                    self.logger.error("Failed to click Equipment tab")
                     return None
+                self.logger.info("Successfully clicked Equipment tab")
                 
                 # Find and click inverter dropdown
+                self.logger.info(f"Finding inverter dropdown for inverter {inverter_id}...")
                 dropdown_button = self._find_inverter_dropdown(inverter_id, plant_id, "get_state_")
                 if not dropdown_button:
+                    self.logger.error("Failed to find inverter dropdown")
                     return None
+                self.logger.info("Successfully found inverter dropdown")
                 
                 # Navigate to Parameters Setting
+                self.logger.info("Navigating to Parameters Setting...")
                 if not self._navigate_to_parameters_setting(plant_id, inverter_id, "get_state_"):
+                    self.logger.error("Failed to navigate to Parameters Setting")
                     return None
+                self.logger.info("Successfully navigated to Parameters Setting")
                 
                 # Read TOU state
-                return self._read_tou_state(plant_id, inverter_id, "get_state_")
+                self.logger.info("Reading TOU state from page...")
+                result = self._read_tou_state(plant_id, inverter_id, "get_state_")
+                if result is None:
+                    self.logger.error("Failed to read TOU state")
+                else:
+                    self.logger.info(f"Successfully read TOU state: {'ON' if result else 'OFF'}")
+                return result
                 
             except NetworkError:
                 raise
