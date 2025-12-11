@@ -1,8 +1,10 @@
 [Unit]
 Description=RpiSolarkMonitor - Production frequency monitor
-After=network.target
+After=network.target xvfb.service
+Requires=xvfb.service
 # Note: Requires Xvfb for non-headless mode (headless mode doesn't work with Sol-Ark website)
 # Install: sudo apt-get install xvfb
+# Install xvfb service: sudo cp xvfb.service /etc/systemd/system/ && sudo systemctl enable xvfb
 
 [Service]
 Type=simple
@@ -15,12 +17,8 @@ WorkingDirectory=/home/keithcu/Desktop/RpiSolArk
 # This allows the browser to run in windowed mode without a physical display
 # Xvfb creates a virtual display that browsers can use
 # Set headless: false in config.yaml for this to work
+# Xvfb is provided by the xvfb.service (separate service)
 Environment="DISPLAY=:99"
-
-# Start Xvfb before the service
-# Xvfb will run in the background and provide a virtual display
-ExecStartPre=/usr/bin/Xvfb :99 -screen 0 1366x768x24 -ac +extension GLX +render -noreset
-ExecStartPre=/bin/sleep 2
 
 # Explanation:
 # - We will call a wrapper script that:
@@ -30,8 +28,7 @@ ExecStartPre=/bin/sleep 2
 #   - Executes: sudo python monitor.py --real
 ExecStart=/home/keithcu/Desktop/RpiSolArk/rpisolark-monitor.sh
 
-# Stop Xvfb when service stops
-ExecStopPost=/usr/bin/pkill -f "Xvfb :99"
+# Note: Xvfb is managed by xvfb.service, no need to stop it here
 
 Restart=on-failure
 RestartSec=10
