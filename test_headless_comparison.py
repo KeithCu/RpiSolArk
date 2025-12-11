@@ -5,6 +5,7 @@ Tests TOU state reading for a single inverter in both modes.
 """
 
 import sys
+import os
 import time
 import logging
 from config import Config, Logger
@@ -21,15 +22,19 @@ def test_tou_reading(headless_mode: bool, inverter_id: str, plant_id: str):
     logger.info(f"Inverter ID: {inverter_id}, Plant ID: {plant_id}")
     logger.info(f"{'='*60}\n")
     
-    # Temporarily modify config
-    original_headless = config['solark_cloud']['headless']
-    config['solark_cloud']['headless'] = headless_mode
-    
     try:
         from solark_cloud import SolArkCloud
         
-        # Create SolArkCloud instance
-        solark_cloud = SolArkCloud()
+        # Create SolArkCloud instance with headless override
+        logger.info(f"Creating SolArkCloud instance with headless={headless_mode}...")
+        logger.info(f"NOTE: If headless=False, a browser window should appear!")
+        solark_cloud = SolArkCloud(headless=headless_mode)
+        logger.info(f"✓ SolArkCloud instance created")
+        logger.info(f"✓ Confirmed headless mode setting: {solark_cloud.headless}")
+        if not solark_cloud.headless:
+            logger.info(f"✓ NON-HEADLESS MODE: Browser window should be visible!")
+        else:
+            logger.info(f"✓ HEADLESS MODE: No browser window (running in background)")
         
         # Test TOU state reading
         start_time = time.time()
@@ -49,9 +54,6 @@ def test_tou_reading(headless_mode: bool, inverter_id: str, plant_id: str):
     except Exception as e:
         logger.error(f"Error during test: {e}", exc_info=True)
         return None, None
-    finally:
-        # Restore original config
-        config['solark_cloud']['headless'] = original_headless
 
 def main():
     """Run comparison test."""
@@ -67,17 +69,29 @@ def main():
     logger.info("Sol-Ark Headless vs Non-Headless Comparison Test")
     logger.info("="*60)
     
-    # Test 1: Headless mode
-    logger.info("\n>>> TEST 1: HEADLESS MODE <<<")
-    headless_result, headless_time = test_tou_reading(True, inverter_id, plant_id)
+    # Check DISPLAY environment variable
+    display = os.environ.get('DISPLAY')
+    if display:
+        logger.info(f"DISPLAY environment variable is set: {display}")
+        logger.info("✓ Non-headless mode should work (window should appear)")
+    else:
+        logger.warning("DISPLAY environment variable is NOT set!")
+        logger.warning("⚠ Non-headless mode may not work - no display server available")
+        logger.warning("⚠ Browser window will not appear even with headless=False")
+    
+    logger.info("")
+    
+    # Test 1: Non-headless mode (FIRST - so you can see the window)
+    logger.info("\n>>> TEST 1: NON-HEADLESS MODE (Window should appear!) <<<")
+    non_headless_result, non_headless_time = test_tou_reading(False, inverter_id, plant_id)
     
     # Wait a bit between tests
     logger.info("\nWaiting 5 seconds before next test...")
     time.sleep(5)
     
-    # Test 2: Non-headless mode
-    logger.info("\n>>> TEST 2: NON-HEADLESS MODE <<<")
-    non_headless_result, non_headless_time = test_tou_reading(False, inverter_id, plant_id)
+    # Test 2: Headless mode
+    logger.info("\n>>> TEST 2: HEADLESS MODE (No window) <<<")
+    headless_result, headless_time = test_tou_reading(True, inverter_id, plant_id)
     
     # Summary
     logger.info("\n" + "="*60)

@@ -298,10 +298,18 @@ class SolArkCloud:
                     f'--window-position=0,0'
                 ]
                 
+                self.logger.info(f"Launching Chromium browser with headless={self.headless}...")
+                if not self.headless:
+                    self.logger.info("NON-HEADLESS MODE: Browser window should be visible!")
+                else:
+                    self.logger.info("HEADLESS MODE: Browser running in background (no window)")
+                
                 self.browser = self.playwright.chromium.launch(
                     headless=self.headless,
                     args=launch_args
                 )
+                
+                self.logger.info(f"Browser launched successfully (headless={self.headless})")
                 
                 self.context = self.browser.new_context(
                     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
