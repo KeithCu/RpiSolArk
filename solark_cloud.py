@@ -126,6 +126,7 @@ class SolArkCloud:
         Returns:
             Future: Future object that will contain the result
         """
+        self.logger.info(f"Queueing operation '{operation_type}' with args={args}, kwargs={kwargs}")
         future = Future()
         self._operation_queue.put({
             'type': operation_type,
@@ -133,6 +134,7 @@ class SolArkCloud:
             'kwargs': kwargs,
             'future': future
         })
+        self.logger.info(f"Operation '{operation_type}' successfully queued")
         return future
     
     def _playwright_worker(self):
@@ -140,7 +142,7 @@ class SolArkCloud:
         Worker thread that processes Playwright operations from the queue.
         This must run on the thread where Playwright was initialized.
         """
-        self.logger.debug("Playwright worker thread started")
+        self.logger.info("Playwright worker thread started")
         while self._playwright_worker_running:
             try:
                 # Get operation from queue with timeout to allow checking _playwright_worker_running
@@ -154,9 +156,13 @@ class SolArkCloud:
                 kwargs = operation['kwargs']
                 future = operation['future']
                 
+                self.logger.info(f"Worker thread: Retrieved operation '{operation_type}' from queue")
+                
                 try:
                     if operation_type == 'get_time_of_use_state':
+                        self.logger.info(f"Worker thread: Processing get_time_of_use_state operation with args={args}, kwargs={kwargs}")
                         result = self._get_time_of_use_state_impl(*args, **kwargs)
+                        self.logger.info(f"Worker thread: get_time_of_use_state completed with result: {result}")
                         future.set_result(result)
                     elif operation_type == 'toggle_time_of_use':
                         result = self._toggle_time_of_use_impl(*args, **kwargs)
@@ -321,15 +327,19 @@ class SolArkCloud:
                 init_complete.set()
                 self.logger.error(f"Failed to initialize Playwright in worker thread: {e}")
         
+        self.logger.info("Starting Playwright worker thread...")
         self._playwright_worker_thread = threading.Thread(
             target=worker_with_init,
             name="PlaywrightWorker",
             daemon=True
         )
         self._playwright_worker_thread.start()
+        self.logger.info("Playwright worker thread started, waiting for initialization...")
         
         # Wait for initialization to complete
+        self.logger.info("Waiting for Playwright initialization to complete (timeout: 30s)...")
         init_complete.wait(timeout=30.0)
+        self.logger.info("Playwright initialization wait completed")
         if init_error[0]:
             self._playwright_worker_running = False
             raise init_error[0]
@@ -2292,17 +2302,24 @@ class SolArkCloud:
         Returns:
             bool: True if TOU is enabled, False if disabled, None if unable to determine
         """
+        self.logger.info(f"get_time_of_use_state called for inverter {inverter_id}, plant {plant_id}")
         # If called from Playwright thread, execute directly
         if self._is_playwright_thread():
+            self.logger.info("Executing directly on Playwright thread")
             return self._get_time_of_use_state_impl(inverter_id, plant_id)
         
         # Otherwise, queue the operation
+        self.logger.info("Queuing operation for Playwright thread...")
         future = self._queue_operation('get_time_of_use_state', inverter_id, plant_id)
+        self.logger.info("Operation queued, waiting for result (timeout: 300s)...")
         try:
-            return future.result(timeout=300)  # 5 minute timeout
+            result = future.result(timeout=300)  # 5 minute timeout
+            self.logger.info(f"Operation completed, result: {result}")
+            return result
         except Exception as e:
             # Re-raise NetworkError if that's what happened
             if isinstance(e, NetworkError):
+                self.logger.error(f"NetworkError during TOU state read: {e}")
                 raise
             # Wrap other exceptions
             self.logger.error(f"Failed to read Time of Use state: {e}")
