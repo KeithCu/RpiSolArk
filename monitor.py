@@ -1408,6 +1408,7 @@ class FrequencyMonitor:
         # Initialize display
         if self.hardware is not None:
             self.hardware.update_display("Starting...", "Please wait...")
+            time.sleep(1)  # Display startup message for 1 second
 
         # For simulator mode, set up auto-exit after 90 seconds (one full cycle)
         if simulator_mode:
