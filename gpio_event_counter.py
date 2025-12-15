@@ -251,24 +251,24 @@ class GPIOEventCounter:
 						# Valid event - update last event time for gap detection
 						last_event_time_ns = current_ts
 						
-						# Track accepted events
-						self._events_accepted[pin] = self._events_accepted.get(pin, 0) + 1
-						
-						# Calculate and store interval for statistics
-						if last_ts > 0:
-							interval_ns = current_ts - last_ts
-							self._interval_stats[pin].append(interval_ns)
-						
-						# Valid event
-						self.counts[pin] = self.counts.get(pin, 0) + 1
-						self.last_valid_timestamp[pin] = current_ts
-						
-						# Store timestamp (ns)
-						if pin in self.timestamps:
-							self.timestamps[pin].append(current_ts)
-							# Only log first event timestamp to reduce CPU overhead
-							if event_count == 1:
-								self.logger.debug(f"[EVENT] Stored first timestamp for pin {pin}: {current_ts}")
+					# Track accepted events
+					self._events_accepted[pin] = self._events_accepted.get(pin, 0) + 1
+					
+					# Calculate and store interval for statistics (only if DEBUG logging enabled)
+					if last_ts > 0 and self.logger.isEnabledFor(logging.DEBUG):
+						interval_ns = current_ts - last_ts
+						self._interval_stats[pin].append(interval_ns)
+					
+					# Valid event
+					self.counts[pin] = self.counts.get(pin, 0) + 1
+					self.last_valid_timestamp[pin] = current_ts
+					
+					# Store timestamp (ns)
+					if pin in self.timestamps:
+						self.timestamps[pin].append(current_ts)
+						# Only log first event timestamp to reduce CPU overhead
+						if event_count == 1:
+							self.logger.debug(f"[EVENT] Stored first timestamp for pin {pin}: {current_ts}")
 						else:
 							self.logger.warning(f"[EVENT] Pin {pin} not in timestamps dict! Keys: {list(self.timestamps.keys())}")
 							
@@ -348,6 +348,7 @@ class GPIOEventCounter:
 				self.counts[pin] = 0
 				self.timestamps[pin] = []
 				self.last_valid_timestamp[pin] = 0
+				self._interval_stats[pin] = []  # Clear intervals to match timestamp cleanup
 				
 				# Track reset calls
 				self._reset_count_calls += 1
