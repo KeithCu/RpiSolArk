@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-LGPL-blue.svg)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)
 
-**A sophisticated frequency monitoring system for Raspberry Pi that detects power source (Utility Grid vs Generator) by analyzing AC line frequency stability.**
+**A frequency monitoring system for Raspberry Pi that detects power source (Utility Grid vs Generator) by analyzing AC line frequency stability.**
 
 </div>
 
