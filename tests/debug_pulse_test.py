@@ -2,12 +2,21 @@
 """
 Debug script to analyze pulse detection and frequency calculation issues.
 Runs for short duration (1-2 seconds) to collect timing data with enhanced logging.
+Auto-detects non-RPi hardware and uses mock libgpiod with synthetic pulses.
 """
 
 import sys
+import os
 import time
 import logging
+import threading
+
+# Add parent directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from gpio_event_counter import create_counter
+from tests.test_utils_gpio import is_raspberry_pi, setup_mock_gpiod, inject_pulses, create_test_counter
+from tests.pulse_patterns import generate_stable_60hz
 
 def main():
     # Setup logging with DEBUG level to see all detailed logs
@@ -15,8 +24,19 @@ def main():
 
     logger = logging.getLogger(__name__)
 
-    # Create counter
-    counter = create_counter(logger)
+    # Check if running on RPi
+    on_rpi = is_raspberry_pi()
+    use_mock = not on_rpi
+    
+    if use_mock:
+        logger.info("Not running on Raspberry Pi - using mock libgpiod with synthetic pulses")
+        # Setup mock gpiod
+        setup_mock_gpiod()
+        counter, mock_chip = create_test_counter(logger, use_mock=True)
+    else:
+        logger.info("Running on Raspberry Pi - using real hardware")
+        counter = create_counter(logger)
+        mock_chip = None
 
     # Register pin 26 (same as config)
     pin = 26
@@ -31,10 +51,39 @@ def main():
     # Reset counters
     counter.reset_count(pin)
 
+    # If using mock, inject synthetic pulses in background thread
+    if use_mock and mock_chip:
+        logger.info("Injecting synthetic 60Hz pulses...")
+        start_time_ns = time.perf_counter_ns()
+        timestamps = generate_stable_60hz(duration, pulses_per_cycle=2, start_time_ns=start_time_ns)
+        
+        def inject_pulses_thread():
+            # Wait a bit for counter to be ready
+            time.sleep(0.1)
+            # Inject pulses gradually to simulate real-time behavior
+            current_time_ns = time.perf_counter_ns()
+            for ts_ns in timestamps:
+                # Wait until it's time for this pulse
+                if ts_ns > current_time_ns:
+                    sleep_time = (ts_ns - current_time_ns) / 1e9
+                    if sleep_time > 0 and sleep_time < 1.0:  # Don't sleep too long
+                        time.sleep(sleep_time)
+                
+                # Inject the pulse
+                inject_pulses(mock_chip, pin, [ts_ns])
+                current_time_ns = time.perf_counter_ns()
+        
+        inject_thread = threading.Thread(target=inject_pulses_thread, daemon=True)
+        inject_thread.start()
+
     # Capture for specified duration
     start_time = time.perf_counter()
     time.sleep(duration)
     end_time = time.perf_counter()
+    
+    # Wait for injection thread to finish if using mock
+    if use_mock and mock_chip:
+        inject_thread.join(timeout=0.5)
 
     actual_duration = end_time - start_time
     pulse_count = counter.get_count(pin)

@@ -34,6 +34,15 @@ from restart_manager import RestartManager
 from solark_integration import SolArkIntegration
 from health_check_reporter import HealthCheckReporter
 
+# Simulator imports (only used in simulator mode)
+_simulator_imports_available = False
+try:
+    from tests.test_utils_gpio import is_raspberry_pi, setup_mock_gpiod
+    from simulator_pulse_injector import SimulatorPulseInjector
+    _simulator_imports_available = True
+except ImportError:
+    pass
+
 # Module-specific log level override (empty string or None to use default from config.yaml)
 MODULE_LOG_LEVEL = None  # Use default log level from config.yaml
 
@@ -808,6 +817,18 @@ class FrequencyMonitor:
         except KeyError as e:
             raise KeyError(f"Missing required app configuration key: {e}")
         
+        # Setup mock gpiod if in simulator mode and not on RPi
+        self.pulse_injector = None
+        self.mock_chip = None
+        if self.simulator_mode and _simulator_imports_available:
+            if not is_raspberry_pi():
+                self.logger.info("Simulator mode: Setting up mock gpiod for accurate pulse simulation")
+                setup_mock_gpiod()
+                # Get mock chip after hardware is initialized
+                # We'll set it up in _initialize_components
+            else:
+                self.logger.info("Simulator mode: Running on RPi, using real hardware with simulated frequency")
+        
         # Initialize components
         self._initialize_components()
         
@@ -831,8 +852,55 @@ class FrequencyMonitor:
         # Always initialize hardware manager (it handles graceful degradation internally)
         # Simulator mode only affects frequency data source, not hardware availability
         self.hardware = HardwareManager(self.config, self.logger)
+        
+        # Setup pulse injector if in simulator mode with mock gpiod
+        if self.simulator_mode and _simulator_imports_available and not is_raspberry_pi():
+            try:
+                from tests.mock_gpiod import mock_gpiod
+                # Get the mock chip from the optocoupler's counter
+                # The counter creates a request when a pin is registered
+                if (hasattr(self.hardware, 'optocoupler') and 
+                    hasattr(self.hardware.optocoupler, 'optocouplers')):
+                    primary_optocoupler = self.hardware.optocoupler.optocouplers.get('primary')
+                    if primary_optocoupler and hasattr(primary_optocoupler, 'counter'):
+                        counter = primary_optocoupler.counter
+                        pin = primary_optocoupler.pin
+                        pulses_per_cycle = primary_optocoupler.pulses_per_cycle
+                        
+                        # Get the mock chip - check counter's _chip first (set during _start_request)
+                        if hasattr(counter, '_chip') and counter._chip is not None:
+                            self.mock_chip = counter._chip
+                            self.logger.debug(f"Found mock chip from counter._chip")
+                        elif hasattr(counter, '_request') and counter._request is not None:
+                            if hasattr(counter._request, 'chip'):
+                                self.mock_chip = counter._request.chip
+                                self.logger.debug(f"Found mock chip from counter._request.chip")
+                            else:
+                                # Request exists but no chip attribute - create new one
+                                self.mock_chip = mock_gpiod.Chip("/dev/gpiochip0")
+                                self.logger.debug(f"Created new mock chip (request exists but no chip attr)")
+                        else:
+                            # Counter not fully initialized yet - create new chip
+                            # The counter will use this chip when it creates the request
+                            self.mock_chip = mock_gpiod.Chip("/dev/gpiochip0")
+                            self.logger.debug(f"Created new mock chip (counter not initialized)")
+                        
+                        self.pulse_injector = SimulatorPulseInjector(
+                            self.mock_chip, pin, self.logger, pulses_per_cycle
+                        )
+                        self.pulse_injector.start()
+                        self.logger.info(f"Simulator pulse injector initialized for pin {pin} (pulses_per_cycle={pulses_per_cycle})")
+                    else:
+                        self.logger.warning("Primary optocoupler or counter not found, cannot setup pulse injector")
+            except Exception as e:
+                self.logger.warning(f"Failed to setup pulse injector: {e}. Using direct frequency simulation.", exc_info=True)
+                self.pulse_injector = None
+        
         if self.simulator_mode:
-            self.logger.info("Simulator mode: Using simulated frequency data, but hardware manager initialized")
+            if self.pulse_injector:
+                self.logger.info("Simulator mode: Using mock gpiod with pulse injection for accurate simulation")
+            else:
+                self.logger.info("Simulator mode: Using simulated frequency data")
         else:
             self.logger.info("Real mode: Using real hardware for frequency data")
         
@@ -1139,7 +1207,14 @@ class FrequencyMonitor:
         Returns frequency or None if no reading available yet.
         """
         if simulator_mode:
-            return self._get_simulated_frequency(measurement_duration)
+            # If we have pulse injector, use hardware path with mock pulses
+            # Otherwise, use direct frequency simulation
+            if self.pulse_injector:
+                # Use hardware path (which will read from mock pulses)
+                # Pulse injector state is updated in main loop before this call
+                return self._get_hardware_frequency(measurement_duration)
+            else:
+                return self._get_simulated_frequency(measurement_duration)
         else:
             return self._get_hardware_frequency(measurement_duration)
     
@@ -1420,17 +1495,25 @@ class FrequencyMonitor:
             measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
             
             # Start first measurement immediately (non-blocking)
-            if not simulator_mode:
+            # In simulator mode with pulse injector, we still use hardware measurement
+            if not simulator_mode or self.pulse_injector:
                 self.hardware.start_measurement(duration=measurement_duration)
                 self.measurement_in_progress = True
             
             while self.running:
                 current_time = time.time()
                 
-                # 1. Acquire frequency reading (non-blocking)
+                # 1. Update pulse injector state if using mock (before acquiring reading)
+                if simulator_mode and self.pulse_injector:
+                    # Get current simulator state to update injector
+                    current_freq = self.analyzer._simulate_frequency()
+                    current_state = getattr(self.analyzer, 'simulator_state', 'grid')
+                    self.pulse_injector.update_state(current_state, current_freq)
+                
+                # 2. Acquire frequency reading (non-blocking)
                 freq = self._acquire_frequency_reading(simulator_mode, measurement_duration)
                 
-                # 2. Process reading if available
+                # 3. Process reading if available
                 if self.has_new_reading:
                     validated_freq = self._process_frequency_reading(freq, measurement_duration)
                     
@@ -1495,6 +1578,9 @@ class FrequencyMonitor:
         except Exception as e:
             self.logger.error(f"Error in main loop: {e}", exc_info=True)
         finally:
+            # Stop pulse injector if running
+            if self.pulse_injector:
+                self.pulse_injector.stop()
             self.cleanup()
     
     def _get_power_source_indicator(self, source: str) -> str:

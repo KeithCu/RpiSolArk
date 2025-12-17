@@ -71,7 +71,26 @@ class SingleOptocoupler:
         counter_duration = (time.perf_counter() - counter_start) * 1000
         self.logger.info(f"[COUNTER_INIT] GIL-safe counter initialized for {self.name} in {counter_duration:.1f}ms")
         
-        if self.gpio_available:
+        # Check if mock gpiod is available (for simulator mode on non-RPi)
+        self.mock_gpiod_available = False
+        if not self.gpio_available:
+            try:
+                import gpiod
+                # Check if it's the mock by checking if the module has mock-specific attributes
+                # The mock module will have MockChip, MockRequest, etc.
+                if hasattr(gpiod, 'Chip'):
+                    test_chip = gpiod.Chip("/dev/gpiochip0")
+                    # Mock chip has inject_event_to_all_requests method
+                    if hasattr(test_chip, 'inject_event_to_all_requests'):
+                        self.mock_gpiod_available = True
+                        self.logger.info(f"[OPTO_INIT] Mock gpiod detected for {self.name}")
+                    test_chip.close()
+            except Exception as e:
+                self.logger.debug(f"[OPTO_INIT] Could not detect mock gpiod: {e}")
+                pass
+        
+        # Setup optocoupler if we have GPIO (real or mock)
+        if self.gpio_available or self.mock_gpiod_available:
             self._setup_optocoupler()
     
     def __enter__(self):
@@ -85,8 +104,8 @@ class SingleOptocoupler:
     
     def _setup_optocoupler(self):
         """Setup optocoupler for edge detection using working libgpiod only."""
-        if not self.gpio_available:
-            self.logger.warning(f"GPIO not available, cannot setup {self.name} optocoupler")
+        if not self.gpio_available and not self.mock_gpiod_available:
+            self.logger.warning(f"GPIO not available (real or mock), cannot setup {self.name} optocoupler")
             return
         
         try:
