@@ -43,6 +43,10 @@ try:
 except ImportError:
     pass
 
+# Internal simulator mode setting: True = use pulse injection (new), False = direct frequency simulation (old)
+# This is an internal implementation detail, not user-configurable
+USE_PULSE_INJECTION_IN_SIMULATOR = True
+
 # Module-specific log level override (empty string or None to use default from config.yaml)
 MODULE_LOG_LEVEL = None  # Use default log level from config.yaml
 
@@ -820,6 +824,7 @@ class FrequencyMonitor:
         # Setup mock gpiod if in simulator mode and not on RPi
         self.pulse_injector = None
         self.mock_chip = None
+        
         if self.simulator_mode and _simulator_imports_available:
             if not is_raspberry_pi():
                 self.logger.info("Simulator mode: Setting up mock gpiod for accurate pulse simulation")
@@ -849,12 +854,18 @@ class FrequencyMonitor:
     
     def _initialize_components(self):
         """Initialize all system components."""
+        # Create analyzer first (needed for pulse injector initialization)
+        self.analyzer = FrequencyAnalyzer(self.config, self.logger)
+        # Set simulator mode on analyzer so it can use reduced sample requirements
+        self.analyzer.simulator_mode = self.simulator_mode
+        
         # Always initialize hardware manager (it handles graceful degradation internally)
         # Simulator mode only affects frequency data source, not hardware availability
         self.hardware = HardwareManager(self.config, self.logger)
         
         # Setup pulse injector if in simulator mode with mock gpiod
-        if self.simulator_mode and _simulator_imports_available and not is_raspberry_pi():
+        # Only setup if pulse injection is enabled (controlled by global variable)
+        if self.simulator_mode and USE_PULSE_INJECTION_IN_SIMULATOR and _simulator_imports_available and not is_raspberry_pi():
             try:
                 from tests.mock_gpiod import mock_gpiod
                 # Get the mock chip from the optocoupler's counter
@@ -867,31 +878,52 @@ class FrequencyMonitor:
                         pin = primary_optocoupler.pin
                         pulses_per_cycle = primary_optocoupler.pulses_per_cycle
                         
-                        # Get the mock chip - check counter's _chip first (set during _start_request)
+                        # Ensure optocoupler is initialized
+                        if not primary_optocoupler.initialized:
+                            self.logger.warning("Primary optocoupler not initialized yet, cannot setup pulse injector")
+                            self.pulse_injector = None
+                            return
+                        
+                        # Get the mock chip - must use the same chip instance the counter is using
+                        # Check counter's _chip first (set during _start_request in register_pin)
+                        mock_chip = None
                         if hasattr(counter, '_chip') and counter._chip is not None:
-                            self.mock_chip = counter._chip
+                            mock_chip = counter._chip
                             self.logger.debug(f"Found mock chip from counter._chip")
                         elif hasattr(counter, '_request') and counter._request is not None:
-                            if hasattr(counter._request, 'chip'):
-                                self.mock_chip = counter._request.chip
+                            if hasattr(counter._request, 'chip') and counter._request.chip is not None:
+                                mock_chip = counter._request.chip
                                 self.logger.debug(f"Found mock chip from counter._request.chip")
-                            else:
-                                # Request exists but no chip attribute - create new one
-                                self.mock_chip = mock_gpiod.Chip("/dev/gpiochip0")
-                                self.logger.debug(f"Created new mock chip (request exists but no chip attr)")
-                        else:
-                            # Counter not fully initialized yet - create new chip
-                            # The counter will use this chip when it creates the request
-                            self.mock_chip = mock_gpiod.Chip("/dev/gpiochip0")
-                            self.logger.debug(f"Created new mock chip (counter not initialized)")
                         
+                        if mock_chip is None:
+                            self.logger.warning("Could not access mock chip from counter. Counter may not be fully initialized. Using direct frequency simulation.")
+                            self.pulse_injector = None
+                            return
+                        
+                        # Verify it's a mock chip (has inject_event_to_all_requests method)
+                        if not hasattr(mock_chip, 'inject_event_to_all_requests'):
+                            self.logger.warning(f"Chip does not have inject_event_to_all_requests method. Using direct frequency simulation.")
+                            self.pulse_injector = None
+                            return
+                        
+                        self.mock_chip = mock_chip
                         self.pulse_injector = SimulatorPulseInjector(
                             self.mock_chip, pin, self.logger, pulses_per_cycle
                         )
+                        # Initialize with current simulator state and frequency
+                        # IMPORTANT: Call _simulate_frequency() to set simulator_start_time first
+                        initial_freq = self.analyzer._simulate_frequency()
+                        initial_state = getattr(self.analyzer, 'simulator_state', 'grid')
+                        # Update state BEFORE starting to ensure correct initial frequency
+                        self.pulse_injector.update_state(initial_state, initial_freq)
                         self.pulse_injector.start()
-                        self.logger.info(f"Simulator pulse injector initialized for pin {pin} (pulses_per_cycle={pulses_per_cycle})")
+                        self.logger.info(f"Simulator pulse injector initialized for pin {pin} (pulses_per_cycle={pulses_per_cycle}) with initial state={initial_state}, freq={initial_freq:.3f} Hz")
                     else:
                         self.logger.warning("Primary optocoupler or counter not found, cannot setup pulse injector")
+                        self.pulse_injector = None
+                else:
+                    self.logger.warning("Hardware optocoupler not available, cannot setup pulse injector")
+                    self.pulse_injector = None
             except Exception as e:
                 self.logger.warning(f"Failed to setup pulse injector: {e}. Using direct frequency simulation.", exc_info=True)
                 self.pulse_injector = None
@@ -899,14 +931,12 @@ class FrequencyMonitor:
         if self.simulator_mode:
             if self.pulse_injector:
                 self.logger.info("Simulator mode: Using mock gpiod with pulse injection for accurate simulation")
+            elif not USE_PULSE_INJECTION_IN_SIMULATOR:
+                self.logger.info("Simulator mode: Pulse injection disabled, using direct frequency simulation")
             else:
-                self.logger.info("Simulator mode: Using simulated frequency data")
+                self.logger.info("Simulator mode: Pulse injection unavailable, using direct frequency simulation")
         else:
             self.logger.info("Real mode: Using real hardware for frequency data")
-        
-        self.analyzer = FrequencyAnalyzer(self.config, self.logger)
-        # Set simulator mode on analyzer so it can use reduced sample requirements
-        self.analyzer.simulator_mode = self.simulator_mode
         
         # Initialize Sol-Ark integration (with graceful handling if disabled)
         try:
@@ -1208,7 +1238,7 @@ class FrequencyMonitor:
         """
         if simulator_mode:
             # If we have pulse injector, use hardware path with mock pulses
-            # Otherwise, use direct frequency simulation
+            # Otherwise, use direct frequency simulation (old logic)
             if self.pulse_injector:
                 # Use hardware path (which will read from mock pulses)
                 # Pulse injector state is updated in main loop before this call
@@ -1478,6 +1508,45 @@ class FrequencyMonitor:
             except KeyError as e:
                 raise KeyError(f"Missing required app configuration key: {e}")
         
+        # Update self.simulator_mode if it was overridden by command line
+        if simulator_mode != self.simulator_mode:
+            self.simulator_mode = simulator_mode
+            # Re-initialize pulse injector if needed (wasn't set up in __init__)
+            if self.simulator_mode and _simulator_imports_available and not is_raspberry_pi():
+                if self.pulse_injector is None:
+                    # Try to set up pulse injector now
+                    try:
+                        from tests.mock_gpiod import mock_gpiod
+                        if (hasattr(self.hardware, 'optocoupler') and 
+                            hasattr(self.hardware.optocoupler, 'optocouplers')):
+                            primary_optocoupler = self.hardware.optocoupler.optocouplers.get('primary')
+                            if primary_optocoupler and hasattr(primary_optocoupler, 'counter'):
+                                counter = primary_optocoupler.counter
+                                pin = primary_optocoupler.pin
+                                pulses_per_cycle = primary_optocoupler.pulses_per_cycle
+                                
+                                if primary_optocoupler.initialized:
+                                    mock_chip = None
+                                    if hasattr(counter, '_chip') and counter._chip is not None:
+                                        mock_chip = counter._chip
+                                    elif hasattr(counter, '_request') and counter._request is not None:
+                                        if hasattr(counter._request, 'chip') and counter._request.chip is not None:
+                                            mock_chip = counter._request.chip
+                                    
+                                    if mock_chip is not None and hasattr(mock_chip, 'inject_event_to_all_requests'):
+                                        self.mock_chip = mock_chip
+                                        self.pulse_injector = SimulatorPulseInjector(
+                                            self.mock_chip, pin, self.logger, pulses_per_cycle
+                                        )
+                                        # Initialize with current simulator state and frequency
+                                        initial_freq = self.analyzer._simulate_frequency()
+                                        initial_state = getattr(self.analyzer, 'simulator_state', 'grid')
+                                        self.pulse_injector.update_state(initial_state, initial_freq)
+                                        self.pulse_injector.start()
+                                        self.logger.info(f"Simulator pulse injector initialized for pin {pin} (pulses_per_cycle={pulses_per_cycle}) with initial state={initial_state}, freq={initial_freq}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to setup pulse injector in run(): {e}. Using direct frequency simulation.", exc_info=True)
+        
         self.logger.info(f"Starting frequency monitor (simulator: {simulator_mode})")
 
         # Initialize display
@@ -1494,9 +1563,17 @@ class FrequencyMonitor:
             # Get measurement duration once at start
             measurement_duration = self.config.get_float('hardware.optocoupler.primary.measurement_duration')
             
+            # Initialize pulse injector state before starting measurements
+            if simulator_mode and USE_PULSE_INJECTION_IN_SIMULATOR and self.pulse_injector:
+                # Get current simulator state to initialize injector
+                initial_freq = self.analyzer._simulate_frequency()
+                initial_state = getattr(self.analyzer, 'simulator_state', 'grid')
+                self.pulse_injector.update_state(initial_state, initial_freq)
+                self.logger.debug(f"Pulse injector initialized with state={initial_state}, freq={initial_freq}")
+            
             # Start first measurement immediately (non-blocking)
             # In simulator mode with pulse injector, we still use hardware measurement
-            if not simulator_mode or self.pulse_injector:
+            if not simulator_mode or (USE_PULSE_INJECTION_IN_SIMULATOR and self.pulse_injector):
                 self.hardware.start_measurement(duration=measurement_duration)
                 self.measurement_in_progress = True
             
@@ -1504,7 +1581,7 @@ class FrequencyMonitor:
                 current_time = time.time()
                 
                 # 1. Update pulse injector state if using mock (before acquiring reading)
-                if simulator_mode and self.pulse_injector:
+                if simulator_mode and USE_PULSE_INJECTION_IN_SIMULATOR and self.pulse_injector:
                     # Get current simulator state to update injector
                     current_freq = self.analyzer._simulate_frequency()
                     current_state = getattr(self.analyzer, 'simulator_state', 'grid')

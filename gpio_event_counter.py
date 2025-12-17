@@ -269,9 +269,12 @@ class GPIOEventCounter:
 						# Only log first event timestamp to reduce CPU overhead
 						if event_count == 1:
 							self.logger.debug(f"[EVENT] Stored first timestamp for pin {pin}: {current_ts}")
-						else:
-							self.logger.warning(f"[EVENT] Pin {pin} not in timestamps dict! Keys: {list(self.timestamps.keys())}")
-							
+						event_count += 1
+					else:
+						self.logger.warning(f"[EVENT] Pin {pin} not in timestamps dict! Keys: {list(self.timestamps.keys())}")
+						# Initialize the pin in timestamps dict if it's missing
+						with self._counts_lock:
+							self.timestamps.setdefault(pin, []).append(current_ts)
 						event_count += 1
 						
 						# Log first 10 events with timing details

@@ -27,19 +27,26 @@ class SimulatorPulseInjector:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._current_state = "grid"
-        self._current_freq: Optional[float] = 60.0
+        self._current_freq: Optional[float] = None  # Will be set by update_state before start
         self._last_injection_time_ns = time.perf_counter_ns()
-        self._next_pulse_time_ns = self._last_injection_time_ns
+        self._next_pulse_time_ns = float('inf')  # Wait for update_state to set frequency
     
     def start(self):
         """Start the pulse injection thread."""
         with self._lock:
             if self._running:
                 return
+            # Initialize timing based on current frequency before starting
+            if self._current_freq is not None and self._current_freq > 0:
+                pulse_freq = self._current_freq * self.pulses_per_cycle
+                period_ns = int(round(1e9 / pulse_freq))
+                current_time_ns = time.perf_counter_ns()
+                self._last_injection_time_ns = current_time_ns
+                self._next_pulse_time_ns = current_time_ns + period_ns
             self._running = True
             self._thread = threading.Thread(target=self._injection_loop, name="pulse-injector", daemon=True)
             self._thread.start()
-            self.logger.info("Simulator pulse injector started")
+            self.logger.info(f"Simulator pulse injector started with freq={self._current_freq} Hz, state={self._current_state}")
     
     def stop(self):
         """Stop the pulse injection thread."""
@@ -72,7 +79,8 @@ class SimulatorPulseInjector:
                 if frequency is not None and frequency > 0:
                     # Calculate next pulse time based on new frequency
                     pulse_freq = frequency * self.pulses_per_cycle
-                    period_ns = int(1e9 / pulse_freq)
+                    # Use round() for better precision instead of truncating
+                    period_ns = int(round(1e9 / pulse_freq))
                     self._next_pulse_time_ns = self._last_injection_time_ns + period_ns
                 else:
                     # Off-grid: no pulses
@@ -113,22 +121,33 @@ class SimulatorPulseInjector:
                     
                     if actual_freq and actual_freq > 0:
                         pulse_freq = actual_freq * self.pulses_per_cycle
-                        period_ns = int(1e9 / pulse_freq)
+                        # Use float division for precision, then convert to int
+                        # This ensures we get the exact period for the target frequency
+                        period_ns = int(round(1e9 / pulse_freq))
                         
                         with self._lock:
                             self._last_injection_time_ns = current_time_ns
                             self._next_pulse_time_ns = current_time_ns + period_ns
+                        
+                        # Debug: log first few pulses to verify timing
+                        if not hasattr(self, '_pulse_count'):
+                            self._pulse_count = 0
+                        self._pulse_count += 1
+                        if self._pulse_count <= 5:
+                            self.logger.debug(f"Pulse #{self._pulse_count}: freq={actual_freq:.3f} Hz, pulse_freq={pulse_freq:.1f} Hz, period={period_ns} ns")
                     else:
                         # Frequency became invalid, wait
                         with self._lock:
                             self._next_pulse_time_ns = float('inf')
                 
-                # Sleep until next pulse (with some margin)
+                # Sleep until next pulse (with margin to avoid oversleeping)
                 sleep_time = max(0, (next_pulse_time - current_time_ns) / 1e9)
-                if sleep_time > 0.001:  # Don't sleep less than 1ms
-                    time.sleep(min(sleep_time, 0.01))  # Cap at 10ms
-                else:
-                    time.sleep(0.001)  # Minimum sleep
+                # For high-frequency pulses (120 Hz = 8.33ms period), we need precise timing
+                # Use busy-wait for the last 0.5ms to ensure precise timing
+                if sleep_time > 0.001:  # More than 1ms
+                    # Sleep for most of the time, leaving small margin for busy-wait
+                    time.sleep(max(0, sleep_time - 0.0005))  # Leave 0.5ms for busy-wait
+                # For very short sleeps (< 1ms), busy-wait to avoid overshooting
                     
             except Exception as e:
                 self.logger.error(f"Error in pulse injection loop: {e}", exc_info=True)
@@ -155,8 +174,8 @@ class SimulatorPulseInjector:
         timestamps = []
         
         pulse_freq = frequency * self.pulses_per_cycle
-        period_ns = int(1e9 / pulse_freq)
-        num_pulses = int(duration * pulse_freq)
+        period_ns = int(round(1e9 / pulse_freq))
+        num_pulses = int(round(duration * pulse_freq))
         
         current_time = start_time_ns
         for _ in range(num_pulses):
